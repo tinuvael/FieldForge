@@ -2,6 +2,8 @@
 
 This is the Phase 2 design for later implementation. Only original orientation observations and their safe persistence are implemented now. All entities use stable UUID primary keys, explicit foreign-key relationships, UTC instants, finite unrounded engineering numbers, and explicit units. Missing data is null with a reason, never an invented zero or rating. Distinguish original field inputs, calculated outputs, and interpreted representatives.
 
+The [product vision](product-vision.md) is authoritative for requirements: this shared domain serves exactly Geomechanical Mapping, Excavation Plans & Spatial Positioning, and Wedge Analysis on iPhone and future native iPad. The planned records below are documentation, not changes to the deployed JSON schema.
+
 ```mermaid
 erDiagram
     Project ||--o{ Excavation : contains
@@ -45,6 +47,8 @@ erDiagram
 | `timestamp`, `description` | Observation instant and field description |
 | `photoIDs` | Optional attachment relationships, not embedded binaries |
 | `alignmentVersionID` | Optional snapshot reference preventing later survey edits from silently relocating observations |
+
+Excavation name and horizon are presented through `excavationID` and the relevant parent revision rather than re-entered in each module. Planned location relationships below let the plan select this same interval and the wedge module consume its geometry/joint-set revisions.
 
 Chainage is independent of strings such as «ПК 0+005». Define a display policy's picket length/precision and parse it explicitly if ever used for input. Typical interval lengths are 5–10 m; **no such length restriction is imposed**. Left/right follow increasing chainage, including explicit rules for branches/shafts; missing alignment leaves position unlocated rather than fabricating coordinates. Overlaps can be legitimate for different surfaces/dates; flag them for review instead of deduplicating by range.
 
@@ -94,3 +98,30 @@ Allow multiple structures with **no arbitrary count limit**. Optional evidence l
 | `relationship links` | Optional joint-set/tectonic evidence links; use join records with role/provenance rather than copy UUIDs into unstructured text |
 
 For future partially mapped intervals, keep the interval, descriptions and incomplete structures even if there are no savable orientations. The current journal's stricter capture validation does not prescribe deleting incomplete future domain records. Record revisions/import lineage should preserve the original payload and author/time; deletion, correction and interpretation need explicit semantics.
+
+## Prepared plans and location records (future)
+
+| Planned record | Fields / relationships |
+| --- | --- |
+| `PlanAsset` | UUID, project FK, associated excavation IDs, source/format (PDF/raster/prepared DXF-derived geometry), attachment/hash, page/layer/geometry revision and original metadata |
+| `SurveyControlPoint` | UUID, plan revision FK, source point/page coordinates and surveyed X/Y/Z as available, CRS/units/axes, survey source/version, quality and timestamp |
+| `GeoreferencingRevision` | UUID, source plan revision, control-point revision IDs, source/target CRS, units/axes, transformation method/version/parameters, residuals, validity extent and author/time |
+| `ObservationLocation` | UUID/revision, project/excavation FKs, interval or original-observation FK, optional plan mark/page, nullable X/Y/Z, CRS/units/axes, source/quality, survey/transform revision, optional chainage/alignment version and origin/direction |
+
+Location derivation is explicit: surveyed, georeferenced-plan-derived, manually entered, or unknown. Record approximate quality independently, including source/uncertainty and missing-data reasons. Manual entry may cite surveyed coordinates; plan-derived does not mean independently surveyed. Ungeoreferenced plan marks retain their page/asset coordinates and unknown model position. A 2D plan does not supply Z by default. Unknown elevation must not become zero, a horizon label or a device altitude. The interval/observation target must be in the declared excavation/project; revision and evidence links prevent unrelated coordinate systems from being combined silently.
+
+Control points, transformations and locations retain their original values and explicit revision history. A later plan/survey revision does not move existing evidence automatically. Selecting a saved plan location resolves the existing interval ID; it does not duplicate mapping data. No underground GPS/device-location inference is part of this model.
+
+## Wedge inputs and derived results (future)
+
+| Planned record | Fields / relationships |
+| --- | --- |
+| `ExcavationGeometryRevision` | UUID, excavation FK, axis azimuth/north and inclination convention, cross-section type/dimensions/units, surfaces/extent/position assumptions, optional survey/alignment revision and provenance |
+| `JointMechanicalInput` | UUID/revision, representative joint-set revision or analysis-local plane FK, planned cohesion/friction values with units/source/reference, missing indicators and method-required additional inputs |
+| `WedgeAnalysisRun` | UUID, project/excavation FK and optional interval FK, exact geometry and joint-set revisions or explicit manual input revisions, immutable input snapshot, reference/frame metadata, selected method/version, author/time and assumptions |
+| `WedgeGeometryResult` | UUID, analysis-run FK, geometric/kinematic method and implementation versions, candidate planes/intersections, roof/wall context, finite/unbounded/indeterminate state, geometric assumptions and missing inputs |
+| `WedgeMechanicalResult` | UUID, analysis-run and geometric-result FKs, mechanical input revisions, method/reference/implementation versions, separate availability/validation state and outputs allowed by the verified method |
+
+This is a conceptual record contract; mechanical units, output fields and any additional parameters must be finalized against the **owner-provided, verified formulation**. Do not invent equations, ratings, factors of safety or thresholds. An unavailable mechanical result is distinct from geometric infeasibility or a stable wedge. A bounded-volume result requires documented plane positions/bounds/persistence and release assumptions as applicable; orientations alone do not establish actual finite volume.
+
+Automatic input loading means reading available shared records by stable ID, then reporting missing geometry/strength/reference information. Analysis-specific overrides create versioned inputs rather than edit mapping evidence. Referenced originals remain immutable; controlled corrections preserve prior revisions and reason/author/time. Interpretations and results reference exact revisions and become historical/need recalculation when source revisions change. The present Phase 2 deletion behavior is unchanged; a future archive/revision policy must protect evidence used by saved analyses. Shared record definitions support both device families without introducing synchronization or a new database in this PR.

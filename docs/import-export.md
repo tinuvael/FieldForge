@@ -1,5 +1,7 @@
 # Import/export and spatial integration boundaries
 
+The authoritative [product vision](product-vision.md) restricts the product to Geomechanical Mapping, Excavation Plans & Spatial Positioning, and Wedge Analysis on a shared offline project database, with future native iPad support. Prepared plans and engineering records are primary exchange needs; DWG editing, general-purpose CAD/GIS and full 3D mine modeling are outside scope. Current CSV behavior below is unchanged; the other adapters remain plans.
+
 ## Common boundary (future interfaces)
 
 Use format adapters around a versioned domain snapshot, rather than exposing persistence or renderer internals. A future import request carries file URLs/streams, detected format/version, explicit CRS/units/axis metadata, conflict policy and attachment manifest. An import report returns accepted/rejected IDs, missing data, transformations and warnings; stage and validate before transactional promotion. Cancellation or an unsupported format must leave the journal intact. Preserve source file hash/name and conversion provenance. Reimport should resolve stable source IDs through a reviewed merge policy, not deduplicate orientations solely by angle/time.
@@ -43,15 +45,24 @@ Add `InterpretationEvidence` (representative/structure ID ↔ measurement ID, ro
 - **DIPS-compatible orientation tables:** target a documented Rocscience DIPS version/import configuration. Explicitly select dip-direction/dip (not strike/dip), units, common north and treatment of horizontal/vertical convention cases. Do not mix magnetic/true/grid/unknown/synthetic entries silently. Partition by reference or request documented conversions; return an exclusion report. Include IDs/provenance in a sidecar if the format cannot represent them. Compatibility needs a real DIPS import test before claiming support.
 - **Structured JSON backup/interoperability:** independent schema version, complete entities, relationships, null reasons, original diagnostics/inputs, method versions, spatial metadata and attachment hashes. Preserve timestamps/IDs and numeric values; stage/validate imports and maintain migrations. Use a consistent snapshot and ZIP/package manifest for attachments, not just observation CSV.
 
+Future exports/backups also retain plan assets/control-point and georeferencing revisions, location provenance and exact input references for wedge analyses. Add related tables/sheets or a versioned manifest as these records are implemented, without replacing the established mapping worksheets. Label geometric/kinematic candidates separately from mechanical assessments and retain unavailable/missing states; geometry-only output must not acquire fabricated stability, safety-factor or risk columns. Mechanical export fields depend on the owner's verified method. Shared exporters work on domain snapshots on both devices, independent of phone/tablet layouts.
+
+## Prepared excavation plans (primary future spatial workflow)
+
+Import PDF and raster plans as versioned attachments with page/image metadata and hashes. Native PDFKit and image rendering are candidates for offline plan display; viewing a page does not georeference it. Store surveyed control points and validated georeferencing separately from annotations/display transforms. A manually selected mark produces model coordinates only when the relevant transform is valid; retain its page/pixel location and unknown/approximate status otherwise. Manual X/Y/Z and alignment chainage use the same location records, never an assumed underground GPS source.
+
+For DXF-derived survey geometry, support a qualified adapter or desktop conversion into a compact prepared format with explicit units, CRS/axes, supported entity inventory, alignment versions and chainage origins/directions. Reject/report unresolved units, missing metadata and unsupported entities. PDF/raster, selected points and bounded survey geometry should work completely offline before optional large-mesh support. On iPad the same prepared assets can support larger plans/split views and optional annotations without introducing another import format or database.
+
 ## Spatial format capabilities and limitations
 
 | Format | Proposed role / limitations |
 | --- | --- |
+| PDF / raster | Primary prepared plan display with page/image metadata; coordinates require surveyed georeferencing or explicit supplied survey transforms, never appearance/scale alone. |
 | DXF | Survey lines/polylines/arcs/alignment geometry after handling units, layers, coordinate-system sidecar, unsupported entities and station metadata. No native parser added. |
-| DWG | Use an appropriate licensed SDK (e.g. reviewed ODA/Autodesk workflow) or desktop conversion to a documented interchange format. Do not assume native reading, license availability or lossless conversion. Preserve conversion provenance and inspect units/entities. |
-| STL | Triangle surfaces; **no standardized CRS/georeferencing metadata**, often no reliable units. Require explicit units/CRS sidecar. It is not an alignment or surveyed chainage definition. |
-| OBJ | Mesh/UV/material data; coordinate/length/georeferencing conventions need explicit metadata; retain associated MTL/textures. |
-| PLY | Mesh/point attributes with format variants; require declared coordinate/units and adapter validation. |
+| DWG | Source preprocessing only through an appropriate licensed SDK (e.g. reviewed ODA/Autodesk workflow) or desktop conversion to a documented interchange format. Direct editing/full CAD is excluded; do not assume native reading, license availability or lossless conversion. Preserve conversion provenance and inspect units/entities. |
+| STL (optional) | Triangle surfaces; **no standardized CRS/georeferencing metadata**, often no reliable units. Require explicit units/CRS sidecar. It is not an alignment or surveyed chainage definition. |
+| OBJ (optional) | Mesh/UV/material data; coordinate/length/georeferencing conventions need explicit metadata; retain associated MTL/textures. |
+| PLY (optional) | Mesh/point attributes with format variants; require declared coordinate/units and adapter validation. |
 | GeoJSON | Geographic vector exchange under RFC 7946 WGS84 longitude/latitude; local-grid values require verified conversion or a different structured format. Not a large triangle-mesh interchange. |
 | Structured JSON | Versioned mine geometry/CRS/alignment metadata and references to binary chunks/assets. Explicit units and transform lineage. |
 
@@ -61,6 +72,8 @@ Add `InterpretationEvidence` (representative/structure ID ↔ measurement ID, ro
 
 [RealityKit](https://developer.apple.com/documentation/realitykit) is a native rendering/entity/interaction and AR integration layer; prepare supported assets (often USD/USDZ) and manage mesh/material conversion separately. It is not a survey interpolation engine, GIS datum library or universal CAD reader. [ARKit](https://developer.apple.com/documentation/arkit) device-local tracking does not establish underground georeferencing or geological accuracy. Metal/custom buffers may later help controlled rendering of prepared chunks; do not create a viewer in this phase.
 
-On iPhone: validate compact prepared metadata/assets, query nearby intervals, interpolate an already supported surveyed alignment in later phases, select/render bounded chunks with local origins/LOD, and export observations offline. Avoid loading full mines/meshes into memory: spatial indices, bounding volumes, tiled assets, bounded caches, background decode and cancellation should precede large-model support.
+Compact wedge visualization may use locally generated excavation/candidate surfaces without imported mine meshes. Rendering does not implement geometry feasibility or mechanical stability; those are separate verified services, and mechanics requires the owner's methodology before implementation.
+
+On iPhone and future iPad: display prepared plans, validate compact metadata/assets, select locations/intervals manually, interpolate an already supported surveyed alignment in later phases, visualize local wedge candidates and export observations offline. Optional meshes use bounded chunks/local origins/LOD. Avoid loading full mines/meshes into memory: spatial indices, bounding volumes, tiled assets, bounded caches, background decode and cancellation should precede large-model support. These capabilities support field positioning and local analysis, not a geological modeling platform.
 
 On desktop: licensed DWG conversion, complex DXF entity resolution, verified CRS/datum transformation with survey control, mesh cleaning/triangulation/decimation, spatial tiling/LOD, texture preparation and packaging manifests/checksums. Deliver explicit units, model origin, CRS, alignment version and source→model transform to the phone. Device display coordinates remain separate from authoritative Double-precision engineering coordinates. No parser, conversion SDK or 3D viewer is implemented here.

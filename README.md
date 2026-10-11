@@ -4,6 +4,14 @@ Native, offline iOS application for geological field observations. Swift/SwiftUI
 
 **Geological measurement accuracy has not been validated.** Display resolution is not accuracy. Simulator observations remain permanently labeled DEMO.
 
+## Product direction (future capabilities)
+
+The [product vision](docs/product-vision.md) defines FieldForge as a professional offline field instrument with exactly three primary modules sharing one project database: **Geomechanical Mapping**, **Excavation Plans & Spatial Positioning**, and **Wedge Analysis**. Target navigation is «Картирование / План / Клинья»; project selection and settings are secondary. The current Phase 2 tabs and working features below remain the implementation status.
+
+Prepared PDF/raster plans and DXF-derived survey geometry will support manual positioning with explicit surveyed/plan-derived/manual/approximate/unknown provenance; underground GPS or automatic phone location is not assumed. Wedge geometry and mechanical assessment are separate: mechanical calculations await owner-provided formulas, verified references and engineering tests. Geometry alone cannot establish stability or a finite wedge volume.
+
+Future native iPad support shares models, storage and engineering services with iPhone through adaptive SwiftUI layouts. Full CAD/GIS/geological modeling, numerical simulation and DWG editing are outside scope; STL/OBJ support is optional. No plan, wedge or iPad feature is implemented by this documentation alignment.
+
 ## Working features
 
 - Measurement, journal and settings tabs, native light/dark appearance and portrait/landscape layouts.
@@ -76,6 +84,6 @@ Phase 2 core verification: **70 XCTest tests passed on Linux with Swift 6.0.3**.
 
 ## Architecture and next steps
 
-See [development rules](AGENTS.md), [architecture and persistence decision](docs/architecture.md), [future geomechanical schema](docs/data-model.md), [coordinates](docs/coordinate-systems.md), [Excel/DIPS/CAD/3D boundaries](docs/import-export.md), and [roadmap](docs/roadmap.md).
+See the authoritative [product vision](docs/product-vision.md), [development rules](AGENTS.md), [architecture and persistence decision](docs/architecture.md), [future shared domain schema](docs/data-model.md), [coordinates](docs/coordinate-systems.md), [export and prepared-plan boundaries](docs/import-export.md), and [roadmap](docs/roadmap.md).
 
-The immediate next step is simulator verification and a backed-up in-place upgrade check on the physical iPhone. Then implement project/excavation/interval mapping while qualifying sensor accuracy. Q/RMR calculations, XLSX, CAD parsing, survey interpolation and 3D rendering require separate verified phases and are not implemented here.
+The immediate next step is simulator verification and a backed-up in-place upgrade check on the physical iPhone. Then develop interval mapping, prepared-plan positioning and preliminary wedge analysis through separate verified phases, with native iPad adaptation planned from the shared codebase. Q/RMR, XLSX, spatial transforms and wedge calculations remain future work; mechanical wedge implementation depends on the owner's verified methodology. A whole-mine 3D viewer is not a primary product goal.
