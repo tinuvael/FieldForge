@@ -4,7 +4,6 @@ enum SensorSource: String, Codable, Sendable { case coreMotion, simulatorMock }
 enum ReferenceFrame: String, Codable, Sendable {
     case magneticNorthZVertical, arbitraryZVertical, simulatedNorthZVertical
 }
-enum GeographicReference: String, Codable, Sendable { case magneticNorth, simulatedNorth, unavailable }
 enum MagneticAccuracy: String, Codable, Sendable { case uncalibrated, low, medium, high, notApplicable }
 
 struct SensorSample: Codable, Equatable, Sendable {

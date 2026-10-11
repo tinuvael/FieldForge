@@ -9,59 +9,83 @@ struct MeasurementView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    if model.mock != nil {
-                        Label("DEMO · Синтетические данные", systemImage: "desktopcomputer")
-                            .font(.headline).foregroundStyle(.orange)
-                            .accessibilityIdentifier("mockBanner")
-                    }
-                    Text(model.isHeld ? "ЗАФИКСИРОВАНО · HOLD" : "ТЕКУЩЕЕ ИЗМЕРЕНИЕ")
-                        .font(.caption.weight(.bold)).foregroundStyle(.secondary)
-                    HStack(alignment: .top, spacing: 12) {
-                        indicator("Азимут падения", value: model.displayed?.orientation.dipDirection, azimuth: true)
-                        indicator("Угол падения", value: model.displayed?.orientation.dipAngle)
-                    }
-                    .padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
-                    HStack(spacing: 20) {
-                        CompassView(direction: model.displayed?.orientation.dipDirection)
-                        InclinationView(dip: model.displayed?.orientation.dipAngle)
-                    }.frame(height: 180)
-                    if let measurement = model.displayed {
-                        Label(measurement.quality.title, systemImage: "exclamationmark.circle")
-                            .font(.headline).foregroundStyle(measurement.quality.color)
-                        Text(measurement.orientation.status.explanation).font(.subheadline)
-                        LabeledContent("Опора", value: measurement.reference.title)
-                        LabeledContent("Источник", value: measurement.sample.source.title)
-                        Text("Магнитная калибровка: \(measurement.sample.magneticAccuracy.title). Даже высокая оценка не исключает помех.")
-                            .font(.caption).foregroundStyle(.secondary)
+                    Picker("Способ измерения", selection: Binding(get: { model.mode }, set: model.setMode)) {
+                        ForEach(MeasurementMode.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }.pickerStyle(.segmented).accessibilityIdentifier("measurementMode")
+                    if model.mode == .manual {
+                        ManualEntryView()
                     } else {
-                        Label("Измерение недоступно", systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+                        automaticContent
                     }
-                    Text(model.sensorStatus).font(.caption).foregroundStyle(.secondary)
-                    Text("Плоскость измерения: экран iPhone").font(.subheadline)
-                    if model.isHeld {
-                        TextField("Примечание к измерению", text: $model.notes, axis: .vertical)
-                            .textFieldStyle(.roundedBorder).disabled(model.session.hasSavedFrozen)
-                    }
-                    if model.mock != nil { mockControls }
-                    Text("Экспериментальный прототип. Для инженерных решений требуется проверка геологическим компасом.")
-                        .font(.footnote).foregroundStyle(.secondary)
                 }.padding()
             }
             .navigationTitle("Измерение")
             .safeAreaInset(edge: .bottom) {
                 HStack {
-                    Button(action: model.toggleHold) {
-                        Label(model.isHeld ? "Продолжить" : "HOLD", systemImage: model.isHeld ? "play.fill" : "pause.fill")
-                            .frame(maxWidth: .infinity)
-                    }.buttonStyle(.bordered).disabled(!model.isHeld && !model.canHold)
-                        .accessibilityIdentifier("holdButton")
-                    Button(action: model.saveFrozen) {
-                        Label(model.session.hasSavedFrozen ? "Сохранено" : "Сохранить", systemImage: "square.and.arrow.down")
-                            .frame(maxWidth: .infinity)
-                    }.buttonStyle(.borderedProminent).disabled(!model.canSave)
-                        .accessibilityIdentifier("saveButton")
+                    if model.mode == .manual {
+                        if model.savedManual != nil {
+                            Button("Новое измерение", action: model.newManualObservation)
+                                .buttonStyle(.bordered).accessibilityIdentifier("newManualButton")
+                        }
+                        Button(action: model.saveManual) {
+                            Label(model.savedManual == nil ? "Сохранить" : "Сохранено", systemImage: "square.and.arrow.down")
+                                .frame(maxWidth: .infinity)
+                        }.buttonStyle(.borderedProminent).disabled(!model.canSaveManual)
+                            .accessibilityIdentifier("saveManualButton")
+                    } else {
+                        Button(action: model.toggleHold) {
+                            Label(model.isHeld ? "Продолжить" : "HOLD", systemImage: model.isHeld ? "play.fill" : "pause.fill")
+                                .frame(maxWidth: .infinity)
+                        }.buttonStyle(.bordered).disabled(!model.isHeld && !model.canHold)
+                            .accessibilityIdentifier("holdButton")
+                        Button(action: model.saveFrozen) {
+                            Label(model.session.hasSavedFrozen ? "Сохранено" : "Сохранить", systemImage: "square.and.arrow.down")
+                                .frame(maxWidth: .infinity)
+                        }.buttonStyle(.borderedProminent).disabled(!model.canSave)
+                            .accessibilityIdentifier("saveButton")
+                    }
                 }.controlSize(.large).padding().background(.bar)
             }
+        }
+    }
+    private var automaticContent: some View {
+        Group {
+            if model.mock != nil {
+                Label("DEMO · Синтетические данные", systemImage: "desktopcomputer")
+                    .font(.headline).foregroundStyle(.orange)
+                    .accessibilityIdentifier("mockBanner")
+            }
+            Text(model.isHeld ? "ЗАФИКСИРОВАНО · HOLD" : "ТЕКУЩЕЕ ИЗМЕРЕНИЕ")
+                .font(.caption.weight(.bold)).foregroundStyle(.secondary)
+            HStack(alignment: .top, spacing: 12) {
+                indicator("Азимут падения", value: model.displayed?.orientation.dipDirection, azimuth: true)
+                indicator("Угол падения", value: model.displayed?.orientation.dipAngle)
+            }
+            .padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
+            HStack(spacing: 20) {
+                CompassView(direction: model.displayed?.orientation.dipDirection)
+                InclinationView(dip: model.displayed?.orientation.dipAngle)
+            }.frame(height: 180)
+            if let measurement = model.displayed {
+                Label(measurement.quality.title, systemImage: "exclamationmark.circle")
+                    .font(.headline).foregroundStyle(measurement.quality.color)
+                Text(measurement.explanation).font(.subheadline)
+                LabeledContent("Опора", value: measurement.reference.title)
+                LabeledContent("Источник", value: measurement.source.title)
+                Text("Магнитная калибровка: \(measurement.sample?.magneticAccuracy.title ?? "—"). Даже высокая оценка не исключает помех.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                Label("Измерение недоступно", systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+            }
+            Text(model.sensorStatus).font(.caption).foregroundStyle(.secondary)
+            Text("Плоскость измерения: экран iPhone").font(.subheadline)
+            if model.isHeld {
+                TextField("Примечание к измерению", text: $model.notes, axis: .vertical)
+                    .textFieldStyle(.roundedBorder).disabled(model.session.hasSavedFrozen)
+            }
+            if model.mock != nil { mockControls }
+            Text("Экспериментальный прототип. Для инженерных решений требуется проверка геологическим компасом.")
+                .font(.footnote).foregroundStyle(.secondary)
         }
     }
     private func indicator(_ title: String, value: Double?, azimuth: Bool = false) -> some View {

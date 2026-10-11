@@ -1,5 +1,7 @@
 # Screen-plane orientation: algorithm screen-plane-nwu-v1
 
+This algorithm and its sensor gates are unchanged in Phase 2. Sensor records now use provenance-aware schema 2; manual compass observations bypass sensor processing and may explicitly record a vertical dip-side convention. See [coordinates](coordinate-systems.md) and [migration](persistence-migration.md). The acquisition/persistence narrative below describes the original Phase 1 implementation.
+
 ## Coordinate systems and Apple API boundary
 
 The phone's fixed device axes are +X toward the right edge, +Y toward the top edge (portrait), and +Z out through the screen. These axes do not change when SwiftUI rotates its layout. The plane normal is `n_D = (0,0,1)`; changing screen orientation or rotating within the same geological plane does not change the geometric plane.

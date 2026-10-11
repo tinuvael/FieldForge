@@ -4,6 +4,7 @@ extension MeasurementQuality {
     var title: String {
         switch self {
         case .experimental: return "Экспериментальное"
+        case .manualUnverified: return "Ручной ввод · точность не проверена"
         case .inclinationOnly: return "Только угол падения"
         case .uncertain: return "Движение — удерживайте телефон"
         case .invalid: return "Недопустимые данные"
@@ -11,7 +12,7 @@ extension MeasurementQuality {
     }
     var color: Color {
         switch self {
-        case .experimental: return Color("AccentColor")
+        case .experimental, .manualUnverified: return Color("AccentColor")
         case .inclinationOnly, .uncertain: return .orange
         case .invalid: return .red
         }
@@ -32,8 +33,31 @@ extension GeographicReference {
     var title: String {
         switch self {
         case .magneticNorth: return "Магнитный север"
+        case .trueNorth: return "Истинный север"
+        case .gridNorth: return "Сеточный север"
+        case .unknown: return "Север не указан"
         case .simulatedNorth: return "Условный север · DEMO"
         case .unavailable: return "Север недоступен"
+        }
+    }
+}
+extension MeasurementSource {
+    var title: String {
+        switch self {
+        case .iPhoneSensor: return "Датчики iPhone"
+        case .manualCompass: return "Ручной ввод · геологический компас"
+        case .externalInstrument: return "Внешний прибор"
+        case .simulatorMock: return "Симулятор · DEMO"
+        }
+    }
+}
+extension Measurement {
+    var explanation: String {
+        if source != .manualCompass { return orientation.status.explanation }
+        switch directionMeaning {
+        case .conventionalDipSide: return "Вертикальная плоскость: азимут задаёт выбранную условную сторону падения."
+        case .undefined: return "Направление падения не определено. Сохранён только угол."
+        case .downhill: return "Ориентация введена вручную. Поправки между видами севера не применяются."
         }
     }
 }

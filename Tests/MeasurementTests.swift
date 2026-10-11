@@ -113,7 +113,7 @@ import XCTest
     func testUnsupportedSchemaPreserved() async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: url) }
-        let bytes = Data("{\"schemaVersion\":2,\"measurements\":[]}".utf8); try bytes.write(to: url)
+        let bytes = Data("{\"schemaVersion\":999,\"measurements\":[]}".utf8); try bytes.write(to: url)
         XCTAssertThrowsError(try FileMeasurementStore(url: url).load())
         XCTAssertEqual(try Data(contentsOf: url), bytes)
     }
