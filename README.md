@@ -85,13 +85,16 @@ Automatic signing is configured with no team committed. For a device that Xcode 
 2. In Xcode Settings → Accounts add your Apple account.
 3. In FieldForge target → Signing & Capabilities choose your Team. Keep automatic signing and `com.tinuvael.FieldForge`; if this identifier belongs to another team, use an identifier owned by your team locally.
 4. Select the physical device and Run. Grant motion permission if requested.
-5. Verify the source is «Датчики iPhone», never DEMO. Follow the physical validation procedure before using readings.
+5. If Xcode reports that the Developer App Certificate is not trusted, on the iPhone open Settings → General → VPN & Device Management → Developer App, select your own Apple Account and trust it. Complete any requested restart, unlock the iPhone and Run again in Xcode.
+6. Verify the source is «Датчики iPhone», never DEMO. Follow the physical validation procedure before using readings.
 
-No certificates, profiles or account data belong in Git. Personal-team provisioning restrictions remain Apple's responsibility.
+Keep the selected Team local; no certificates, profiles or account data belong in Git. The checked-in project leaves `DEVELOPMENT_TEAM` empty. Project regeneration resets that local selection, so select your Team again afterward. A free Personal Team supports testing on your own device; its provisioning profiles expire after seven days and require rebuilding/reinstalling the app. See [Apple's account guidance](https://developer.apple.com/help/account/basics/about-your-developer-account).
 
-On the inspected Intel Mac, Xcode 26.6 (17F113), Swift 6.3.3 and iOS SDK 26.5 were found. `xcode-select` was unset, but using `DEVELOPER_DIR` enables this installation. iOS 17.2 and 26.5 simulator runtimes were installed. No paired physical device was reported by `devicectl`.
+On the inspected Intel Mac, Xcode 26.6 (17F113), Swift 6.3.3 and iOS SDK 26.5 were found. Xcode is in Downloads; the active `xcode-select` directory is `/Library/Developer/CommandLineTools`, so commands used `DEVELOPER_DIR` to select the full Xcode installation. iOS 17.2 and 26.5 simulator runtimes were installed.
 
-**iPhone 15 Pro Max on iOS 27 deployment has not been verified.** An iOS 26.5 SDK build may run on a newer OS, but that does not establish pairing/debugging support. Check the device in Xcode's Devices window and use only supported device preparation. Apple states that [Xcode 27 runs only on Apple silicon](https://developer.apple.com/documentation/xcode-release-notes/xcode-27-release-notes). Do not modify Xcode or transplant device-support files. If Xcode 26.6 cannot prepare the iOS 27 device, use a supported Apple silicon Mac/toolchain or an officially supported signed distribution route.
+**Physical deployment verified on 2026-10-11:** Xcode and `devicectl` detected an iPhone 15 Pro Max running iOS **27.0.1 (24A446)** as an available wired, paired device with Developer Mode enabled. Xcode 26.6's Developer Disk Image reported `contentIsCompatible: true` and `isUsable: true`. `devicectl` confirmed FieldForge **0.1.0 (1)** was installed; after automatic Personal Team signing and trusting the developer certificate, the owner reported that the application works. No device-support files or Xcode binaries were modified.
+
+Apple lists [Xcode 26.6 on-device debugging support as iOS 15 and later](https://developer.apple.com/documentation/xcode-release-notes/xcode-26_6-release-notes). The SDK version alone is not the device-support limit. These results confirm installation and an owner-reported successful launch on this specific device/toolchain combination. A breakpoint/LLDB session, physical sensor accuracy, repeatability and interference behavior remain separate verification tasks. If a future device/toolchain combination cannot be prepared normally, use a supported toolchain; [Xcode 27 requires Apple silicon](https://developer.apple.com/documentation/xcode-release-notes/xcode-27-release-notes).
 
 ## Measurement and storage limitations
 
@@ -105,7 +108,7 @@ CSV uses UTF-8 BOM, comma separators, CRLF records, decimal points and ISO 8601 
 
 See [coordinate systems and exact algorithm](docs/measurement-geometry.md) and [verification results](docs/verification.md).
 
-Verified on 2026-10-11: simulator and unsigned ARM iPhone builds succeeded; 43 macOS core tests and 43 iOS simulator unit tests passed, plus one simulator UI test covering HOLD/save, relaunch persistence and Share Sheet export. Physical acquisition and iOS 27 deployment remain unverified.
+Verified on 2026-10-11: simulator and unsigned ARM iPhone builds succeeded; 43 macOS core tests passed in the initial Phase 1 checks. The follow-up iPhone 15 Pro Max / iOS 26.5 simulator run passed 43 unit tests plus one UI test covering HOLD/save, relaunch persistence and Share Sheet export; an ordinary simulator launch was also visually checked. Physical iOS 27.0.1 installation and owner-reported successful launch are recorded above. Physical sensor validation remains outstanding.
 
 ## Roadmap
 

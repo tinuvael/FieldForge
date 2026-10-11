@@ -5,11 +5,11 @@ Verification date: 2026-10-11. This report distinguishes executable checks from 
 ## Environment
 
 - Intel x86_64 Mac, macOS Tahoe 26.6.2 (25G83).
-- Xcode 26.6 (17F113) found in Downloads; `xcode-select` had no active developer directory. Commands used `DEVELOPER_DIR` without modifying the installation.
+- Xcode 26.6 (17F113) found in Downloads. During the follow-up deployment checks, `xcode-select -p` returned `/Library/Developer/CommandLineTools`; commands used `DEVELOPER_DIR` to select full Xcode without modifying the installation.
 - Apple Swift 6.3.3; project Swift 5 language mode.
 - iPhoneOS and iPhoneSimulator SDK 26.5. Installed simulator runtimes: iOS 17.2 (21C62), iOS 26.5 (23F77).
-- Test destination: iPhone 15 Pro Max, iOS 17.2, x86_64.
-- `devicectl list devices`: no physical devices found.
+- Initial test destination: iPhone 15 Pro Max, iOS 17.2, x86_64. Follow-up test destination: iPhone 15 Pro Max, iOS 26.5 (23F77), x86_64.
+- No physical device was found in the initial Phase 1 check. The follow-up deployment check detected a paired physical iPhone 15 Pro Max on iOS 27.0.1 (24A446).
 - Repository started clean on `main`, with README and existing LICENSE. Origin was fetched and the feature branch created from `origin/main`. The license was preserved.
 
 ## Confirmed checks
@@ -25,8 +25,23 @@ Verification date: 2026-10-11. This report distinguishes executable checks from 
 | Independent macOS core XCTest | `swift test`: 43 tests, 0 failures |
 | iOS simulator unit XCTest | 43 tests, 0 failures |
 | iOS simulator UI workflow | 1 test, 0 failures; full `xcodebuild test`: TEST SUCCEEDED |
+| Follow-up iOS 26.5 simulator build | BUILD SUCCEEDED, iPhone 15 Pro Max, x86_64 |
+| Follow-up device compile | BUILD SUCCEEDED, physical iPhone destination, arm64, unsigned |
+| Follow-up iOS 26.5 simulator tests | 43 unit tests + 1 UI test; 44 passed, 0 failed/skipped; TEST SUCCEEDED |
+| Ordinary iOS 26.5 simulator launch | Process running; Russian measurement screen with DEMO label visually inspected |
+| Physical device discovery/preparation | Xcode destination available; wired pairing, Developer Mode enabled; compatible, usable DDI |
+| Physical installation | `devicectl device info apps` confirmed com.tinuvael.FieldForge, version 0.1.0, build 1 |
+| Physical app launch | Owner reported the app works after automatic signing and certificate trust; no independent breakpoint/LLDB check |
 
-Both builds used `CODE_SIGNING_ALLOWED=NO`. The unsigned device binary is a compilation check, not an installable release or proof of hardware behavior. Automatic signing is configured; selecting a development team remains a local deployment step.
+The compile-only builds used `CODE_SIGNING_ALLOWED=NO`. An unsigned device binary is a compilation check, not an installable release or proof of hardware behavior. Physical installation subsequently used automatic signing with the owner's Personal Team selected locally. The shared project retains an empty `DEVELOPMENT_TEAM`; credentials, certificates, profiles and the owner's local Xcode signing changes are excluded from this documentation update.
+
+## Physical deployment follow-up
+
+Xcode 26.6 and `devicectl` both recognized the physical iPhone as an available run destination. `devicectl device info ddiServices` reported DDI build `17F113`, `contentIsCompatible: true` and `isUsable: true`. Pairing and device preparation used the installed Apple tools without transplanting device-support files or modifying Xcode. Apple's [Xcode 26.6 release notes](https://developer.apple.com/documentation/xcode-release-notes/xcode-26_6-release-notes) specify on-device debugging support for iOS 15 and later; SDK 26.5 alone is not evidence that iOS 27 cannot be prepared.
+
+The first normal signed build was blocked by the missing development team. The owner selected their Personal Team in FieldForge → Signing & Capabilities with automatic signing enabled. Xcode then installed the app but initially refused to launch it because the Developer App Certificate was not trusted. The owner was guided to Settings → General → VPN & Device Management → Developer App on the iPhone, to trust their own account and complete any requested restart before running again. The owner subsequently reported: “Всё работает”. `devicectl` independently confirmed the installed version was 0.1.0 (1).
+
+This is an installation check and an owner-reported launch/smoke check for the specific iPhone 15 Pro Max / iOS 27.0.1 / Intel Mac / Xcode 26.6 combination. The owner's statement does not establish calibrated measurement accuracy or independently verify each physical HOLD/save/export path. No breakpoint/LLDB connection was independently demonstrated in this follow-up.
 
 ## Coverage
 
@@ -44,15 +59,15 @@ The UI test exercises DEMO labeling, HOLD/save enabled states, journal appearanc
 
 No Swift compiler warnings were reported in the completed app builds or macOS core tests. Xcode emits “Metadata extraction skipped. No AppIntents.framework dependency found”; this app has no App Intents. Test packaging also reports that already-signed Apple XCTest framework binaries are not stripped. These are tool-generated warnings, not failed app compilation.
 
-Initial sandbox-only Swift/Xcode invocations could not write normal developer caches or connect to CoreSimulator. Authorized builds/tests were rerun with normal access. No toolchain binaries, security settings or system developer selection were modified.
+Initial sandbox-only Swift/Xcode invocations could not write normal developer caches or connect to CoreSimulator. Authorized builds/tests were rerun with normal access. No toolchain binaries or system developer selection were modified. Physical deployment used iOS's normal developer-certificate trust flow.
 
 ## Outstanding physical checks
 
 - Actual Core Motion acquisition, compass calibration, screen/DCM convention on a physical iPhone and real magnetic-interference behavior.
-- Deployment/pairing/debugging with the user's iPhone 15 Pro Max on iOS 27. A successful SDK 26.5 build does not establish this support.
+- Independently checked physical breakpoint/LLDB debugging and a documented physical HOLD/save/relaunch/export walkthrough. Pairing, compatible DDI preparation and installation are confirmed; successful launch is owner-reported.
 - Accuracy, repeatability, bias, fixture alignment and suitability for professional geology.
 - Regional Excel automatic import behavior; UTF-8/comma/decimal-dot import is documented, but Microsoft Excel was not used in this verification.
 
 Use the [validation procedure](measurement-geometry.md) before professional measurement. Xcode 27 is Apple-silicon-only according to [Apple's release notes](https://developer.apple.com/documentation/xcode-release-notes/xcode-27-release-notes); no unsupported Intel/Xcode modifications were attempted.
 
-The PR should remain Draft until important physical validation/deployment checks are resolved. Simulator values establish software behavior only.
+Physical installation and the owner-reported launch are now recorded. The remaining physical measurement validation items are still open; simulator values establish software behavior only. This follow-up does not merge PR #1 or change its review state.
