@@ -15,7 +15,13 @@ erDiagram
     JointSet o|--o{ InterpretationEvidence : cites
     TectonicStructure o|--o{ InterpretationEvidence : cites
     OrientationObservation ||--o{ InterpretationEvidence : supports
-    MappingInterval ||--o{ Attachment : photographs
+    Project ||--o{ SpatialObservationPoint : locates
+    Excavation ||--o{ SpatialObservationPoint : contains
+    MappingInterval o|--o{ SpatialObservationPoint : associates
+    SpatialObservationPoint o|--o{ PhotoObservation : documents
+    MappingInterval o|--o{ PhotoObservation : associates
+    OrientationObservation o|--o{ PhotoObservation : illustrates
+    Attachment ||--o{ PhotoObservation : originalImage
 ```
 
 ## Project / mine
@@ -45,7 +51,7 @@ erDiagram
 | `startChainageMeters`, `endChainageMeters` | Finite numerical meters; end > start along the declared alignment direction |
 | `observationPosition` | `leftWall`, `rightWall`, `roof`, `face`, `other`; other requires a description |
 | `timestamp`, `description` | Observation instant and field description |
-| `photoIDs` | Optional attachment relationships, not embedded binaries |
+| `photoIDs` | Optional `PhotoObservation` UUID relationships; images are separate managed attachments |
 | `alignmentVersionID` | Optional snapshot reference preventing later survey edits from silently relocating observations |
 
 Excavation name and horizon are presented through `excavationID` and the relevant parent revision rather than re-entered in each module. Planned location relationships below let the plan select this same interval and the wedge module consume its geometry/joint-set revisions.
@@ -111,6 +117,47 @@ For future partially mapped intervals, keep the interval, descriptions and incom
 Location derivation is explicit: surveyed, georeferenced-plan-derived, manually entered, or unknown. Record approximate quality independently, including source/uncertainty and missing-data reasons. Manual entry may cite surveyed coordinates; plan-derived does not mean independently surveyed. Ungeoreferenced plan marks retain their page/asset coordinates and unknown model position. A 2D plan does not supply Z by default. Unknown elevation must not become zero, a horizon label or a device altitude. The interval/observation target must be in the declared excavation/project; revision and evidence links prevent unrelated coordinate systems from being combined silently.
 
 Control points, transformations and locations retain their original values and explicit revision history. A later plan/survey revision does not move existing evidence automatically. Selecting a saved plan location resolves the existing interval ID; it does not duplicate mapping data. No underground GPS/device-location inference is part of this model.
+
+## Spatial observation points and photographs (future)
+
+These definitions support Mapping and Plan workflows in the same iPhone/future-iPad data architecture. They are a conceptual contract, **not a deployed schema change**. A `SpatialObservationPoint` is the stable named field point; `ObservationLocation` supplies its versioned coordinate/plan-mark evidence. Coordinates listed below refer to the selected location revision rather than a second independently editable coordinate store.
+
+| `SpatialObservationPoint` field | Meaning |
+| --- | --- |
+| `id`, `projectID`, `excavationID` | UUID and required consistent parent FKs |
+| `mappingIntervalID`, `name` | Optional interval FK and user-visible point name |
+| `locationRevisionID`, `x`, `y`, `z` | Location revision FK; X/Y when known and optional Z, finite and unrounded; all coordinates may be null for an unlocated point |
+| `crs`, `coordinateProvenance`, `reliability` | CRS/units/axes and surveyed/plan-derived/manual/unknown source; approximate/unknown quality, uncertainty and source evidence separately |
+| `chainageMeters` | Optional numeric chainage with origin/direction metadata; never inferred from a filename |
+| `planID`, `planVersionID`, `alignmentVersionID` | Optional survey-plan and alignment revision references; an ungeoreferenced point may retain page/pixel coordinates |
+| `timestamp`, `notes` | Field point instant and notes, with revision author/time for corrections |
+
+| `PhotoObservation` field | Meaning |
+| --- | --- |
+| `id`, `projectID`, `excavationID` | Stable UUID and required consistent context FKs |
+| `mappingIntervalID`, `spatialObservationPointID`, `geologicalObservationID` | Optional UUID links to interval, point and original geological observation; when multiple links exist, their parents must agree |
+| `name`, `photoNumber` | Editable display name and field number; neither is record identity or a filesystem key |
+| `captureTimestamp`, `captureTimeProvenance` | Original capture instant/timezone or uncertainty where supplied; unknown if unavailable, never silently replaced by import time |
+| `description`, `category` | Editable description and optional roof/leftWall/rightWall/face/joint/fault/generalCondition/other category |
+| `originalImageAttachmentID`, `thumbnailAttachmentID` | Required original attachment FK; thumbnail FK may be pending/unavailable and generated recoverably |
+| `photographer` | Optional photographer metadata, included in exports only under the selected metadata profile |
+| `viewingDirection` | Optional azimuth, north reference, acquisition/source provenance and quality; unknown direction remains absent |
+| `pointLocationRevisionID`, `createdAt`, `importMetadata` | Optional location revision at capture, registration/import time and source lineage; do not silently move old photos when point coordinates are revised |
+
+| `Attachment` field | Meaning |
+| --- | --- |
+| `id`, `originalFilename` | Stable UUID and original filename as metadata only |
+| `managedRelativePath` | Application-managed local path relative to its attachment root, independent of display/original names |
+| `format`, `mimeType`, `byteSize` | Actual file format/MIME type and byte count |
+| `pixelWidth`, `pixelHeight` | Image dimensions where applicable; orientation metadata retained for correct viewing |
+| `integrityHash`, `hashAlgorithm` | Content digest (e.g. SHA-256) and algorithm identifier for import, backup and export verification |
+| `createdAt`, `importMetadata` | Creation/import source and time, original metadata and any transcoding/original-unavailable limitation |
+| `thumbnailAttachmentID`, `derivedFromAttachmentID` | Optional thumbnail/derivative relationships; derived files never replace the original |
+| `availability` | Explicit staged/available/missing/damaged state for recoverable operations, never deletion of a missing photo's record |
+
+One point has many photo observations; each photo may have one point or none. Point and photo parent relationships must resolve to the same excavation/project and, where assigned, consistent intervals. Assign the selected context at capture/import start; use idempotent operation IDs to avoid duplicate records on retry. File names/numbers may repeat without conflating UUIDs. Point-free or unlocated photographs remain valid and exportable. Register edits use controlled metadata revisions; original bytes and their hashes stay intact. Photo viewing direction is independent from measured geological plane orientation.
+
+Attachments are not inline database image blobs or external Photos-library references: copy accepted imports into managed offline storage. Keep private original EXIF when practical; separately control metadata exposed in exports, especially personal GPS/photographer details. Do not infer mine coordinates from EXIF. Backups include records, original images, hashes and relationships; thumbnails are regenerable when originals exist. Missing/corrupt files are explicitly reported and records retained, with recovery described in [architecture](architecture.md) and the [export contract](import-export.md).
 
 ## Wedge inputs and derived results (future)
 

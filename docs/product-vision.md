@@ -46,6 +46,29 @@ Before implementing any classification calculation, document and verify the publ
 
 Provide future XLSX workbooks, related CSV tables, version-qualified DIPS-compatible orientation files and structured offline backups. Preserve stable IDs, relationship/evidence links, provenance, north/direction conventions and original numerical precision. Export incomplete intervals with explicit null/status fields; report exclusions or unsupported fields. Backups include original observations, plan/georeferencing metadata, versioned interpretations/analyses and referenced attachments. Analysis tables do not substitute for a complete backup.
 
+### Geological photo documentation (core future capability)
+
+Photo documentation is integrated into **Geomechanical Mapping** and **Excavation Plans & Spatial Positioning**, not a fourth primary module. Use shared `SpatialObservationPoint`, `PhotoObservation` and `Attachment` UUID relationships, as defined in the [domain model](data-model.md). Multiple photographs may document one point, interval or geological observation without duplicating the image or defining identity by its name/filename.
+
+Target workflow:
+
+1. Open a mining project.
+2. Select an excavation and mapping interval.
+3. Open its excavation plan, when available.
+4. Place or select an observation point; retain its manually declared location and provenance.
+5. Capture one or more photographs with the iPhone camera, or import from Photos/Files.
+6. Automatically link the captured/imported photos to the selected point and its consistent project/excavation/interval context. Freeze that context when capture starts so later selection changes cannot relink a pending photo silently.
+7. Save the point, photo UUIDs, capture timestamps and coordinates/chainage where known. Missing coordinates must not prevent saving.
+8. Add editable photo names, numbers, descriptions and optional categories: roof, left wall, right wall, face, joint, fault, general condition or other.
+9. Review thumbnails and full-screen images from the mapping interval or plan point, and navigate between a photograph and its point on the plan.
+10. Export the photographs and their register/manifest offline to a workstation.
+
+This workflow also works **without a plan or without georeferencing**: create a named point under the excavation, optionally assign an interval/chainage, retain an unlocated plan mark if available, or enter explicit coordinates manually. Photos can also be linked directly to the project/excavation and optional interval/geological observation without a point. Disable only coordinate derivation or plan navigation when their prerequisites are absent, not capture, review or export. Unknown X/Y/Z remain unknown; a plan-selected coordinate is not a surveyed coordinate and underground GPS is not assumed.
+
+Preserve original images whenever practical in offline managed storage; thumbnails and display/export derivatives are separate attachments. Record capture versus import time, source, actual format/dimensions/hash and any original-unavailable/transcoding limitation. Optional viewing direction records its north reference and provenance; it is not inferred from the phone's screen-plane dip direction or copied blindly from EXIF. Retain relevant metadata privately without unnecessarily exposing personal EXIF location data, and never treat EXIF GPS as an underground survey position. Editing names/descriptions does not modify original image bytes or remove evidence history.
+
+The planned workstation export is a ZIP containing originals in its reviewed original-image profile, an XLSX photograph register, a machine-readable manifest and optional CSV register, with stable UUID-based relative paths. Unknown-coordinate records remain exportable. Report missing/damaged attachments and preserve their records; include all referenced originals and required metadata in complete offline backups. Privacy-reviewed sanitized export copies must be identified as derivatives, never silently presented as byte-identical originals. See [storage and recovery](architecture.md) and [photo export specification](import-export.md). No camera workflow, photo database or XLSX generator is implemented in this PR.
+
 ## 2. Excavation Plans & Spatial Positioning
 
 ### Plan and location workflow
@@ -148,6 +171,6 @@ FieldForge must not expand into full geological 3D modeling, block modeling, com
 
 ## Status and decisions still required
 
-Phase 1/2 provide the observation, journal, CSV and migration foundation; project mapping, prepared plans/positioning, wedge analysis, XLSX and native iPad workflows are future requirements. Existing iOS verification blockers and physical measurement limitations remain documented; this vision introduces no application, schema, algorithm, dependency or build-setting changes.
+Phase 1/2 provide the observation, journal, CSV and migration foundation; project mapping with photo documentation, prepared plans/positioning, wedge analysis, XLSX and native iPad workflows are future requirements. Existing iOS verification gaps and physical measurement limitations remain documented; the owner schedules application verification after merging PR #3 as described in [finalization](pr3-finalization.md). This vision introduces no application, schema, algorithm, dependency or build-setting changes.
 
 Before the relevant implementation phase, settle the owner's wedge formulation and reference/validation package, supported cross-section and finite-wedge assumptions, strength-input units and applicability, surveyed plan/alignment fixtures and georeferencing acceptance criteria, and minimum native iPad workflow/device capabilities. These open decisions refine implementation; they do not expand the three-module scope or permit invented mechanics.

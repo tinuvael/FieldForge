@@ -9,6 +9,7 @@
 - Work offline first, minimize external dependencies, and keep modules maintainable. Avoid unnecessary abstractions and premature optimization.
 - Core geological orientation types must not depend on Core Motion or SwiftUI. Adapt sensors at the boundary.
 - Preserve `com.tinuvael.FieldForge`, existing application data, and the Phase 1 geometry algorithms unless a tested defect requires correction.
+- Use the supplied FieldForge branding/icon as authoritative artwork; preserve proportions/design, validate asset references and deterministic generation, and request missing artwork rather than invent a replacement.
 
 ## Engineering
 
@@ -21,6 +22,7 @@
 - Separate wedge geometry/kinematics from mechanical stability; document missing geometric inputs/assumptions and never infer stable/unstable labels, safety factors or risk thresholds from geometry alone.
 - Never invent rock-mechanics equations. Mechanical wedge calculations require owner-provided methodology, verified published references/versions and independent engineering tests before implementation; cohesion/friction stay planned inputs until then.
 - Do not claim measurement accuracy without physical validation. Preserve engineering precision; round only for presentation.
+- Integrate photo documentation into Mapping/Plan through shared iPhone/iPad point/photo/attachment UUID relationships. Preserve original images where practical, attachment hashes and explicit spatial provenance; never infer surveyed underground coordinates from EXIF/GPS or identify records by filenames.
 
 ## Development
 
@@ -30,6 +32,7 @@
 - Update `README.md` for working features and `docs/` when models or architecture change.
 - Keep Xcode generation deterministic. Regenerate and commit the project after source inventory changes. Keep core tests runnable through both Swift Package Manager and Xcode.
 - Do not commit credentials, signing certificates/profiles, personal data, device journals, or generated build artifacts.
+- Design recoverable attachment operations and complete offline photo backups/exports with manifests, stable relative paths and missing-file reports. Keep thumbnails/export derivatives separate, and avoid exposing personal EXIF location metadata unnecessarily; see the product vision for details.
 
 ## Git
 

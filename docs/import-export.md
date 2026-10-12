@@ -36,6 +36,7 @@ No XLSX library/generation is included now. Later evaluate OOXML implementation 
 | Faults | `structure_id`, `interval_id`; type, thickness meters, absolute chainage, orientation, provenance, description |
 | RockMass | `assessment_id`, `interval_id`; original Q inputs, RMR versioned inputs, reference/version, results and missing-data indicators |
 | Measurements | `measurement_id`, nullable `interval_id`; original orientation, source, north, quality, notes, original entries and diagnostics references |
+| PhotoRegister | `photo_id`, project/excavation/optional interval/point/geological observation IDs; names, capture time, location revision/provenance, image path and attachment integrity |
 
 Add `InterpretationEvidence` (representative/structure ID ↔ measurement ID, role/provenance) and `Attachments` sheets/manifests when those entities exist; comma-separated IDs in a cell are not the canonical relationship model. Photos/meshes can travel as external attachments in a reviewed export bundle. No completeness filter should remove otherwise valid parent rows.
 
@@ -46,6 +47,46 @@ Add `InterpretationEvidence` (representative/structure ID ↔ measurement ID, ro
 - **Structured JSON backup/interoperability:** independent schema version, complete entities, relationships, null reasons, original diagnostics/inputs, method versions, spatial metadata and attachment hashes. Preserve timestamps/IDs and numeric values; stage/validate imports and maintain migrations. Use a consistent snapshot and ZIP/package manifest for attachments, not just observation CSV.
 
 Future exports/backups also retain plan assets/control-point and georeferencing revisions, location provenance and exact input references for wedge analyses. Add related tables/sheets or a versioned manifest as these records are implemented, without replacing the established mapping worksheets. Label geometric/kinematic candidates separately from mechanical assessments and retain unavailable/missing states; geometry-only output must not acquire fabricated stability, safety-factor or risk columns. Mechanical export fields depend on the owner's verified method. Shared exporters work on domain snapshots on both devices, independent of phone/tablet layouts.
+
+## Offline geological photo package (future)
+
+Photo export serves Mapping and Plan using `SpatialObservationPoint`, `PhotoObservation` and `Attachment` UUIDs from the shared database. It does not create a fourth module or require georeferencing/GPS. Produce a ZIP for workstation use from a consistent record/location-revision snapshot:
+
+```text
+FieldForge-Photos-<export-id>.zip
+  manifest.json
+  PhotoRegister.xlsx
+  PhotoRegister.csv                optional
+  images/<attachment-uuid>/original.<actual-format-extension>
+  thumbnails/<attachment-uuid>/preview.<format>   optional
+  derivatives/<attachment-uuid>/sanitized.<format>   optional, explicitly labeled
+```
+
+Original filenames and editable photo names/numbers are metadata, not identity or archive paths. Use stable relative UUID-based image paths, deduplicate by attachment ID when several records reference one image, and prohibit absolute/traversal paths. No workstation path or device sandbox absolute path should be required to resolve a package. Derivatives have their own IDs/hashes and source lineage; no silent crop, recompression or metadata-stripping of a file labeled original.
+
+The XLSX register includes one row per selected photo, including photos with unknown coordinates, absent interval/point or missing image bytes:
+
+| Columns | Meaning |
+| --- | --- |
+| Photo ID, name, number | Stable UUID plus editable presentation metadata |
+| Project, excavation | IDs and human-readable names from the export snapshot |
+| Mapping interval, observation point | Optional IDs/names, interval chainage and point/location revision; missing links stay blank |
+| Chainage, X, Y, Z | Numerical meters/declared coordinate units where available; null is blank, never zero |
+| CRS, coordinate source/reliability | Explicit CRS/units/axes and surveyed/plan-derived/manual/unknown provenance with quality/uncertainty |
+| Capture timestamp/source | UTC instant when established, preserved source/timezone or missing/uncertain state; import time is a separate field |
+| Description, category | Original register text/category, spreadsheet-formula protection applied to text |
+| Relative image path | Managed package path and original filename metadata; unavailable image state is explicit |
+| Attachment integrity | Original attachment ID, actual MIME/format, dimensions, expected byte size, hash algorithm/digest and verification/availability status |
+
+The machine-readable manifest is versioned and preserves exact IDs/relationships, input location revisions, null reasons, north/provenance for optional viewing direction, original numerical values/timestamps, metadata profile, archive-entry hashes/sizes and any omissions. Keep exact numeric strings alongside Excel numeric cells where Excel's precision would lose information. Optional CSV uses the same logical register fields with documented encoding/escaping. XLSX/CSV alone are not complete backups and this phase adds no XLSX generator.
+
+### Privacy, missing files and recovery
+
+Original imported images may contain personal EXIF GPS or photographer information. Preserve the best available original privately for evidence, but do not read EXIF GPS into mine coordinates or expose private metadata in ordinary registers/thumbnails. The export profile must make original-byte inclusion and its embedded metadata explicit. A privacy-reviewed original-image package includes originals under that profile; when removing personal EXIF is chosen, create and identify sanitized derivatives, record omitted originals/fields and their lineage, and never call that privacy-reduced package a complete original backup. Preserve relevant capture/orientation metadata without inventing a viewing azimuth or silently converting its north reference.
+
+Verify each available original's size/hash before packaging. Missing/unreadable/hash-mismatched files retain their register/manifest rows, expected IDs/paths/hashes and clear error status. Offer repair/retry or an explicitly incomplete package with an omission report; never declare a package complete or drop a record because coordinates/image bytes are unavailable. Write into staging, support cancellation/progress with bounded memory, close and verify the archive before promotion, and preserve recoverable state on failure. Source images and records are not changed by export.
+
+A complete offline backup contains all referenced original images, database/record snapshot, point/location revisions, metadata and attachment manifest/hash information. Thumbnails may be included or regenerated; missing originals make a backup explicitly incomplete. Restore into staging, validate file hashes, path safety and relationships, report unavailable assets, and promote only a validated/reviewed state. Attachment import, promotion, thumbnail generation, archive cleanup and restore must be recoverable after interruption; see [architecture](architecture.md). These are future requirements, not an implemented photo workflow.
 
 ## Prepared excavation plans (primary future spatial workflow)
 

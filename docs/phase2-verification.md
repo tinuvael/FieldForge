@@ -2,6 +2,8 @@
 
 Date: 2026-10-11. Base: `origin/main` **024458b577b948cf01a01b75e4a378968b9b1259**, containing merged Phase 1 PR #1. Branch: `feature/phase2-architecture-manual-entry`.
 
+**Historical result:** the executable results below belong to the original Phase 2 implementation and were not rerun for later documentation/icon work. On 2026-10-12 the owner explicitly moved Xcode builds, simulator/unit/UI tests and physical-device verification to **after merging PR #3**; that instruction supersedes the original pre-review verification gate. Finalization now uses static checks only; see [current status and post-merge checklist](pr3-finalization.md).
+
 ## Environment and checks performed
 
 The supplied workspace had no FieldForge working tree. The existing GitHub repository was cloned (no `git init`), fetched, inspected clean, and the feature branch created from latest `origin/main`. Source, tests, README, documentation, resources, project and generation script were inspected. The license, bundle identifier, deployment/signing/build settings and Phase 1 geometric/sensor algorithms are preserved.
@@ -40,11 +42,11 @@ SWIFTPM_MODULECACHE_OVERRIDE=/tmp/FieldForge-SwiftCache \
 
 Migration tests use temporary journals exclusively. No deployed iPhone journal was read, overwritten, erased or used as a fixture. The UI tests use the existing Debug `ui-testing.json` path and retain source labels.
 
-## Required before marking the PR ready
+## Owner checks after merging PR #3 (revised schedule)
 
 1. On a supported Mac, run the [README](../README.md) simulator build/test commands with an actual available device UUID. Confirm all 70 unit tests and both UI workflows, inspect keyboard/scrolling/north selection, VoiceOver, small screens, rotation and light/dark appearance.
 2. Test sensor HOLD → manual → sensor across tabs/backgrounding, save-once states, validation boundaries, undefined direction and conventional vertical entries.
 3. Preserve a complete copy of the real Phase 1 journal before a **signed in-place upgrade**. Keep `com.tinuvael.FieldForge`; do not uninstall/reset. Compare record IDs/timestamps/orientations/notes/raw diagnostics and inspect the exact v1 backup. Save a manual record and export a mixed CSV. Device upgrade and disk-full/power-loss behavior remain unverified here.
 4. Perform controlled instrument comparison before claiming geological accuracy. The owner's Phase 1 physical startup/acquisition/save report does not qualify accuracy, interference handling or long-term persistence.
 
-The PR is Draft because iOS compilation and simulator/UI execution remain significant incomplete verification. Historical Phase 1 Apple build results are in [verification.md](verification.md) and do not establish Phase 2 correctness. JSON still rewrites whole journals, lacks relational queries, and requires explicit manual recovery for corrupt/conflicting files; [architecture.md](architecture.md) documents the planned SQLite/attachment transition.
+At the original verification the PR was left Draft because iOS compilation and simulator/UI execution were incomplete. Those checks remain unperformed but, under the owner's revised instruction, are now explicitly scheduled after merge rather than a pre-review gate. Current readiness/asset status is recorded in [pr3-finalization.md](pr3-finalization.md). Historical Phase 1 Apple build results are in [verification.md](verification.md) and do not establish Phase 2 correctness. JSON still rewrites whole journals, lacks relational queries, and requires explicit manual recovery for corrupt/conflicting files; [architecture.md](architecture.md) documents the planned SQLite/attachment transition.

@@ -12,6 +12,8 @@ Prepared PDF/raster plans and DXF-derived survey geometry will support manual po
 
 Future native iPad support shares models, storage and engineering services with iPhone through adaptive SwiftUI layouts. Full CAD/GIS/geological modeling, numerical simulation and DWG editing are outside scope; STL/OBJ support is optional. No plan, wedge or iPad feature is implemented by this documentation alignment.
 
+Photo documentation is a core **future** Mapping/Plan workflow: named observation points, multiple camera/imported photos, explicit location provenance, offline originals/thumbnails and workstation ZIP packages with a photograph register and manifest. It also works without georeferenced plans or coordinates. No photo capture, database or XLSX functionality is implemented yet; see the [product vision](docs/product-vision.md).
+
 ## Working features
 
 - Measurement, journal and settings tabs, native light/dark appearance and portrait/landscape layouts.
@@ -80,10 +82,10 @@ UITests/                        automatic and manual save/relaunch/export workfl
 scripts/generate_project.py     deterministic checked-in Xcode project
 ```
 
-Phase 2 core verification: **70 XCTest tests passed on Linux with Swift 6.0.3**. Xcode/simulator and UI tests are unavailable in the current Linux environment and remain pending; prior Phase 1 Apple build results do not verify this change. Full details: [Phase 2 verification](docs/phase2-verification.md), [historical Phase 1 verification](docs/verification.md).
+Historical Phase 2 core verification: **70 XCTest tests passed on Linux with Swift 6.0.3 on 2026-10-11**, before the later documentation/icon finalization. That result does not verify the final PR state. By the owner's instruction, this finalization runs static checks only; Xcode clean build, simulator/unit/UI tests and physical-device checks are deferred to the owner **after merging PR #3**. See [finalization and post-merge checklist](docs/pr3-finalization.md), [historical Phase 2 verification](docs/phase2-verification.md) and [historical Phase 1 verification](docs/verification.md).
 
 ## Architecture and next steps
 
 See the authoritative [product vision](docs/product-vision.md), [development rules](AGENTS.md), [architecture and persistence decision](docs/architecture.md), [future shared domain schema](docs/data-model.md), [coordinates](docs/coordinate-systems.md), [export and prepared-plan boundaries](docs/import-export.md), and [roadmap](docs/roadmap.md).
 
-The immediate next step is simulator verification and a backed-up in-place upgrade check on the physical iPhone. Then develop interval mapping, prepared-plan positioning and preliminary wedge analysis through separate verified phases, with native iPad adaptation planned from the shared codebase. Q/RMR, XLSX, spatial transforms and wedge calculations remain future work; mechanical wedge implementation depends on the owner's verified methodology. A whole-mine 3D viewer is not a primary product goal.
+The owner will review/merge PR #3 and perform the post-merge verification and backed-up in-place upgrade on the physical iPhone. Then develop interval mapping with photo documentation, prepared-plan positioning and preliminary wedge analysis through separate verified phases, with native iPad adaptation planned from the shared codebase. Q/RMR, XLSX, spatial transforms and wedge calculations remain future work; mechanical wedge implementation depends on the owner's verified methodology. A whole-mine 3D viewer is not a primary product goal.

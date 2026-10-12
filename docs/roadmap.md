@@ -10,9 +10,9 @@ Native measurement/journal/settings tabs; independent screen-plane geometry; sen
 
 Provenance-aware observations, manual compass entry, explicit north and vertical conventions, preserved original inputs, shared journal/CSV, safe v1→v2 migration and engineering/domain/export documentation. Product vision and shared-module/iPad architecture are documentation only. No Q/RMR calculations, mapping UI, CAD parser, XLSX generation, plan positioning, wedge engine, iPad target, backend or cloud sync.
 
-## Next: qualify the upgrade and field workflow
+## After owner merges PR #3: qualify the upgrade and field workflow
 
-Run Xcode simulator build plus all unit/UI tests, then a signed **in-place upgrade** on the deployed iPhone after preserving a copy of the current journal. Verify UUIDs/timestamps/notes/diagnostics and a mixed manual/sensor CSV. Do not uninstall/reset the app or change its bundle ID. Exercise HOLD across modes/tabs/backgrounding and decimal-comma/manual horizontal/vertical inputs. Test storage failure recovery on test copies, never the only production journal.
+The owner explicitly schedules Xcode clean build, simulator/unit/UI tests and physical-device verification **after merging PR #3 into main**. This finalization performs static checks only; the earlier 70-test run remains historical, not proof of the final PR state. Follow the [post-merge checklist](pr3-finalization.md), inspect the supplied icon once integrated, then perform a signed **in-place upgrade** after preserving a copy of the current journal. Verify UUIDs/timestamps/notes/diagnostics and mixed manual/sensor CSV. Do not uninstall/reset or change the bundle ID. Exercise HOLD across modes/tabs/backgrounding and decimal-comma/manual horizontal/vertical inputs. Test storage failure recovery on test copies, never the only production journal.
 
 In parallel with subsequent software design, execute controlled geological-compass/inclinometer comparisons following [measurement-geometry.md](measurement-geometry.md): frame convention, repeatability, bias, fixture alignment, heading dependence and magnetic interference. Define acceptance criteria before interpreting accuracy. Physical startup is not sensor calibration or operational qualification.
 
@@ -21,6 +21,12 @@ In parallel with subsequent software design, execute controlled geological-compa
 Implement project/excavation/interval workflow with numeric chainage, interval-level descriptions/photos, explicitly interpreted J1–J5 and unrestricted tectonic records. Adopt SQLite only as relational workflow/query needs materialize; test JSON migration and complete attachment backup first. Preserve standalone observations and incomplete intervals. No automatic clustering of five observations into five sets.
 
 Add controlled evidence corrections/revisions and versioned representatives so later plan locations and analyses reference exact inputs without overwriting originals. Keep project selection/settings secondary and adopt «Картирование» when that workflow exists, preserving fast sensor/manual capture.
+
+### Core photo documentation across Mapping and Plan
+
+Implement the documented `SpatialObservationPoint` / `PhotoObservation` / `Attachment` relationships as part of the shared mapping database when that feature phase begins. Add camera capture and Photos/Files import, multiple photos per point, thumbnails/full-screen viewing, editable names/numbers/descriptions/categories, interval galleries and bidirectional photo/plan navigation. Capture context automatically links photos by UUID; support unlocated/ungeoreferenced and point-free records without GPS assumptions. Keep originals, coordinate provenance, capture-time lineage and optional viewing-direction north metadata intact.
+
+Qualify recoverable attachment staging/promotion, hashes, missing-file reporting, thumbnail regeneration and complete backup/restore before shipping. Plan offline workstation ZIP export with originals, XLSX photo register, versioned manifest and optional CSV; unknown-coordinate records remain exportable, personal EXIF is reviewed separately, and sanitized derivatives are labeled. No photo capture, database schema or XLSX generation is implemented in PR #3.
 
 ## Later verified classifications and exports
 
