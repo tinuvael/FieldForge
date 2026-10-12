@@ -4,11 +4,11 @@ Date: 2026-10-12. Branch: `feature/phase2-architecture-manual-entry`; target: `m
 
 ## Icon status
 
-The requested new user-supplied icon attachment is **not accessible in this session**. Its integration is pending receipt of the authoritative image; no replacement artwork was invented. The current `FieldForge/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png` and `Contents.json` are preserved. The existing image is a 1024×1024 RGB PNG with no alpha channel; it is not the requested new artwork.
+The user-supplied icon is now **integrated**. The authoritative 1254×1254 RGB/sRGB JPEG is preserved byte-for-byte as [branding/FieldForge-AppIcon-master.jpg](../branding/FieldForge-AppIcon-master.jpg), outside the application resource bundle. Its SHA-256 is `7ea539c752f97ad3e96e35dc69ba49e116c381690379656e8414c17274bb2dcd`.
 
-Static inspection shows the FieldForge app's Debug/Release `ASSETCATALOG_COMPILER_APPICON_NAME` is `AppIcon`, and `Assets.xcassets` belongs to its resource phase. `scripts/generate_project.py` retains those references and does not rewrite the image or asset JSON. This confirms the **existing icon's reference**, not integration or on-device display of the missing supplied icon. PR stays Draft pending that asset; Apple-platform checks are separately deferred by owner instruction.
+The old placeholder was replaced at [AppIcon.png](../FieldForge/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png) with a 1024×1024 RGB PNG, using a single proportional Lanczos downsample (Pillow 12.3.0, preparation tooling only). The entire composition, background, embedded frame and proportions are retained; no cropping, stretching, color grading, sharpening, additional mask or redesign was applied. The supplied JPEG's sRGB declaration is retained as an explicit PNG sRGB chunk. No transparency existed or needed removal. PNG encoding introduces no further lossy compression after the necessary downsample; the unresized original remains available. AppIcon SHA-256: `35defcbbbcaf7bc8349ff3b83505e9560b576a5f5c207b6bc58d859a0cceb51c`.
 
-When the image arrives: inspect its format, dimensions, proportions, color profile and transparency; preserve the supplied artwork/master and use the existing single 1024×1024 universal iOS icon format if suitable. Resize/prepare only as needed for the asset format without redesign, cropping/stretching or unapproved background changes. Report insufficient source resolution or unresolved transparency requirements rather than invent artwork. Repeat JSON/dimension/reference/generation checks after integration; do not claim it is complete from the current placeholder checks.
+Static inspection confirms the unchanged `Contents.json` selects this single 1024×1024 universal iOS icon, both FieldForge Debug/Release configurations select `ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon`, and `Assets.xcassets` is in the app resource phase. `scripts/generate_project.py` preserves those references and does not rewrite the image, master or asset JSON. No extra size/theme variants or dependencies were needed. Finalization is ready for the owner's review and manual merge; compiled asset handling and actual Home Screen appearance remain deliberately unverified until the post-merge checks.
 
 ## Static verification scope
 
@@ -16,11 +16,11 @@ Only Markdown link/consistency review, `git diff --check`, asset JSON/image head
 
 Photo design includes stable point/photo/attachment UUID relationships, original image preservation, coordinate/capture/viewing-direction provenance, missing-file states, recoverable attachment operations and privacy-aware offline export. See the authoritative [product vision](product-vision.md), [domain model](data-model.md), [architecture](architecture.md) and [ZIP/register/manifest contract](import-export.md). The photo workflow and XLSX register remain future features.
 
-Completed static checks: all nine changed files are Markdown; 53 relative links resolve; every prior AGENTS rule remains; `git diff --check` passes. Existing AppIcon JSON and PNG dimensions/format/chunk integrity are valid, and app resource/Debug/Release icon references are intact. Two Python generations reproduce the checked-in project and leave current icon files untouched. The diff contains no source, schema, dependency, test, resource or project-setting changes. None of these checks integrates or verifies the absent new artwork.
+The earlier photo-documentation commit changed nine Markdown files only and checked 53 relative links. The icon follow-up changes only AppIcon.png, its supplied master and this report. Current static checks cover 55 relative links, `git diff --check`, source/master byte equality, PNG dimensions/format/sRGB/opacity/chunk integrity, visual inspection and decoded-pixel equality to the specified master downsample. Two Python generations reproduce the checked-in project and leave new icon/master hashes unchanged. No source, schema, dependency, test, signing, bundle identifier, deployment or project-setting changes occurred; AGENTS rules and the historical 70-test report are preserved. These checks do not establish an iOS build or on-device appearance.
 
 ## Owner's post-merge checklist
 
-After the requested icon is integrated and the owner reviews the PR:
+After the owner reviews the completed photo documentation and supplied-icon integration:
 
 1. Manually merge [PR #3](https://github.com/tinuvael/FieldForge/pull/3) into `main`. No agent merge or direct push to main.
 2. On the MacBook, preserve local changes, switch to `main` and run `git pull --ff-only origin main`.
