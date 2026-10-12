@@ -1,5 +1,7 @@
 # Phase 1 verification
 
+Historical report retained for the Phase 1 commit. After this report, the project owner confirmed iPhone 15 Pro Max/iOS 27 installation/startup, real sensor acquisition and one saved observation. Accuracy, long-term reliability and interference behavior remain unverified. Current changes have a separate [Phase 2 verification report](phase2-verification.md); the Apple build results below do not verify Phase 2.
+
 Verification date: 2026-10-11. This report distinguishes executable checks from physical validation.
 
 ## Environment

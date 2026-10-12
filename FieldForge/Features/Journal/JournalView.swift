@@ -7,7 +7,7 @@ struct JournalView: View {
             Group {
                 if model.records.isEmpty {
                     ContentUnavailableView("Журнал пуст", systemImage: "book.closed",
-                                           description: Text("Зафиксируйте измерение кнопкой HOLD и нажмите «Сохранить»."))
+                                           description: Text("Сохраните ручную запись или зафиксируйте показания датчиков кнопкой HOLD."))
                 } else {
                     List {
                         ForEach(model.records) { record in
@@ -20,7 +20,11 @@ struct JournalView: View {
                                         .monospacedDigit()
                                     Text("\(record.reference.title) · \(record.quality.title)").font(.caption)
                                         .foregroundStyle(record.quality.color)
-                                    if record.sample.source == .simulatorMock {
+                                    Text(record.source.title).font(.caption)
+                                    if record.directionMeaning == .conventionalDipSide {
+                                        Text("Условная сторона падения").font(.caption)
+                                    }
+                                    if record.source == .simulatorMock {
                                         Text("DEMO · Синтетическая запись").font(.caption.weight(.bold)).foregroundStyle(.orange)
                                     }
                                 }.padding(.vertical, 4)
@@ -43,20 +47,31 @@ struct MeasurementDetailView: View {
                 LabeledContent("Угол падения", value: AngleText.format(record.orientation.dipAngle))
                 LabeledContent("Опора", value: record.reference.title)
                 LabeledContent("Качество", value: record.quality.title)
-                Text(record.orientation.status.explanation)
-                LabeledContent("Источник", value: record.sample.source.title)
+                Text(record.explanation)
+                LabeledContent("Источник", value: record.source.title)
             }
             Section("Примечание") { Text(record.notes.isEmpty ? "Нет примечания" : record.notes) }
-            Section("Диагностика") {
-                LabeledContent("Система", value: record.sample.referenceFrame.rawValue)
-                LabeledContent("Калибровка", value: record.sample.magneticAccuracy.title)
-                LabeledContent("Магнитное поле, мкТл", value: CSVExporter.number(record.sample.magneticField.length))
-                LabeledContent("Ускорение, g", value: CSVExporter.number(record.sample.userAcceleration.length))
-                LabeledContent("Вращение, рад/с", value: CSVExporter.number(record.sample.rotationRate.length))
-                Text("Нормаль NWU: \(vector(record.orientation.normal))")
-                Text("Гравитация: \(vector(record.sample.gravity))")
-                Text("Матрица R (по строкам): \(record.sample.rotation.elements.map { CSVExporter.number($0) }.joined(separator: " "))")
-                Text("Кватернион XYZW: \([record.sample.quaternion.x, record.sample.quaternion.y, record.sample.quaternion.z, record.sample.quaternion.w].map { CSVExporter.number($0) }.joined(separator: " "))")
+            if let input = record.manualInput {
+                Section("Исходный ручной ввод") {
+                    LabeledContent("Азимут", value: input.dipDirectionText.isEmpty ? "Не определён" : input.dipDirectionText)
+                    LabeledContent("Угол", value: input.dipAngleText)
+                    Text("Сенсорная диагностика отсутствует.")
+                }
+            }
+            if let sample = record.sample {
+                Section("Диагностика") {
+                    LabeledContent("Система", value: sample.referenceFrame.rawValue)
+                    LabeledContent("Калибровка", value: sample.magneticAccuracy.title)
+                    LabeledContent("Магнитное поле, мкТл", value: CSVExporter.number(sample.magneticField.length))
+                    LabeledContent("Ускорение, g", value: CSVExporter.number(sample.userAcceleration.length))
+                    LabeledContent("Вращение, рад/с", value: CSVExporter.number(sample.rotationRate.length))
+                    Text("Нормаль NWU: \(vector(record.orientation.normal))")
+                    Text("Гравитация: \(vector(sample.gravity))")
+                    Text("Матрица R (по строкам): \(sample.rotation.elements.map { CSVExporter.number($0) }.joined(separator: " "))")
+                    Text("Кватернион XYZW: \([sample.quaternion.x, sample.quaternion.y, sample.quaternion.z, sample.quaternion.w].map { CSVExporter.number($0) }.joined(separator: " "))")
+                }.font(.caption).monospacedDigit()
+            }
+            Section("Метаданные") {
                 Text("Алгоритм: \(record.algorithmVersion)")
                 Text(record.id.uuidString).textSelection(.enabled)
             }.font(.caption).monospacedDigit()
