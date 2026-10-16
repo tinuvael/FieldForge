@@ -6,7 +6,7 @@ Native, offline iOS application for geological field observations. Swift/SwiftUI
 
 ## Product direction (future capabilities)
 
-The [product vision](docs/product-vision.md) defines FieldForge as a professional offline field instrument with exactly three primary modules sharing one project database: **Geomechanical Mapping**, **Excavation Plans & Spatial Positioning**, and **Wedge Analysis**. Target navigation is «Картирование / План / Клинья»; project selection and settings are secondary. The current Phase 2 tabs and working features below remain the implementation status.
+The [product vision](docs/product-vision.md) defines FieldForge as a professional offline field instrument with exactly three primary modules sharing one project database: **Geomechanical Mapping**, **Excavation Plans & Spatial Positioning**, and **Wedge Analysis**. Target navigation is «Картирование / План / Клинья»; project selection and settings are secondary. P1 implements the mapping foundation described below; the plan and wedge tabs are explicit placeholders.
 
 Prepared PDF/raster plans and DXF-derived survey geometry will support manual positioning with explicit surveyed/plan-derived/manual/approximate/unknown provenance; underground GPS or automatic phone location is not assumed. Wedge geometry and mechanical assessment are separate: mechanical calculations await owner-provided formulas, verified references and engineering tests. Geometry alone cannot establish stability or a finite wedge volume.
 
@@ -16,7 +16,10 @@ Photo documentation is a core **future** Mapping/Plan workflow: named observatio
 
 ## Working features
 
-- Measurement, journal and settings tabs, native light/dark appearance and portrait/landscape layouts.
+- Main tabs «Картирование / План / Клинья»; mapping has a fixed project/horizon/excavation context panel, project journal and secondary measurement/settings navigation. Plan and wedge functionality is visibly unavailable.
+- Create/rename projects, create/edit horizons with optional elevation metadata, and manage one excavation across multiple horizons. Context persists between sessions.
+- Save consecutive individual picket observations with numeric meters, original field date/timezone, optional manual X/Y/Z with explicit provenance and notes. Success clears the draft and retains context; failed validation/storage and cancelled context switching preserve it.
+- Project-filtered journal with date/picket sorting and read-only original observations. Full relationships are validated in atomic versioned JSON commits with a previous-snapshot backup. See [P1 workflow/storage](docs/p1-mapping.md).
 - Automatic screen-plane measurements using Core Motion: dip angle, nullable dip direction, magnetic/motion diagnostics and quality checks; HOLD freezes a complete observation, SAVE stores it once.
 - Manual geological-compass entry: dip angle 0–90°, dip direction 0–360°, magnetic/true/grid/unknown north and optional notes. Decimal comma/dot is accepted, validation is shown before saving, and 360° is stored as 0° with original input retained.
 - Horizontal manual planes require an undefined direction (blank field). Vertical manual planes permit blank direction or an explicitly confirmed conventional dip side. The latter is labeled as a convention.
@@ -34,10 +37,10 @@ They do **not** establish geological compass accuracy, repeatability, long-term 
 
 ## Manual workflow
 
-1. Open «Измерение» and select «Геологический компас».
+1. Open «Картирование → Сервисы → Измерение» and select «Геологический компас».
 2. Enter dip and direction, select the recorded north type and optionally add notes. For 0° leave direction blank; for 90° confirm a conventional side if entering one.
 3. Check the validation message and normalized preview, then tap «Сохранить». The same unchanged draft cannot be saved twice; «Новое измерение» starts another capture.
-4. Open «Журнал» to inspect the original input, source and north. «Настройки → Экспортировать CSV» exports all journal records.
+4. Open «Картирование → Сервисы → Неназначенные измерения» to inspect originals. «Сервисы → Настройки → Экспортировать CSV» exports the standalone measurements (mapping export is deferred).
 
 Switching to manual stops acquisition; returning to automatic retains an existing HOLD snapshot. The automatic workflow remains HOLD → optional notes → SAVE → «Продолжить». Simulator presets and DEMO labels apply to automatic observations only.
 
@@ -49,7 +52,7 @@ The active journal stays at Application Support/FieldForge/`measurements-v1.json
 
 CSV uses UTF-8 BOM, comma separators, CRLF records, UTC ISO 8601 timestamps, round-trip numeric precision and empty cells for missing data. The first 24 Phase 1 column names/order are retained; four provenance/original-input columns are appended. Manual diagnostic cells are blank. Spreadsheet-formula-like text is protected. Consumers must accept additional columns/new enums and full-precision numeric formatting. Use Excel's UTF-8/comma/decimal-dot import when regional detection differs. Excel numeric precision may still reduce values; CSV is not a complete JSON/attachment backup.
 
-The small journal is currently rewritten as atomic JSON. SQLite is recommended when relational interval mapping is implemented; no speculative database or XLSX dependency is added now.
+The project graph uses `mapping-v1.json` (schema 1), isolated from the protected standalone measurement journal. It is atomically rewritten as one validated aggregate; `mapping-v1.json.previous` retains the prior snapshot. No legacy assignment/migration is guessed. SQLite remains the next storage step before large plan/attachment workloads; see the [P1 storage decision](docs/p1-mapping.md).
 
 ## Development
 
@@ -67,25 +70,25 @@ xcodebuild -project FieldForge.xcodeproj -scheme FieldForge \
   -derivedDataPath /tmp/FieldForge-DerivedData CODE_SIGNING_ALLOWED=NO test
 ```
 
-Set `DEVELOPER_DIR` to a supported Xcode installation when necessary. Project generation uses Python 3 only, is deterministic and preserves signing/identifier/deployment settings. Core sources run independently via Swift Package Manager; UI and Core Motion require Apple SDKs. Debug UI tests use `ui-testing.json`, never the deployed journal.
+Set `DEVELOPER_DIR` to a supported Xcode installation when necessary. Project generation uses Python 3 only and is deterministic. Machine-local signing overrides belong in ignored `Config/LocalSigning.xcconfig` (`DEVELOPMENT_TEAM = your Team`), optionally included by `Config/Signing.xcconfig`; they survive regeneration. Identifier and deployment settings remain unchanged. Core sources run independently via Swift Package Manager; UI and Core Motion require Apple SDKs. Debug UI tests use `ui-testing.json` and `ui-testing-mapping.json`, never the deployed journals.
 
 ```text
 FieldForge/App/                  composition, lifecycle, automatic session and manual draft
 FieldForge/Core/Geometry/        sensor-independent orientation, coordinates and conventions
 FieldForge/Core/Sensors/         diagnostic values, Core Motion and mock adapters
-FieldForge/Data/Models/          observation provenance, validation and HOLD
+FieldForge/Data/Models/          project graph, mapping draft, observation provenance, validation and HOLD
 FieldForge/Data/Storage/         versioned JSON, migration, backup and integrity protection
-FieldForge/Features/             Russian SwiftUI measurement, journal and settings
+FieldForge/Features/             Russian SwiftUI mapping/context, measurement, journals and settings
 FieldForge/Services/Export/      CSV and temporary export file
-Tests/                          geometry, automatic/manual observation, migration and CSV XCTest
-UITests/                        automatic and manual save/relaunch/export workflows
+Tests/                          mapping/reset/context/integrity, geometry, observations, migration and CSV XCTest
+UITests/                        mapping acceptance and automatic/manual save/relaunch/export workflows
 scripts/generate_project.py     deterministic checked-in Xcode project
 ```
 
-Historical Phase 2 core verification: **70 XCTest tests passed on Linux with Swift 6.0.3 on 2026-10-11**, before the later documentation/icon finalization. That result does not verify the final PR state. By the owner's instruction, this finalization runs static checks only; Xcode clean build, simulator/unit/UI tests and physical-device checks are deferred to the owner **after merging PR #3**. See [finalization and post-merge checklist](docs/pr3-finalization.md), [historical Phase 2 verification](docs/phase2-verification.md) and [historical Phase 1 verification](docs/verification.md).
+Current P1 verification: see [executed tests and limitations](docs/p1-verification.md). Earlier Phase 1/2 verification reports are historical. Physical measurement accuracy and device upgrade behavior still require owner validation.
 
 ## Architecture and next steps
 
 See the authoritative [product vision](docs/product-vision.md), [development rules](AGENTS.md), [architecture and persistence decision](docs/architecture.md), [future shared domain schema](docs/data-model.md), [coordinates](docs/coordinate-systems.md), [export and prepared-plan boundaries](docs/import-export.md), and [roadmap](docs/roadmap.md).
 
-The owner will review/merge PR #3 and perform the post-merge verification and backed-up in-place upgrade on the physical iPhone. Then develop interval mapping with photo documentation, prepared-plan positioning and preliminary wedge analysis through separate verified phases, with native iPad adaptation planned from the shared codebase. Q/RMR, XLSX, spatial transforms and wedge calculations remain future work; mechanical wedge implementation depends on the owner's verified methodology. A whole-mine 3D viewer is not a primary product goal.
+P1 supplies individual mapping points and a project-aware journal. Original measurement capture/linking inside mapping is deferred to Issue #8; interval revisions, photo documentation, prepared-plan positioning and wedge analysis follow separately, with native iPad adaptation planned from the shared codebase. Q/RMR, XLSX, spatial transforms and wedge calculations remain future work; mechanical wedge implementation depends on the owner's verified methodology. A whole-mine 3D viewer is not a primary product goal.

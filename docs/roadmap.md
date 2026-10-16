@@ -6,17 +6,23 @@ The authoritative [product vision](product-vision.md) defines exactly three prim
 
 Native measurement/journal/settings tabs; independent screen-plane geometry; sensor diagnostics and quality gates; HOLD/SAVE; simulator source; offline JSON and CSV. Physical iPhone 15 Pro Max/iOS 27 startup, sensor acquisition and one saved observation have been reported by the project owner. Geological accuracy and long-term reliability remain unverified.
 
-## Phase 2 — this change
+## Phase 2 — merged
 
 Provenance-aware observations, manual compass entry, explicit north and vertical conventions, preserved original inputs, shared journal/CSV, safe v1→v2 migration and engineering/domain/export documentation. Product vision and shared-module/iPad architecture are documentation only. No Q/RMR calculations, mapping UI, CAD parser, XLSX generation, plan positioning, wedge engine, iPad target, backend or cloud sync.
 
-## After owner merges PR #3: qualify the upgrade and field workflow
+## Phase 2 qualification (historical scheduling; physical checks still needed)
 
 The owner explicitly schedules Xcode clean build, simulator/unit/UI tests and physical-device verification **after merging PR #3 into main**. This finalization performs static checks only; the earlier 70-test run remains historical, not proof of the final PR state. Follow the [post-merge checklist](pr3-finalization.md), inspect the supplied icon once integrated, then perform a signed **in-place upgrade** after preserving a copy of the current journal. Verify UUIDs/timestamps/notes/diagnostics and mixed manual/sensor CSV. Do not uninstall/reset or change the bundle ID. Exercise HOLD across modes/tabs/backgrounding and decimal-comma/manual horizontal/vertical inputs. Test storage failure recovery on test copies, never the only production journal.
 
 In parallel with subsequent software design, execute controlled geological-compass/inclinometer comparisons following [measurement-geometry.md](measurement-geometry.md): frame convention, repeatability, bias, fixture alignment, heading dependence and magnetic interference. Define acceptance criteria before interpreting accuracy. Physical startup is not sensor calibration or operational qualification.
 
-## Next mapping phase
+## P1 — project mapping foundation
+
+Implemented: projects, horizons, multi-horizon excavations, persistent context, individual picket observations with separate field dates/timezone and optional manual coordinates, guarded draft reset, and project-filtered journal. «Картирование / План / Клинья» are primary tabs; Plan/Wedge remain placeholders. The protected unassigned measurement journal stays accessible in secondary navigation. See [workflow/storage decision](p1-mapping.md) and [executed verification](p1-verification.md).
+
+P1 keeps a validated atomic JSON project aggregate; qualify SQLite before larger attachment/plan workloads and cross-store evidence links. Mapping measurement capture/linking is explicitly deferred to Issue #8. Draft recovery across process termination and observation corrections/revisions remain future work.
+
+## Subsequent mapping phases
 
 Implement project/excavation/interval workflow with numeric chainage, interval-level descriptions/photos, explicitly interpreted J1–J5 and unrestricted tectonic records. Adopt SQLite only as relational workflow/query needs materialize; test JSON migration and complete attachment backup first. Preserve standalone observations and incomplete intervals. No automatic clustering of five observations into five sets.
 

@@ -6,46 +6,46 @@ struct MeasurementView: View {
     @State private var mockDirection = 90.0
     @State private var mockCondition = MockCondition.normal
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    Picker("Способ измерения", selection: Binding(get: { model.mode }, set: model.setMode)) {
-                        ForEach(MeasurementMode.allCases, id: \.self) { Text($0.title).tag($0) }
-                    }.pickerStyle(.segmented).accessibilityIdentifier("measurementMode")
-                    if model.mode == .manual {
-                        ManualEntryView()
-                    } else {
-                        automaticContent
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                Picker("Способ измерения", selection: Binding(get: { model.mode }, set: model.setMode)) {
+                    ForEach(MeasurementMode.allCases, id: \.self) { Text($0.title).tag($0) }
+                }.pickerStyle(.segmented).accessibilityIdentifier("measurementMode")
+                if model.mode == .manual {
+                    ManualEntryView()
+                } else {
+                    automaticContent
+                }
+            }.padding()
+        }
+        .navigationTitle("Измерение")
+        .onAppear { model.measurementScreenVisibilityChanged(true) }
+        .onDisappear { model.measurementScreenVisibilityChanged(false) }
+        .safeAreaInset(edge: .bottom) {
+            HStack {
+                if model.mode == .manual {
+                    if model.savedManual != nil {
+                        Button("Новое измерение", action: model.newManualObservation)
+                            .buttonStyle(.bordered).accessibilityIdentifier("newManualButton")
                     }
-                }.padding()
-            }
-            .navigationTitle("Измерение")
-            .safeAreaInset(edge: .bottom) {
-                HStack {
-                    if model.mode == .manual {
-                        if model.savedManual != nil {
-                            Button("Новое измерение", action: model.newManualObservation)
-                                .buttonStyle(.bordered).accessibilityIdentifier("newManualButton")
-                        }
-                        Button(action: model.saveManual) {
-                            Label(model.savedManual == nil ? "Сохранить" : "Сохранено", systemImage: "square.and.arrow.down")
-                                .frame(maxWidth: .infinity)
-                        }.buttonStyle(.borderedProminent).disabled(!model.canSaveManual)
-                            .accessibilityIdentifier("saveManualButton")
-                    } else {
-                        Button(action: model.toggleHold) {
-                            Label(model.isHeld ? "Продолжить" : "HOLD", systemImage: model.isHeld ? "play.fill" : "pause.fill")
-                                .frame(maxWidth: .infinity)
-                        }.buttonStyle(.bordered).disabled(!model.isHeld && !model.canHold)
-                            .accessibilityIdentifier("holdButton")
-                        Button(action: model.saveFrozen) {
-                            Label(model.session.hasSavedFrozen ? "Сохранено" : "Сохранить", systemImage: "square.and.arrow.down")
-                                .frame(maxWidth: .infinity)
-                        }.buttonStyle(.borderedProminent).disabled(!model.canSave)
-                            .accessibilityIdentifier("saveButton")
-                    }
-                }.controlSize(.large).padding().background(.bar)
-            }
+                    Button(action: model.saveManual) {
+                        Label(model.savedManual == nil ? "Сохранить" : "Сохранено", systemImage: "square.and.arrow.down")
+                            .frame(maxWidth: .infinity)
+                    }.buttonStyle(.borderedProminent).disabled(!model.canSaveManual)
+                        .accessibilityIdentifier("saveManualButton")
+                } else {
+                    Button(action: model.toggleHold) {
+                        Label(model.isHeld ? "Продолжить" : "HOLD", systemImage: model.isHeld ? "play.fill" : "pause.fill")
+                            .frame(maxWidth: .infinity)
+                    }.buttonStyle(.bordered).disabled(!model.isHeld && !model.canHold)
+                        .accessibilityIdentifier("holdButton")
+                    Button(action: model.saveFrozen) {
+                        Label(model.session.hasSavedFrozen ? "Сохранено" : "Сохранить", systemImage: "square.and.arrow.down")
+                            .frame(maxWidth: .infinity)
+                    }.buttonStyle(.borderedProminent).disabled(!model.canSave)
+                        .accessibilityIdentifier("saveButton")
+                }
+            }.controlSize(.large).padding().background(.bar)
         }
     }
     private var automaticContent: some View {

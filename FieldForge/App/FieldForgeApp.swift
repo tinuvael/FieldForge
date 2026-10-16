@@ -2,8 +2,9 @@ import SwiftUI
 
 @main struct FieldForgeApp: App {
     @StateObject private var model = AppModel()
+    @StateObject private var mapping = MappingModel()
     var body: some Scene {
-        WindowGroup { RootView().environmentObject(model).environment(\.locale, Locale(identifier: "ru_RU")) }
+        WindowGroup { RootView().environmentObject(model).environmentObject(mapping).environment(\.locale, Locale(identifier: "ru_RU")) }
     }
 }
 
@@ -13,9 +14,11 @@ struct RootView: View {
     @State private var selectedTab = 0
     var body: some View {
         TabView(selection: $selectedTab) {
-            MeasurementView().tabItem { Label("Измерение", systemImage: "scope") }.tag(0)
-            JournalView().tabItem { Label("Журнал", systemImage: "book.closed") }.tag(1)
-            SettingsView().tabItem { Label("Настройки", systemImage: "gearshape") }.tag(2)
+            MappingView().tabItem { Label("Картирование", systemImage: "square.and.pencil") }.tag(0)
+            ContentUnavailableView("План", systemImage: "map", description: Text("Выбор и просмотр DXF запланированы. Координаты вводятся вручную в картировании."))
+                .tabItem { Label("План", systemImage: "map") }.tag(1)
+            ContentUnavailableView("Клинья", systemImage: "triangle", description: Text("Анализ будет доступен после проверки методики и инженерных тестов."))
+                .tabItem { Label("Клинья", systemImage: "triangle") }.tag(2)
         }
         .tint(Color("AccentColor"))
         .onAppear { updateLifecycle() }
@@ -27,6 +30,6 @@ struct RootView: View {
         } message: { Text(model.errorMessage ?? "") }
     }
     private func updateLifecycle() {
-        model.setLifecycle(measurementVisible: selectedTab == 0, foreground: scenePhase == .active)
+        model.setLifecycle(measurementVisible: model.measurementScreenVisible && selectedTab == 0, foreground: scenePhase == .active)
     }
 }

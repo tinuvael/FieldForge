@@ -23,6 +23,21 @@ final class MigrationTests: XCTestCase {
         edit(&records); root["measurements"] = records
         return try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
     }
+    @MainActor func testSensorValidationAllowsOnlyFloatingPointNoiseWithoutRewritingEvidence() async throws {
+        let sample = MockSensorProvider.sample(dip: 45, direction: 90, timestamp: Date(timeIntervalSince1970: 1_700_000_000))
+        let original = Measurement.process(sample)
+        var noisy = original
+        noisy.orientation.dipAngle = original.orientation.dipAngle!.nextUp
+        XCTAssertTrue(noisy.isSavable)
+        let encoded = try JSONEncoder().encode(noisy)
+        XCTAssertEqual(try JSONDecoder().decode(Measurement.self, from: encoded), noisy)
+        noisy.orientation.dipAngle! += 1e-8
+        XCTAssertFalse(noisy.isSavable)
+        noisy = original; noisy.orientation.normal!.x += 1e-8
+        XCTAssertFalse(noisy.isSavable)
+        noisy = original; noisy.orientation.status = .verticalAmbiguity
+        XCTAssertFalse(noisy.isSavable)
+    }
     func testLegacyMigrationPreservesEveryOriginalFieldAndBackupBytes() throws {
         try withJournal(Phase1Fixtures.journal) { store in
             let records = try store.load()

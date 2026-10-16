@@ -8,3 +8,5 @@ build/
 *.mobileprovision
 *.p12
 *.cer
+
+Config/LocalSigning.xcconfig

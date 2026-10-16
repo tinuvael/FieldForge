@@ -3,37 +3,35 @@ import SwiftUI
 struct JournalView: View {
     @EnvironmentObject private var model: AppModel
     var body: some View {
-        NavigationStack {
-            Group {
-                if model.records.isEmpty {
-                    ContentUnavailableView("Журнал пуст", systemImage: "book.closed",
-                                           description: Text("Сохраните ручную запись или зафиксируйте показания датчиков кнопкой HOLD."))
-                } else {
-                    List {
-                        ForEach(model.records) { record in
-                            NavigationLink {
-                                MeasurementDetailView(record: record)
-                            } label: {
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text(MeasurementDateText.format(record.timestamp)).font(.headline)
-                                    Text("Азимут \(AngleText.format(record.orientation.dipDirection, azimuth: true)) · угол \(AngleText.format(record.orientation.dipAngle))")
-                                        .monospacedDigit()
-                                    Text("\(record.reference.title) · \(record.quality.title)").font(.caption)
-                                        .foregroundStyle(record.quality.color)
-                                    Text(record.source.title).font(.caption)
-                                    if record.directionMeaning == .conventionalDipSide {
-                                        Text("Условная сторона падения").font(.caption)
-                                    }
-                                    if record.source == .simulatorMock {
-                                        Text("DEMO · Синтетическая запись").font(.caption.weight(.bold)).foregroundStyle(.orange)
-                                    }
-                                }.padding(.vertical, 4)
-                            }
-                        }.onDelete(perform: model.delete)
-                    }
+        Group {
+            if model.records.isEmpty {
+                ContentUnavailableView("Неназначенных измерений нет", systemImage: "book.closed",
+                                       description: Text("Сохраните ручную запись или зафиксируйте показания датчиков кнопкой HOLD."))
+            } else {
+                List {
+                    ForEach(model.records) { record in
+                        NavigationLink {
+                            MeasurementDetailView(record: record)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(MeasurementDateText.format(record.timestamp)).font(.headline)
+                                Text("Азимут \(AngleText.format(record.orientation.dipDirection, azimuth: true)) · угол \(AngleText.format(record.orientation.dipAngle))")
+                                    .monospacedDigit()
+                                Text("\(record.reference.title) · \(record.quality.title)").font(.caption)
+                                    .foregroundStyle(record.quality.color)
+                                Text(record.source.title).font(.caption)
+                                if record.directionMeaning == .conventionalDipSide {
+                                    Text("Условная сторона падения").font(.caption)
+                                }
+                                if record.source == .simulatorMock {
+                                    Text("DEMO · Синтетическая запись").font(.caption.weight(.bold)).foregroundStyle(.orange)
+                                }
+                            }.padding(.vertical, 4)
+                        }
+                    }.onDelete(perform: model.delete)
                 }
-            }.navigationTitle("Журнал").toolbar { if !model.records.isEmpty { EditButton().accessibilityLabel("Править журнал") } }
-        }
+            }
+        }.navigationTitle("Неназначенные").toolbar { if !model.records.isEmpty { EditButton().accessibilityLabel("Править журнал") } }
     }
 }
 

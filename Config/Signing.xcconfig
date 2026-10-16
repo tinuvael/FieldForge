@@ -1,0 +1,3 @@
+// Optional machine-local signing overrides. Never commit personal Team settings.
+DEVELOPMENT_TEAM =
+#include? "LocalSigning.xcconfig"
