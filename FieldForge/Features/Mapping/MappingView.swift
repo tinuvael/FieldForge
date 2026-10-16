@@ -103,28 +103,19 @@ struct MappingView: View {
                 Section("Пикет и дата") {
                     TextField("Пикет: ПК 0+005 или метры", text: draft(\.picket, fallback: ""))
                         .accessibilityIdentifier("mappingPicket").focused($focused)
-                    Text("ПК км+метры: ПК 0+005 = 5 м; ПК 1+005 = 1005 м. Это не 100-метровые пикеты.")
-                        .font(.caption).foregroundStyle(.secondary)
                     DatePicker("Дата наблюдения", selection: Binding(get: { mapping.workflow?.draft.observedAtOverride ?? Date() },
                         set: { value in mapping.perform { $0.draft.observedAtOverride = value } }))
                         .accessibilityIdentifier("mappingDate")
-                    Text("Часовой пояс: \(w.draft.timeZoneID). Новая запись без изменения даты получает время сохранения.").font(.caption)
                 }
                 Section {
                     coordinate("X", \.x); coordinate("Y", \.y); coordinate("Z", \.z)
                     Button("Выбрать на плане", systemImage: "map") { focused = false; showPlans = true }
                         .disabled(w.context.horizonID == nil).accessibilityIdentifier("selectHorizonPlan")
-                } header: { Text("Координаты · XY: \(w.draft.xyUnits == "drawing" ? "ед. чертежа" : w.draft.xyUnits) · Z: м") } footer: {
+                } header: { Text(MappingCoordinateText.header(xyUnits: w.draft.xyUnits)) } footer: {
                     Text(w.draft.zOrigin == .horizonDefault ? "Z: по горизонту · номинальная отметка, не съёмка" : "Z: ручной ввод или неизвестно · метры")
                 }
                 Section("Измерения") {
                     NavigationLink("Открыть независимое измерение", destination: MeasurementView())
-                    Text("Датчики iPhone и геологический компас сохраняют записи в неназначенный журнал. Привязка к наблюдению запланирована в Issue #8.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    planned("Системы трещин J1–J5")
-                }
-                Section("Оценки и документация") {
-                    planned("Barton Q"); planned("RMR"); planned("Разломы / тектонические структуры"); planned("Фотографии")
                 }
                 Section("Примечания") {
                     TextField("Полевые примечания", text: draft(\.notes, fallback: ""), axis: .vertical)
@@ -143,13 +134,10 @@ struct MappingView: View {
     }
     private func coordinate(_ name: String, _ key: WritableKeyPath<MappingDraft, String>) -> some View {
         HStack {
-            Text(name == "Z" ? "Z, м" : name).frame(width: 42, alignment: .leading)
+            Text(name == "Z" && mapping.workflow?.draft.xyUnits != "m" ? "Z, м" : name).frame(width: 42, alignment: .leading)
             TextField("Неизвестно", text: draft(key, fallback: "")).keyboardType(.numbersAndPunctuation)
                 .focused($focused).accessibilityIdentifier("mapping\(name)")
         }
-    }
-    private func planned(_ title: String) -> some View {
-        DisclosureGroup(title) { Text("Запланировано в следующих фазах") }.disabled(true)
     }
     private func selector(_ title: String, id: String, values: [(UUID, String)], selection: Binding<UUID?>, kind: ContextEditorKind) -> some View {
         HStack {
@@ -198,7 +186,6 @@ struct ContextEditor: View {
                         TextField("Отметка горизонта, м", text: $elevation).keyboardType(.numbersAndPunctuation).focused($inputFocused)
                             .accessibilityIdentifier("contextElevation")
                         if editingID != nil { Text("Исходное название: \(name)").font(.caption) }
-                        DisclosureGroup("Дополнительно") { TextField("Высотная система / неизвестно", text: $datum).focused($inputFocused) }
                     } else { TextField("Название", text: $name).focused($inputFocused).accessibilityIdentifier("contextName") }
                     if kind == .excavation {
                         Text("Одна выработка может относиться к нескольким горизонтам.").font(.caption)
@@ -212,6 +199,16 @@ struct ContextEditor: View {
                         .accessibilityIdentifier("saveContext")
                     if editingID != nil { Button("Новая запись") { editingID = nil; name = ""; elevation = ""; datum = "неизвестно"; error = nil } }
                     if let error { Text(error).foregroundStyle(.red) }
+                }
+                if kind == .horizon, editingID != nil {
+                    Section {
+                        NavigationLink("Высотная система · необязательно") {
+                            Form {
+                                TextField("Высотная система", text: $datum)
+                                Text("Метаданные применятся после сохранения горизонта. Исходные наблюдения сохраняют прежние значения.").font(.caption)
+                            }.navigationTitle("Высотная система")
+                        }
+                    }
                 }
             }.navigationTitle(kind.title)
                 .toolbar {

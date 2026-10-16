@@ -24,19 +24,21 @@ Each import keeps original bytes at `plans/originals/<attachmentUUID>.dxf`, with
 
 ## Supported drawing subset and references
 
-Adapter contract: **Autodesk AutoCAD 2018 ASCII DXF Reference**, entity group codes, default WCS/OCS only. Original byte encoding is preserved; parsing accepts UTF-8 (including BOM), CR/LF line endings, 999 comments or legacy Windows-1251 text. Binary DXF and DWG are rejected. Engineering point values remain Double precision.
+Adapter contract: **Autodesk AutoCAD 2018 ASCII DXF Reference**, entity group codes, default WCS/OCS only. Original byte encoding is preserved; parsing accepts UTF-8 (including BOM), CR/LF line endings, 999 comments or legacy text explicitly declaring ANSI_1251. Other non-UTF-8 code pages are rejected. Binary DXF and DWG are rejected. Engineering point values remain Double precision.
 
 | Entity | Supported display | Explicit limitation |
 | --- | --- | --- |
 | LINE | WCS endpoints 10/20, 11/21 | Horizontal lines only; differing endpoint Z is skipped |
 | LWPOLYLINE | 10/20 vertices, validated 90 count, open/closed 70 flag | Straight segments; nonzero 42 bulge is skipped for the whole entity; width is centerline only |
-| POLYLINE / VERTEX / SEQEND | Straight 2D vertices, open/closed | 3D, mesh, polyface, curve-fit/spline flags and nonzero bulge skipped; missing SEQEND is an error |
+| POLYLINE / VERTEX / SEQEND | Straight 2D and WCS 3D (flag 8, vertex flag 32) XY projections, open/closed; plinegen 128 accepted | Mesh, polyface, fit flags, nonzero bulge and non-default extrusion skipped with counts; missing SEQEND is an error |
+| POINT | WCS XY dot, original XYZ retained | Fixed 4 pt symbol; PDMODE/PDSIZE/thickness not reproduced |
+| TEXT / MTEXT | Plain Unicode annotations at insertion XY; original insertion XYZ retained | See annotation subset below; visual labels are not measurements |
 | ARC | Centre/radius, 50/51 degrees counterclockwise, wrapping through 0° | Default extrusion only; zero sweep rejected |
 | CIRCLE | Centre/radius | Default extrusion only |
 | BLOCK / INSERT | No expansion | INSERT skipped with count; no insertion/rotation/scale/base-point transforms are inferred |
-| TEXT, MTEXT, HATCH, SPLINE, ELLIPSE, DIMENSION, external references, other objects | Unsupported | Skipped by entity name with visible counts; no complete CAD representation claim |
+| HATCH, SPLINE, ELLIPSE, DIMENSION, external references, other objects | Unsupported | Skipped by entity name with visible counts; no complete CAD representation claim |
 
-Non-default extrusion/OCS, paper-space and entity-invisible objects are skipped with warnings. Horizontal drawing elevation is not used as observation Z. Off/frozen layer-table visibility is respected. Styles, lineweights, CAD annotation, clipping and layer selection are not reproduced. The viewer always exposes the simplified-display warning and complete warning list, including skipped entity counts. A drawing with no supported geometry is rejected. Supported entities with malformed/duplicate mandatory numeric groups fail the import instead of becoming fabricated geometry. Unsupported objects may be present in an otherwise usable partial drawing; always review the warning list and source in CAD before field use.
+Non-default extrusion/OCS, paper-space and entity-invisible objects are skipped with warnings. Horizontal drawing elevation is not used as observation Z. Off/frozen layer-table visibility is respected. Styles, lineweights, CAD annotation, clipping and layer selection are not reproduced. The viewer always exposes the simplified-display warning and complete warning list, including skipped entity counts. A drawing with no supported geometry or labels is rejected; POINT-only and label-only files are usable. Supported entities with malformed/duplicate mandatory numeric groups fail the import instead of becoming fabricated geometry. Unsupported objects may be present in an otherwise usable partial drawing; always review the warning list and source in CAD before field use.
 
 Primary reference pages:
 
@@ -45,6 +47,41 @@ Primary reference pages:
 - [Autodesk OCS conventions](https://help.autodesk.com/cloudhelp/2024/ENU/AutoCAD-DXF/files/GUID-D99F1509-E4E4-47A3-8691-92EA07DC88F5.htm) and [INSUNITS definitions](https://help.autodesk.com/cloudhelp/2025/ENU/AutoCAD-Core/files/GUID-A58A87BB-482B-4042-A00A-EEF55A2B4FD8.htm).
 
 Arcs/circles are display chords at ≤1° increments, using the published CAD centre/radius/CCW conventions. This is a display approximation, not an engineering curve-intersection or surveying calculation. Picking is freehand drawing-space XY, without snapping. No geological/kinematic/mechanical engineering method is introduced.
+
+## 3D projection and annotation subset (Issue #14)
+
+3D POLYLINE source vertices retain WCS XYZ, layer, original count/order and closure
+separately from display paths. The display adds only the closing edge; no source
+vertex is duplicated. XY is copied without coordinate conversion. Non-default
+extrusion remains conservatively unsupported and warned. Hidden/frozen layers,
+entity invisibility and paper-space apply before display, including vertex checks.
+A 3D plan is not a planar geological observation. Observation Z still comes only
+from the selected numeric horizon or manual input; tapping a ramp never samples
+its vertex Z. Managed originals and SHA-256 remain unchanged.
+
+Annotations support literal UTF-8/declared Windows-1251, `\U+XXXX` Unicode scalars,
+common `%%d/%%p/%%c` symbols, and MTEXT paragraph/nonbreaking-space/literal escapes.
+TEXT supports default left/baseline placement and degree rotation; MTEXT supports
+top-left placement, chunked text, radian rotation or planar X direction (last
+specified orientation wins). Other justification, mirroring, oblique/width changes,
+columns, rich formatting and fields are skipped with feature counts. A visible
+warning qualifies the approximate native font/baseline, ignored CAD wrapping,
+spacing/background, and 6–96 pt screen font clamp. Fit uses label insertion anchors,
+not exact glyph extents. No font/style or full CAD layout fidelity is claimed.
+
+References: Autodesk [2018 POLYLINE](https://help.autodesk.com/cloudhelp/2018/ENU/AutoCAD-DXF/files/GUID-ABF6B778-BE20-4B49-9B58-A94E64CEFFF3.htm)
+and the **2014 DXF Reference** entity chapters POINT, TEXT, MTEXT and VERTEX linked
+above. These published conventions define the bounded display adapter; no new
+engineering calculation or persistence schema is introduced.
+
+The project journal now uses searchable horizon then excavation lists with All
+choices, picket/number search, optional inclusive calendar-day dates in the current
+viewing time zone, explicit result counts, reset and secondary date/picket sorting.
+Changing journal filters never changes capture context or records. Coordinates
+read «Координаты, м» only for declared metre XY; otherwise drawing XY and Z metres
+are distinguished. Horizon creation has a single numeric elevation field; optional
+vertical datum metadata is on a separate screen while editing an existing horizon.
+Legacy horizon names are never parsed into elevation or used to rewrite old Z.
 
 ## Viewport and saved observations
 
@@ -66,4 +103,4 @@ Preserve the whole Application Support/FieldForge directory for recovery: graph,
 
 ## Verification
 
-See [P2 verification](p2-verification.md). `DXFTests` uses hand-authored synthetic group-code fixtures and literal independent expected vertices/cardinal arc points. Viewport tests assert manually calculated screen/control coordinates after pan/zoom/aspect changes, including large coordinate rebasing. These verify the adapter and display algebra, not surveyed field accuracy or CAD completeness. Source-file picker/provider behavior and physical sensor accuracy require platform/field qualification.
+See [Issue #14 verification](p2-hotfix-verification.md) for original-file regression results and [historical P2 verification](p2-verification.md). `DXFTests` uses hand-authored synthetic group-code fixtures and literal independent expected vertices/cardinal arc points. Viewport tests assert manually calculated screen/control coordinates after pan/zoom/aspect changes, including large coordinate rebasing. These verify the adapter and display algebra, not surveyed field accuracy or CAD completeness. Source-file picker/provider behavior and physical sensor accuracy require platform/field qualification.

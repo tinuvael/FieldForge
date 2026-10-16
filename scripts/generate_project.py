@@ -20,23 +20,24 @@ def refs(names):
 app_sources = sorted(str(p.relative_to(ROOT)) for p in (ROOT / 'FieldForge').rglob('*.swift'))
 unit_sources = sorted(str(p.relative_to(ROOT)) for p in (ROOT / 'Tests').glob('*.swift'))
 ui_sources = sorted(str(p.relative_to(ROOT)) for p in (ROOT / 'UITests').glob('*.swift'))
+test_resources = ['Tests/Fixtures']
 resources = ['FieldForge/Resources/PrivacyInfo.xcprivacy', 'FieldForge/Resources/Assets.xcassets']
 obj('signingConfig', 'isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = \"Config/Signing.xcconfig\"; sourceTree = SOURCE_ROOT;')
-for p in app_sources + unit_sources + ui_sources + resources:
-    kind = 'sourcecode.swift' if p.endswith('.swift') else 'folder.assetcatalog' if p.endswith('.xcassets') else 'text.xml'
+for p in app_sources + unit_sources + ui_sources + resources + test_resources:
+    kind = 'sourcecode.swift' if p.endswith('.swift') else 'folder.assetcatalog' if p.endswith('.xcassets') else 'folder' if p in test_resources else 'text.xml'
     obj(p, f'isa = PBXFileReference; lastKnownFileType = {kind}; path = {q(p)}; sourceTree = SOURCE_ROOT;')
     obj('build:' + p, f'isa = PBXBuildFile; fileRef = {uid(p)};')
 obj('plist', 'isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "FieldForge/Resources/Info.plist"; sourceTree = SOURCE_ROOT;')
 for name, ext, kind in [('FieldForge', 'app', 'wrapper.application'), ('FieldForgeTests', 'xctest', 'wrapper.cfbundle'), ('FieldForgeUITests', 'xctest', 'wrapper.cfbundle')]:
     obj('product:' + name, f'isa = PBXFileReference; explicitFileType = {kind}; includeInIndex = 0; path = {name}.{ext}; sourceTree = BUILT_PRODUCTS_DIR;')
 obj('appGroup', f'isa = PBXGroup; name = FieldForge; children = {refs(app_sources + resources + ["plist"])}; sourceTree = "<group>";')
-obj('testGroup', f'isa = PBXGroup; name = Tests; children = {refs(unit_sources + ui_sources)}; sourceTree = "<group>";')
+obj('testGroup', f'isa = PBXGroup; name = Tests; children = {refs(unit_sources + ui_sources + test_resources)}; sourceTree = "<group>";')
 obj('products', f'isa = PBXGroup; name = Products; children = {refs(["product:FieldForge", "product:FieldForgeTests", "product:FieldForgeUITests"])}; sourceTree = "<group>";')
 obj('rootGroup', f'isa = PBXGroup; children = {refs(["appGroup", "testGroup", "products", "signingConfig"])}; sourceTree = "<group>";')
 for target, sources in [('FieldForge', app_sources), ('FieldForgeTests', unit_sources), ('FieldForgeUITests', ui_sources)]:
     obj(target + ':sources', f'isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = {refs(["build:" + p for p in sources])}; runOnlyForDeploymentPostprocessing = 0;')
     obj(target + ':frameworks', 'isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0;')
-    obj(target + ':resources', f'isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = {refs(["build:" + p for p in resources]) if target == "FieldForge" else "()"}; runOnlyForDeploymentPostprocessing = 0;')
+    obj(target + ':resources', f'isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = {refs(["build:" + p for p in (resources if target == "FieldForge" else test_resources)])}; runOnlyForDeploymentPostprocessing = 0;')
     if target != 'FieldForge':
         obj(target + ':proxy', f'isa = PBXContainerItemProxy; containerPortal = {uid("project")}; proxyType = 1; remoteGlobalIDString = {uid("FieldForge")}; remoteInfo = FieldForge;')
         obj(target + ':dependency', f'isa = PBXTargetDependency; target = {uid("FieldForge")}; targetProxy = {uid(target + ":proxy")};')

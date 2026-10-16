@@ -35,8 +35,30 @@ struct PlanViewport {
     }
 }
 
+/// Source WCS geometry is distinct from the XY display and from observation coordinates.
+struct DXFVertex: Equatable {
+    let x: Double, y: Double, z: Double
+    var xy: PlanPoint { PlanPoint(x: x, y: y) }
+}
+struct DXFPolyline {
+    let vertices: [DXFVertex] // Original order/count; closure is a display edge, not an extra source vertex.
+    let layer: String
+    let closed: Bool
+    let is3D: Bool
+}
+struct DXFLabel {
+    let position: DXFVertex
+    let text: String
+    let height: Double
+    let rotationDegrees: Double
+    let topAligned: Bool
+}
+
 struct DXFDocument {
     let paths: [[PlanPoint]]
+    let polylines: [DXFPolyline]
+    let points: [DXFVertex]
+    let labels: [DXFLabel]
     let bounds: PlanBounds
     let insertionUnits: Int?
     let warnings: [String]
@@ -57,9 +79,14 @@ struct DXFDocument {
         var pairs: [Pair] = []
         for i in stride(from: 0, to: lines.count, by: 2) {
             guard let code = Int(lines[i].trimmingCharacters(in: .whitespaces)), (0...1071).contains(code) else { throw invalid("некорректный код группы.") }
-            pairs.append(Pair(code: code, value: lines[i + 1].trimmingCharacters(in: .whitespaces)))
+            pairs.append(Pair(code: code, value: [1, 3].contains(code) ? lines[i + 1] : lines[i + 1].trimmingCharacters(in: .whitespaces)))
         }
         guard pairs.last?.code == 0, pairs.last?.value == "EOF" else { throw invalid("отсутствует EOF.") }
+        let codePage = pairs.indices.first { pairs[$0].code == 9 && pairs[$0].value == "$DWGCODEPAGE" }
+            .flatMap { $0 + 1 < pairs.count ? pairs[$0 + 1].value : nil }
+        if String(data: data, encoding: .utf8) == nil && codePage != "ANSI_1251" {
+            throw invalid("неподдерживаемая кодировка: нужен UTF-8 или объявленный ANSI_1251.")
+        }
         var section: String?, sawEntities = false, sawEOF = false
         var entities: [(String, [Pair])] = [], units: Int?
         var hiddenLayers = Set<String>()
@@ -120,29 +147,100 @@ struct DXFDocument {
                   points.allSatisfy({ $0.x.isFinite && $0.y.isFinite && abs($0.x) <= 1e12 && abs($0.y) <= 1e12 }) else { throw invalid("пустая/слишком большая геометрия.") }
             paths.append(points)
         }
+        var polylines: [DXFPolyline] = [], dots: [DXFVertex] = [], labels: [DXFLabel] = []
+        func xyz(_ f: [Pair]) throws -> DXFVertex {
+            try DXFVertex(x: number(f, 10), y: number(f, 20), z: number(f, 30, default: 0))
+        }
+        func flags(_ f: [Pair]) throws -> Int {
+            let value = try number(f, 70, default: 0)
+            guard value.rounded() == value, (0...255).contains(value) else { throw invalid("флаги объекта.") }
+            return Int(value)
+        }
+        func visible(_ f: [Pair]) throws -> Bool {
+            let layout = f.first { $0.code == 410 }?.value
+            return try number(f, 67, default: 0) == 0 && number(f, 60, default: 0) == 0
+                && !hiddenLayers.contains(f.first { $0.code == 8 }?.value ?? "0")
+                && (layout == nil || layout == "Model")
+        }
+        func widthWarning(_ fields: [Pair]) {
+            if fields.contains(where: { [39, 40, 41, 43].contains($0.code) && Double($0.value) != 0 }) {
+                notes.insert("Толщина/ширина показана осевой линией.")
+            }
+        }
         var e = 0
         while e < entities.count {
             let (kind, f) = entities[e]; e += 1
-            // Paper space and non-default OCS are never projected as if they were WCS.
-            let layerVisible = !hiddenLayers.contains(f.first(where: { $0.code == 8 })?.value ?? "0")
-            let visible = try number(f, 67, default: 0) == 0 && number(f, 60, default: 0) == 0 && layerVisible
-            let layout = f.first { $0.code == 410 }?.value
-            let inModel = layout == nil || layout == "Model"
             if kind == "POLYLINE" {
                 var vertices: [[Pair]] = []
                 while e < entities.count && entities[e].0 == "VERTEX" { vertices.append(entities[e].1); e += 1 }
                 guard e < entities.count, entities[e].0 == "SEQEND" else { throw invalid("POLYLINE без SEQEND.") }; e += 1
-                let flags = try number(f, 70, default: 0)
-                guard flags.rounded() == flags, flags >= 0, flags <= 255 else { throw invalid("флаги POLYLINE.") }
-                let unsupported = try vertices.contains { try number($0, 42, default: 0) != 0 || number($0, 30, default: 0) != 0 }
-                guard visible, inModel, try planar(f), Int(flags) & ~1 == 0, !unsupported else { skip("POLYLINE (3D/OCS/bulge/flags/visibility)"); continue }
-                var points = try vertices.map { try point($0) }
-                if Int(flags) & 1 != 0, let first = points.first { points.append(first) }
-                try append(points)
+                let bits = try flags(f), is3D = bits & 8 != 0
+                // 3D vertices are WCS. Default extrusion is the deliberately bounded supported subset.
+                guard try visible(f), try planar(f), bits & ~137 == 0 else {
+                    skip("POLYLINE (mesh/fit/OCS/flags/visibility)"); continue
+                }
+                let unsupported = try vertices.contains { v in
+                    let bits = try flags(v)
+                    return try bits != (is3D ? 32 : 0) || number(v, 42, default: 0) != 0
+                        || !planar(v) || !visible(v) || (!is3D && number(v, 30, default: 0) != 0)
+                }
+                guard !unsupported else { skip("POLYLINE (VERTEX flags/bulge/OCS/visibility)"); continue }
+                let sourceVertices = try vertices.map { try xyz($0) }
+                var projected = sourceVertices.map(\.xy)
+                if bits & 1 != 0, let first = projected.first { projected.append(first) }
+                try append(projected)
+                polylines.append(DXFPolyline(vertices: sourceVertices,
+                    layer: f.first { $0.code == 8 }?.value ?? "0", closed: bits & 1 != 0, is3D: is3D))
+                if is3D { notes.insert("3D POLYLINE показаны в проекции WCS X/Y. Исходный Z сохранён; Z наблюдения задаётся отдельно.") }
+                widthWarning(f); for v in vertices { widthWarning(v) }
                 continue
             }
-            guard ["LINE", "LWPOLYLINE", "ARC", "CIRCLE"].contains(kind) else { skip(kind); continue }
-            guard visible, inModel, try planar(f) else { skip("\(kind) (OCS/visibility)"); continue }
+            guard ["LINE", "LWPOLYLINE", "ARC", "CIRCLE", "POINT", "TEXT", "MTEXT"].contains(kind) else { skip(kind); continue }
+            guard try visible(f), try planar(f) else { skip("\(kind) (OCS/visibility)"); continue }
+            if kind == "POINT" {
+                dots.append(try xyz(f)); totalVertices += 1
+                guard totalVertices <= 200_000 else { throw invalid("слишком много точек.") }
+                notes.insert("POINT: условная точка постоянного размера; PDMODE/PDSIZE и толщина не воспроизводятся.")
+                continue
+            }
+            if kind == "TEXT" || kind == "MTEXT" {
+                let position = try xyz(f), height = try number(f, 40)
+                guard height > 0 else { throw invalid("высота текста должна быть положительной.") }
+                guard f.filter({ $0.code == 1 }).count == 1 else { throw invalid("некорректная строка текста.") }
+                let raw = f.filter { $0.code == 1 || (kind == "MTEXT" && $0.code == 3) }.map(\.value).joined()
+                guard let content = DXFAnnotationText.decode(raw, multiline: kind == "MTEXT"), !content.isEmpty else {
+                    skip("\(kind) (formatting/empty text)"); continue
+                }
+                var rotation = 0.0
+                if kind == "TEXT" {
+                    guard try number(f, 71, default: 0) == 0, try number(f, 72, default: 0) == 0,
+                          try number(f, 73, default: 0) == 0, try number(f, 41, default: 1) == 1,
+                          try number(f, 51, default: 0) == 0 else {
+                        skip("TEXT (alignment/mirror/width/oblique)"); continue
+                    }
+                    rotation = try number(f, 50, default: 0)
+                } else {
+                    guard try number(f, 71, default: 1) == 1,
+                          [1, 5].contains(try number(f, 72, default: 1)),
+                          try number(f, 75, default: 0) == 0 else {
+                        skip("MTEXT (attachment/direction/columns)"); continue
+                    }
+                    rotation = try number(f, 50, default: 0) * 180 / .pi // MTEXT radians; TEXT degrees.
+                    if let direction = f.lastIndex(where: { $0.code == 11 }),
+                       direction > (f.lastIndex(where: { $0.code == 50 }) ?? -1) {
+                        let x = try number(f, 11), y = try number(f, 21, default: 0)
+                        guard try number(f, 31, default: 0) == 0, hypot(x, y) > 0 else {
+                            skip("MTEXT (3D/zero direction)"); continue
+                        }
+                        rotation = atan2(y, x) * 180 / .pi
+                    }
+                }
+                guard labels.count < 10_000 else { throw invalid("слишком много надписей.") }
+                labels.append(DXFLabel(position: position, text: content, height: height,
+                    rotationDegrees: rotation, topAligned: kind == "MTEXT"))
+                notes.insert("TEXT/MTEXT: визуальные подписи, не измерения. Шрифт/базовая линия, перенос по ширине, интервалы и фон CAD не воспроизводятся; размер на экране ограничен 6…96 pt.")
+                continue
+            }
             switch kind {
             case "LINE":
                 guard try number(f, 30, default: 0) == number(f, 31, default: 0) else { skip("LINE (3D)"); continue }
@@ -181,12 +279,48 @@ struct DXFDocument {
                 notes.insert("Толщина/ширина показана осевой линией.")
             }
         }
-        guard let first = paths.first?.first else { throw invalid("нет поддерживаемой 2D-геометрии. BLOCK/INSERT не разворачиваются.") }
+        let anchors = paths.flatMap { $0 } + dots.map(\.xy) + labels.map { $0.position.xy }
+        guard let first = anchors.first else { throw invalid("нет поддерживаемой геометрии/подписей. BLOCK/INSERT не разворачиваются.") }
         var minX = first.x, maxX = first.x, minY = first.y, maxY = first.y
-        for path in paths { for p in path { minX = min(minX, p.x); maxX = max(maxX, p.x); minY = min(minY, p.y); maxY = max(maxY, p.y) } }
+        for p in anchors { minX = min(minX, p.x); maxX = max(maxX, p.x); minY = min(minY, p.y); maxY = max(maxY, p.y) }
         notes.insert("Упрощённый 2D: стили, цвета и привязки не воспроизводятся; скрытые/замороженные слои пропущены. Проверьте исходный план.")
         for key in skipped.keys.sorted() { notes.insert("Пропущено \(key): \(skipped[key]!).") }
-        return DXFDocument(paths: paths, bounds: PlanBounds(minX: minX, minY: minY, maxX: maxX, maxY: maxY),
+        return DXFDocument(paths: paths, polylines: polylines, points: dots, labels: labels, bounds: PlanBounds(minX: minX, minY: minY, maxX: maxX, maxY: maxY),
                            insertionUnits: units, warnings: notes.sorted())
+    }
+}
+
+/// Deliberate plain annotation subset. Unsupported formatting is skipped with a warning,
+/// never silently rendered as if CAD layout/field evaluation were implemented.
+enum DXFAnnotationText {
+    static func decode(_ raw: String, multiline: Bool) -> String? {
+        var input = raw.replacingOccurrences(of: "%%d", with: "°", options: .caseInsensitive)
+            .replacingOccurrences(of: "%%p", with: "±", options: .caseInsensitive)
+            .replacingOccurrences(of: "%%c", with: "⌀", options: .caseInsensitive)
+        guard !input.contains("%%"), !input.contains("%<") else { return nil }
+        var output = ""
+        while !input.isEmpty {
+            let c = input.removeFirst()
+            if c != "\\" {
+                guard c != "{", c != "}" else { return nil }
+                output.append(c); continue
+            }
+            guard !input.isEmpty else { return nil }
+            switch input.removeFirst() {
+            case "P" where multiline: output.append("\n")
+            case "~" where multiline: output.append("\u{00A0}")
+            case "\\": output.append("\\")
+            case "{" where multiline: output.append("{")
+            case "}" where multiline: output.append("}")
+            case "U":
+                guard input.first == "+" else { return nil }; input.removeFirst()
+                guard input.count >= 4 else { return nil }
+                let hex = String(input.prefix(4))
+                guard let value = UInt32(hex, radix: 16), let scalar = UnicodeScalar(value) else { return nil }
+                output.unicodeScalars.append(scalar); input.removeFirst(4)
+            default: return nil
+            }
+        }
+        return output
     }
 }

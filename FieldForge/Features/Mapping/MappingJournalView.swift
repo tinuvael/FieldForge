@@ -2,41 +2,111 @@ import SwiftUI
 
 struct MappingJournalView: View {
     @EnvironmentObject private var mapping: MappingModel
-    @State private var byPicket = false
+    @State private var query = MappingJournalQuery()
+    @State private var scope: JournalScope?
+    @State private var datesEnabled = false
+    @State private var fromDate = Date()
+    @State private var throughDate = Date()
+    private var projectID: UUID? { mapping.workflow?.context.projectID }
     private var observations: [MappingObservation] {
-        (mapping.workflow?.observations ?? []).sorted {
-            if byPicket, $0.chainageMeters != $1.chainageMeters { return $0.chainageMeters < $1.chainageMeters }
-            if $0.observedAt != $1.observedAt { return $0.observedAt > $1.observedAt }
-            return $0.id.uuidString < $1.id.uuidString
+        var effective = query
+        effective.startDate = datesEnabled ? fromDate : nil
+        effective.endDate = datesEnabled ? throughDate : nil
+        return effective.apply(mapping.workflow?.journal.observations ?? [], projectID: projectID)
+    }
+    private var horizons: [MappingHorizon] { mapping.workflow?.horizons ?? [] }
+    private var excavations: [MappingExcavation] {
+        (mapping.workflow?.journal.excavations ?? []).filter {
+            $0.projectID == projectID && (query.horizonID == nil || $0.horizonIDs.contains(query.horizonID!))
         }
     }
     var body: some View {
         List {
             Section {
-                Text(mapping.workflow?.journal.projects.first { $0.id == mapping.workflow?.context.projectID }?.name ?? "Выберите проект в картировании")
+                Text(mapping.workflow?.journal.projects.first { $0.id == projectID }?.name ?? "Выберите проект в картировании")
                     .font(.headline)
-                Picker("Сортировка", selection: $byPicket) {
-                    Text("По дате").tag(false); Text("По пикету").tag(true)
-                }.pickerStyle(.segmented)
+                Button { scope = .horizon } label: {
+                    LabeledContent("Горизонт", value: horizons.first { $0.id == query.horizonID }?.displayName ?? "Все горизонты")
+                }.accessibilityIdentifier("journalHorizonFilter")
+                Button { scope = .excavation } label: {
+                    LabeledContent("Выработка", value: excavations.first { $0.id == query.excavationID }?.name ?? "Все выработки")
+                }.accessibilityIdentifier("journalExcavationFilter")
+                Toggle("Период наблюдений", isOn: $datesEnabled).accessibilityIdentifier("journalDateFilter")
+                if datesEnabled {
+                    DatePicker("С", selection: $fromDate, displayedComponents: .date)
+                        .onChange(of: fromDate) { _, value in if throughDate < value { throughDate = value } }
+                    DatePicker("По включительно", selection: $throughDate, in: fromDate..., displayedComponents: .date)
+                    Text("Даты: \(TimeZone.current.identifier)").font(.caption)
+                }
+                DisclosureGroup("Сортировка") {
+                    Picker("Порядок", selection: $query.byPicket) {
+                        Text("По дате").tag(false); Text("По пикету").tag(true)
+                    }.pickerStyle(.segmented).accessibilityIdentifier("journalSort")
+                }
+                Button("Сбросить фильтры") {
+                    let sort = query.byPicket; query = MappingJournalQuery(); query.byPicket = sort; datesEnabled = false
+                }.accessibilityIdentifier("journalClearFilters")
             }
-            if observations.isEmpty { Text("В выбранном проекте нет наблюдений") }
-            ForEach(observations) { record in
-                NavigationLink { MappingObservationDetail(record: record) } label: {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(record.picket).font(.headline)
-                        Text(MappingDateText.format(record)).font(.subheadline)
-                        Text("\(name(horizon: record.horizonID)) · \(name(excavation: record.excavationID))").font(.caption)
-                    }.padding(.vertical, 4)
+            Section("Наблюдения: \(observations.count) из \(mapping.workflow?.observations.count ?? 0)") {
+                if observations.isEmpty { Text("Нет наблюдений по выбранным условиям").accessibilityIdentifier("journalEmpty") }
+                ForEach(observations) { record in
+                    NavigationLink { MappingObservationDetail(record: record) } label: {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(record.picket).font(.headline)
+                            Text(MappingDateText.format(record)).font(.subheadline)
+                            Text("\(name(horizon: record.horizonID)) · \(name(excavation: record.excavationID))").font(.caption)
+                        }.padding(.vertical, 4)
+                    }.accessibilityIdentifier("journalRecord-\(record.id.uuidString)")
                 }
             }
             Section("Независимые измерения") {
                 NavigationLink("Неназначенный журнал Phase 1/2", destination: JournalView())
-                Text("Исторические измерения не назначаются проекту автоматически.").font(.caption)
             }
         }.navigationTitle("Журнал проекта")
+            .searchable(text: $query.picket, placement: .navigationBarDrawer(displayMode: .always), prompt: "Пикет или метры")
+            .onChange(of: query.horizonID) { _, _ in query.excavationID = nil }
+            .onChange(of: projectID) { _, _ in query = MappingJournalQuery(); datesEnabled = false }
+            .sheet(item: $scope) { scope in
+                switch scope {
+                case .horizon:
+                    JournalScopeSelection(title: "Горизонт", all: "Все горизонты",
+                        items: horizons.map { ($0.id, $0.displayName) }, selection: $query.horizonID)
+                case .excavation:
+                    JournalScopeSelection(title: "Выработка", all: "Все выработки",
+                        items: excavations.map { ($0.id, $0.name) }, selection: $query.excavationID)
+                }
+            }
     }
     private func name(horizon: UUID) -> String { mapping.workflow?.journal.horizons.first { $0.id == horizon }?.displayName ?? horizon.uuidString }
     private func name(excavation: UUID) -> String { mapping.workflow?.journal.excavations.first { $0.id == excavation }?.name ?? excavation.uuidString }
+}
+
+private enum JournalScope: String, Identifiable {
+    case horizon, excavation
+    var id: String { rawValue }
+}
+
+/// A searchable list avoids an unbounded flat menu for hundreds of excavations.
+private struct JournalScopeSelection: View {
+    let title: String
+    let all: String
+    let items: [(UUID, String)]
+    @Binding var selection: UUID?
+    @State private var search = ""
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        NavigationStack {
+            List {
+                Button(all) { selection = nil; dismiss() }
+                ForEach(items.filter { search.isEmpty || $0.1.localizedCaseInsensitiveContains(search) }, id: \.0) { item in
+                    Button { selection = item.0; dismiss() } label: {
+                        HStack { Text(item.1); Spacer(); if selection == item.0 { Image(systemName: "checkmark") } }
+                    }
+                }
+            }.navigationTitle(title).searchable(text: $search, prompt: "Поиск")
+                .toolbar { Button("Закрыть") { dismiss() } }
+        }
+    }
 }
 
 enum MappingDateText {
@@ -63,12 +133,12 @@ struct MappingObservationDetail: View {
                 LabeledContent("Дата наблюдения", value: MappingDateText.format(record))
                 Text(record.observedTimeZoneID)
             }
-            Section("Координаты") {
+            Section(record.coordinates.map { MappingCoordinateText.header(xyUnits: $0.units) } ?? "Координаты") {
                 if let c = record.coordinates {
-                    let xyUnit = c.units == "drawing" ? "ед. чертежа" : c.units == "mm" ? "мм" : "м"
-                    LabeledContent("X, \(xyUnit)", value: c.x.map { CSVExporter.number($0) } ?? "Неизвестно")
-                    LabeledContent("Y, \(xyUnit)", value: c.y.map { CSVExporter.number($0) } ?? "Неизвестно")
-                    LabeledContent("Z, м", value: c.z.map { CSVExporter.number($0) } ?? "Неизвестно")
+                    let xyUnit = MappingCoordinateText.xyUnit(c.units)
+                    LabeledContent(c.units == "m" ? "X" : "X, \(xyUnit)", value: c.x.map { CSVExporter.number($0) } ?? "Неизвестно")
+                    LabeledContent(c.units == "m" ? "Y" : "Y, \(xyUnit)", value: c.y.map { CSVExporter.number($0) } ?? "Неизвестно")
+                    LabeledContent(c.units == "m" ? "Z" : "Z, м", value: c.z.map { CSVExporter.number($0) } ?? "Неизвестно")
                     LabeledContent("СК", value: c.crs); LabeledContent("Оси / высоты", value: c.axes)
                     Text(c.provenance)
                     LabeledContent("Источник Z", value: c.zOrigin == .horizonDefault ? "По горизонту · не съёмка" : c.zOrigin == .manualOverride ? "Ручное значение" : "Не указан в исходной записи")

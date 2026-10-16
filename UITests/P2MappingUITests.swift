@@ -8,7 +8,10 @@ final class P2MappingUITests: XCTestCase {
         // Simulator-only import input; normal setup, managed-file import and commit run unchanged.
         // The system Files picker is exercised separately below, without publishing Documents.
         app.launchEnvironment["P2_PLAN_A"] = dxf("0\nLINE\n10\n100\n20\n200\n11\n300\n21\n400\n")
-        app.launchEnvironment["P2_PLAN_B"] = dxf("0\nCIRCLE\n10\n100\n20\n200\n40\n20\n")
+        app.launchEnvironment["P2_PLAN_B"] = dxf("0\nCIRCLE\n10\n100\n20\n200\n40\n20\n"
+            + "0\nPOINT\n10\n100\n20\n200\n30\n500\n"
+            + "0\nTEXT\n10\n105\n20\n205\n40\n2\n50\n30\n1\nПК 0+100\n"
+            + "0\nMTEXT\n10\n90\n20\n190\n40\n3\n1\nПервая\\PВторая\n")
         app.launch()
         let project = "P2-\(UUID().uuidString.prefix(8))"
         create("projectPicker", value: project, app: app); select("projectPicker", value: project, app: app)
@@ -67,6 +70,8 @@ final class P2MappingUITests: XCTestCase {
         app.staticTexts["P2_PLAN_B.dxf"].tap()
         XCTAssertTrue(app.buttons["planPoints"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["planPoints"].label.contains("0"))
+        XCTAssertTrue((canvas.value as? String ?? "").contains("POINT: 1; подписи: 2"))
+        screenshot("P2 POINT TEXT MTEXT display", app: app)
         app.navigationBars["P2_PLAN_B.dxf"].buttons.element(boundBy: 0).tap()
         app.staticTexts["P2_PLAN_A.dxf"].tap()
         // Propose on empty space, then deliberately enter overlapping XY in that drawing frame.
@@ -90,6 +95,83 @@ final class P2MappingUITests: XCTestCase {
         openPlans(app)
         XCTAssertTrue(app.staticTexts["P2_PLAN_A.dxf"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["P2_PLAN_B.dxf"].exists)
+    }
+    @MainActor func testOriginalHorizon200ImportProjectionPickingAndMarker() throws {
+        try verifyOriginal(level: 200, centerX: 4828.989245694731, centerY: 10204.5, polylines: 13, vertices: 627)
+    }
+    @MainActor func testOriginalHorizon300ImportProjectionPickingAndMarker() throws {
+        try verifyOriginal(level: 300, centerX: 4828.999038089427, centerY: 10064.5, polylines: 13, vertices: 627)
+    }
+    @MainActor func testOriginalHorizon400ImportProjectionPickingAndMarker() throws {
+        try verifyOriginal(level: 400, centerX: 4918.987672812805, centerY: 9960, polylines: 4, vertices: 294)
+    }
+    @MainActor private func verifyOriginal(level: Int, centerX: Double, centerY: Double, polylines: Int, vertices: Int) throws {
+        let root = try XCTUnwrap(Bundle(for: P2MappingUITests.self).url(forResource: "Fixtures", withExtension: nil))
+        let data = try Data(contentsOf: root.appendingPathComponent("DXFReal/horizon_\(level)_3d.dxf"))
+        let app = XCUIApplication()
+        app.launchEnvironment["FIELD_FORGE_TEST_RUN_ID"] = UUID().uuidString
+        app.launchArguments = ["--ui-testing"]
+        app.launchEnvironment["P2_PLAN_A"] = try XCTUnwrap(String(data: data, encoding: .utf8))
+        app.launch()
+        let project = "Original-\(level)-\(UUID().uuidString.prefix(6))"
+        create("projectPicker", value: project, app: app); select("projectPicker", value: project, app: app)
+        create("horizonPicker", value: "\(level)", app: app); select("horizonPicker", value: "+\(level) м", app: app)
+        create("excavationPicker", value: "Штрек \(level)", app: app); select("excavationPicker", value: "Штрек \(level)", app: app)
+        enter("mappingPicket", value: "ПК 0+005", app: app)
+        reveal(app.textFields["mappingZ"], app: app)
+        XCTAssertEqual(app.textFields["mappingZ"].value as? String, "\(level)")
+        enter("mappingZ", value: "-12.125", app: app, replacing: true)
+        openPlans(app); importFixture("P2_PLAN_A", version: "original-\(level)", app: app)
+        app.staticTexts["P2_PLAN_A.dxf"].tap()
+        let canvas = app.otherElements["planCanvas"]
+        XCTAssertTrue(canvas.waitForExistence(timeout: 10))
+        XCTAssertTrue((canvas.value as? String ?? "").contains("Полилинии: \(polylines); вершины: \(vertices)"))
+        screenshot("Original \(level) fitted XY projection", app: app)
+        app.buttons["planZoomIn"].tap()
+        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(forDuration: 0.1,
+            thenDragTo: canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.6)))
+        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.6)).tap()
+        XCTAssertTrue(app.buttons["confirmPlanXY"].waitForExistence(timeout: 5))
+        screenshot("Original \(level) XY projection proposed", app: app)
+        app.buttons["confirmPlanXY"].tap()
+        XCTAssertTrue(app.buttons["selectHorizonPlan"].waitForExistence(timeout: 5))
+        XCTAssertEqual(Double(app.textFields["mappingX"].value as? String ?? "") ?? .nan, centerX, accuracy: 2)
+        XCTAssertEqual(Double(app.textFields["mappingY"].value as? String ?? "") ?? .nan, centerY, accuracy: 2)
+        XCTAssertEqual(app.textFields["mappingZ"].value as? String, "-12.125")
+        reveal(app.textFields["mappingPicket"], app: app, down: true)
+        XCTAssertEqual(app.textFields["mappingPicket"].value as? String, "ПК 0+005")
+        save(app)
+        reveal(app.textFields["mappingZ"], app: app, down: true)
+        XCTAssertEqual(app.textFields["mappingZ"].value as? String, "\(level)")
+        openPlans(app); app.staticTexts["P2_PLAN_A.dxf"].tap()
+        XCTAssertTrue(canvas.waitForExistence(timeout: 10))
+        XCTAssertTrue((canvas.value as? String ?? "").contains("маркеры в окне: 1"))
+        screenshot("Original \(level) saved blue marker", app: app)
+        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(app.staticTexts["ПК 0+005"].waitForExistence(timeout: 5))
+        app.staticTexts["ПК 0+005"].tap()
+        XCTAssertTrue(app.staticTexts["Исходное наблюдение · только просмотр"].waitForExistence(timeout: 5))
+        app.buttons["Закрыть"].tap()
+        app.terminate(); app.launch()
+        openPlans(app)
+        XCTAssertTrue(app.staticTexts["P2_PLAN_A.dxf"].waitForExistence(timeout: 5))
+        // Journal filters are separate from sorting, searchable and resettable.
+        app.buttons["Вернуться"].tap()
+        app.buttons["mappingJournal"].tap()
+        XCTAssertTrue(app.buttons["journalHorizonFilter"].waitForExistence(timeout: 5))
+        app.buttons["journalHorizonFilter"].tap()
+        XCTAssertTrue(app.searchFields.firstMatch.waitForExistence(timeout: 5))
+        app.searchFields.firstMatch.tap(); app.searchFields.firstMatch.typeText("\(level)")
+        app.buttons["+\(level) м"].tap()
+        app.buttons["journalExcavationFilter"].tap()
+        app.searchFields.firstMatch.tap(); app.searchFields.firstMatch.typeText("\(level)")
+        app.buttons["Штрек \(level)"].tap()
+        app.searchFields.firstMatch.tap(); app.searchFields.firstMatch.typeText("no-match")
+        XCTAssertTrue(app.staticTexts["journalEmpty"].waitForExistence(timeout: 5))
+        let cancel = app.buttons.matching(NSPredicate(format: "label IN %@", ["Cancel", "Отмена", "Отменить"])).firstMatch
+        if cancel.exists { cancel.tap() }
+        app.buttons["journalClearFilters"].tap()
+        XCTAssertTrue(app.staticTexts["ПК 0+005"].waitForExistence(timeout: 5))
     }
     private func dxf(_ entities: String) -> String {
         "0\nSECTION\n2\nHEADER\n9\n$INSUNITS\n70\n6\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n\(entities)0\nENDSEC\n0\nEOF\n"
