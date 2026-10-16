@@ -1,5 +1,7 @@
 # Coordinate systems and orientation conventions
 
+**P2 update:** [P2 mapping and DXF contract](p2-dxf.md) supersedes historical P1 statements about optional horizon elevations, mandatory per-point coordinate strings, absent plans and schema 1. P2 adds nominal Z provenance and immutable managed DXF revisions on the same graph; orientation/measurement conventions are unchanged.
+
 This document defines technical conventions for the three modules in the authoritative [product vision](product-vision.md). Plans/locations and wedge analysis below are future work; the implemented Phase 1/2 orientation conventions remain unchanged and will be shared by iPhone and native iPad.
 
 ## Orientation observations

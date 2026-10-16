@@ -1,5 +1,7 @@
 # P1 mapping workflow and persistence
 
+**P2 update:** [P2 mapping and DXF contract](p2-dxf.md) supersedes historical P1 statements about optional horizon elevations, mandatory per-point coordinate strings, absent plans and schema 1. P2 adds nominal Z provenance and immutable managed DXF revisions on the same graph; orientation/measurement conventions are unchanged.
+
 ## Implemented workflow
 
 The app opens on **Картирование**. Its fixed context panel is Project → Horizon → Excavation; only the draft below it scrolls. Management buttons create/rename projects, create/edit horizons (optional elevation and explicit datum), and create/rename excavations with one or more horizon UUIDs. Creation does not implicitly select an item or bypass draft protection. Projects have independent horizons, excavation identities and observations. The selected context is persisted in the same commit stream as the journal.

@@ -2,9 +2,9 @@ import XCTest
 
 final class MappingUITests: XCTestCase {
     @MainActor func testSuccessiveObservationsContextGuardJournalAndRelaunch() throws {
-        let app = XCUIApplication(); app.launchArguments = ["--ui-testing"]; app.launch()
+        let app = XCUIApplication(); app.launchEnvironment["FIELD_FORGE_TEST_RUN_ID"] = UUID().uuidString; app.launchArguments = ["--ui-testing"]; app.launch()
         let suffix = String(UUID().uuidString.prefix(8))
-        let project = "Рудник-\(suffix)", horizon = "Горизонт-\(suffix)", excavation = "Штрек-\(suffix)"
+        let project = "Рудник-\(suffix)", horizon = "+393 м", excavation = "Штрек-\(suffix)"
         create("projectPicker", name: project, app: app)
         select("projectPicker", value: project, app: app)
         create("horizonPicker", name: horizon, app: app)
@@ -63,9 +63,11 @@ final class MappingUITests: XCTestCase {
     }
     @MainActor private func create(_ picker: String, name: String, app: XCUIApplication) {
         let button = app.buttons["manage-\(picker)"]; XCTAssertTrue(button.waitForExistence(timeout: 10)); button.tap()
-        let field = app.textFields["contextName"]; XCTAssertTrue(field.waitForExistence(timeout: 5)); field.tap(); field.typeText(name)
+        let field = app.textFields[picker == "horizonPicker" ? "contextElevation" : "contextName"]; XCTAssertTrue(field.waitForExistence(timeout: 5)); field.tap(); field.typeText(picker == "horizonPicker" ? "393" : name)
+        dismissKeyboard(app)
         app.buttons["saveContext"].tap()
-        XCTAssertTrue(button.waitForExistence(timeout: 5))
+        let dismissed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isHittable == true"), object: button)
+        XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 5), .completed)
     }
     @MainActor private func select(_ picker: String, value: String, app: XCUIApplication) {
         app.buttons[picker].tap(); app.buttons[value].tap()

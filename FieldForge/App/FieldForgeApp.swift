@@ -15,7 +15,7 @@ struct RootView: View {
     var body: some View {
         TabView(selection: $selectedTab) {
             MappingView().tabItem { Label("Картирование", systemImage: "square.and.pencil") }.tag(0)
-            ContentUnavailableView("План", systemImage: "map", description: Text("Выбор и просмотр DXF запланированы. Координаты вводятся вручную в картировании."))
+            NavigationStack { HorizonPlansView() }
                 .tabItem { Label("План", systemImage: "map") }.tag(1)
             ContentUnavailableView("Клинья", systemImage: "triangle", description: Text("Анализ будет доступен после проверки методики и инженерных тестов."))
                 .tabItem { Label("Клинья", systemImage: "triangle") }.tag(2)

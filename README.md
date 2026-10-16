@@ -6,19 +6,20 @@ Native, offline iOS application for geological field observations. Swift/SwiftUI
 
 ## Product direction (future capabilities)
 
-The [product vision](docs/product-vision.md) defines FieldForge as a professional offline field instrument with exactly three primary modules sharing one project database: **Geomechanical Mapping**, **Excavation Plans & Spatial Positioning**, and **Wedge Analysis**. Target navigation is «Картирование / План / Клинья»; project selection and settings are secondary. P1 implements the mapping foundation described below; the plan and wedge tabs are explicit placeholders.
+The [product vision](docs/product-vision.md) defines FieldForge as a professional offline field instrument with exactly three primary modules sharing one project database: **Geomechanical Mapping**, **Excavation Plans & Spatial Positioning**, and **Wedge Analysis**. Target navigation is «Картирование / План / Клинья»; project selection and settings are secondary. P2 implements mapping, numeric horizons and offline horizon DXF plans; the wedge tab remains an explicit placeholder.
 
 Prepared PDF/raster plans and DXF-derived survey geometry will support manual positioning with explicit surveyed/plan-derived/manual/approximate/unknown provenance; underground GPS or automatic phone location is not assumed. Wedge geometry and mechanical assessment are separate: mechanical calculations await owner-provided formulas, verified references and engineering tests. Geometry alone cannot establish stability or a finite wedge volume.
 
-Future native iPad support shares models, storage and engineering services with iPhone through adaptive SwiftUI layouts. Full CAD/GIS/geological modeling, numerical simulation and DWG editing are outside scope; STL/OBJ support is optional. No plan, wedge or iPad feature is implemented by this documentation alignment.
+Future native iPad support shares models, storage and engineering services with iPhone through adaptive SwiftUI layouts. Full CAD/GIS/geological modeling, numerical simulation and DWG editing are outside scope; STL/OBJ support is optional. Native iPad layouts, wedge analysis and raster/PDF georeferencing remain future work.
 
 Photo documentation is a core **future** Mapping/Plan workflow: named observation points, multiple camera/imported photos, explicit location provenance, offline originals/thumbnails and workstation ZIP packages with a photograph register and manifest. It also works without georeferenced plans or coordinates. No photo capture, database or XLSX functionality is implemented yet; see the [product vision](docs/product-vision.md).
 
 ## Working features
 
-- Main tabs «Картирование / План / Клинья»; mapping has a fixed project/horizon/excavation context panel, project journal and secondary measurement/settings navigation. Plan and wedge functionality is visibly unavailable.
-- Create/rename projects, create/edit horizons with optional elevation metadata, and manage one excavation across multiple horizons. Context persists between sessions.
-- Save consecutive individual picket observations with numeric meters, original field date/timezone, optional manual X/Y/Z with explicit provenance and notes. Success clears the draft and retains context; failed validation/storage and cancelled context switching preserve it.
+- Main tabs «Картирование / План / Клинья»; mapping has a fixed project/horizon/excavation context panel, project journal and secondary measurement/settings navigation. The Plan tab opens imported horizon plans; wedge analysis remains unavailable.
+- Create/rename projects, create/edit numeric signed/decimal horizon elevations (preserving legacy names/UUIDs), and manage one excavation across multiple horizons. Context persists between sessions.
+- Save consecutive individual picket observations with numeric meters, original field date/timezone, optional X/Y/Z and notes. The compact form automatically records unknown/manual or selected-plan provenance. Horizon elevation suggests nominal Z; manual override/clear is preserved. Success resets per-point data and suggests horizon Z again; failures retain the draft.
+- Offline multi-DXF import from Files per horizon, original files with SHA-256, explicit unit/CRS setup, recoverable pending imports, pan/zoom and confirmed XY picking. LINE, straight 2D LWPOLYLINE/POLYLINE, ARC and CIRCLE display; unsupported entities including BLOCK/INSERT are reported. Saved source-plan markers open the same original journal records, with excavation filtering and overlapping-point selection. See [P2 workflow, DXF subset and data safety](docs/p2-dxf.md).
 - Project-filtered journal with date/picket sorting and read-only original observations. Full relationships are validated in atomic versioned JSON commits with a previous-snapshot backup. See [P1 workflow/storage](docs/p1-mapping.md).
 - Automatic screen-plane measurements using Core Motion: dip angle, nullable dip direction, magnetic/motion diagnostics and quality checks; HOLD freezes a complete observation, SAVE stores it once.
 - Manual geological-compass entry: dip angle 0–90°, dip direction 0–360°, magnetic/true/grid/unknown north and optional notes. Decimal comma/dot is accepted, validation is shown before saving, and 360° is stored as 0° with original input retained.
@@ -52,7 +53,7 @@ The active journal stays at Application Support/FieldForge/`measurements-v1.json
 
 CSV uses UTF-8 BOM, comma separators, CRLF records, UTC ISO 8601 timestamps, round-trip numeric precision and empty cells for missing data. The first 24 Phase 1 column names/order are retained; four provenance/original-input columns are appended. Manual diagnostic cells are blank. Spreadsheet-formula-like text is protected. Consumers must accept additional columns/new enums and full-precision numeric formatting. Use Excel's UTF-8/comma/decimal-dot import when regional detection differs. Excel numeric precision may still reduce values; CSV is not a complete JSON/attachment backup.
 
-The project graph uses `mapping-v1.json` (schema 1), isolated from the protected standalone measurement journal. It is atomically rewritten as one validated aggregate; `mapping-v1.json.previous` retains the prior snapshot. No legacy assignment/migration is guessed. SQLite remains the next storage step before large plan/attachment workloads; see the [P1 storage decision](docs/p1-mapping.md).
+The project graph uses `mapping-v1.json` (schema 2, lossless P1 migration with immutable `.p1-backup`), isolated from the protected standalone measurement journal. It is atomically rewritten as one validated aggregate; `mapping-v1.json.previous` retains the prior snapshot. No legacy assignment/migration is guessed. Managed original DXF files and pending import manifests live beside it under `plans/`; a JSON-only copy is not a complete backup. SQLite remains a future storage step for large workloads; see the [P2 storage/recovery contract](docs/p2-dxf.md).
 
 ## Development
 
@@ -70,7 +71,7 @@ xcodebuild -project FieldForge.xcodeproj -scheme FieldForge \
   -derivedDataPath /tmp/FieldForge-DerivedData CODE_SIGNING_ALLOWED=NO test
 ```
 
-Set `DEVELOPER_DIR` to a supported Xcode installation when necessary. Project generation uses Python 3 only and is deterministic. Machine-local signing overrides belong in ignored `Config/LocalSigning.xcconfig` (`DEVELOPMENT_TEAM = your Team`), optionally included by `Config/Signing.xcconfig`; they survive regeneration. Identifier and deployment settings remain unchanged. Core sources run independently via Swift Package Manager; UI and Core Motion require Apple SDKs. Debug UI tests use `ui-testing.json` and `ui-testing-mapping.json`, never the deployed journals.
+Set `DEVELOPER_DIR` to a supported Xcode installation when necessary. Project generation uses Python 3 only and is deterministic. Machine-local signing overrides belong in ignored `Config/LocalSigning.xcconfig` (`DEVELOPMENT_TEAM = your Team`), optionally included by `Config/Signing.xcconfig`; they survive regeneration. Identifier and deployment settings remain unchanged. Core tests run via Swift Package Manager on macOS; managed-plan integrity uses system CryptoKit, while UI and Core Motion use Apple SDKs. Linux plan-store builds are not qualified. Debug UI tests use separate journals and UUID-scoped mapping/plan stores, never physical-device journals.
 
 ```text
 FieldForge/App/                  composition, lifecycle, automatic session and manual draft
@@ -80,15 +81,16 @@ FieldForge/Data/Models/          project graph, mapping draft, observation prove
 FieldForge/Data/Storage/         versioned JSON, migration, backup and integrity protection
 FieldForge/Features/             Russian SwiftUI mapping/context, measurement, journals and settings
 FieldForge/Services/Export/      CSV and temporary export file
+FieldForge/Services/Plans/       bounded DXF adapter, viewport and managed original-file integrity
 Tests/                          mapping/reset/context/integrity, geometry, observations, migration and CSV XCTest
 UITests/                        mapping acceptance and automatic/manual save/relaunch/export workflows
 scripts/generate_project.py     deterministic checked-in Xcode project
 ```
 
-Current P1 verification: see [executed tests and limitations](docs/p1-verification.md). Earlier Phase 1/2 verification reports are historical. Physical measurement accuracy and device upgrade behavior still require owner validation.
+Current P2 verification: see [executed tests and limitations](docs/p2-verification.md). Earlier Phase 1/2 verification reports are historical. Physical measurement accuracy and device upgrade behavior still require owner validation.
 
 ## Architecture and next steps
 
 See the authoritative [product vision](docs/product-vision.md), [development rules](AGENTS.md), [architecture and persistence decision](docs/architecture.md), [future shared domain schema](docs/data-model.md), [coordinates](docs/coordinate-systems.md), [export and prepared-plan boundaries](docs/import-export.md), and [roadmap](docs/roadmap.md).
 
-P1 supplies individual mapping points and a project-aware journal. Original measurement capture/linking inside mapping is deferred to Issue #8; interval revisions, photo documentation, prepared-plan positioning and wedge analysis follow separately, with native iPad adaptation planned from the shared codebase. Q/RMR, XLSX, spatial transforms and wedge calculations remain future work; mechanical wedge implementation depends on the owner's verified methodology. A whole-mine 3D viewer is not a primary product goal.
+P2 supplies individual mapping points, numeric nominal horizons and source-plan DXF positioning with a project-aware journal. Original measurement capture/linking inside mapping is deferred to Issue #8; interval revisions, photo documentation, surveyed/raster georeferencing and wedge analysis follow separately, with native iPad adaptation planned from the shared codebase. Q/RMR, XLSX, spatial transforms and wedge calculations remain future work; mechanical wedge implementation depends on the owner's verified methodology. A whole-mine 3D viewer is not a primary product goal.

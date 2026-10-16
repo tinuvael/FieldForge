@@ -16,7 +16,11 @@ The owner explicitly schedules Xcode clean build, simulator/unit/UI tests and ph
 
 In parallel with subsequent software design, execute controlled geological-compass/inclinometer comparisons following [measurement-geometry.md](measurement-geometry.md): frame convention, repeatability, bias, fixture alignment, heading dependence and magnetic interference. Define acceptance criteria before interpreting accuracy. Physical startup is not sensor calibration or operational qualification.
 
-## P1 — project mapping foundation
+## P2 — simplified capture, numeric horizons and DXF plans
+
+Implemented under Issue #7: compact coordinate form, numeric nominal horizon Z with override/clear provenance, protected schema-2 mapping migration, offline managed DXF revisions, confirmed drawing-space XY selection, pan/zoom and source-plan journal overlays. See [P2 contract and limitations](p2-dxf.md) and [verification](p2-verification.md). Surveyed georeferencing, PDF/raster adapters, complete CAD/BLOCK expansion and SQLite remain separate work.
+
+## P1 — project mapping foundation (historical)
 
 Implemented: projects, horizons, multi-horizon excavations, persistent context, individual picket observations with separate field dates/timezone and optional manual coordinates, guarded draft reset, and project-filtered journal. «Картирование / План / Клинья» are primary tabs; Plan/Wedge remain placeholders. The protected unassigned measurement journal stays accessible in secondary navigation. See [workflow/storage decision](p1-mapping.md) and [executed verification](p1-verification.md).
 

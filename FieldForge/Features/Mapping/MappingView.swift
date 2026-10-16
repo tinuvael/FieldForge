@@ -4,6 +4,7 @@ import SwiftUI
     @Published var workflow: MappingWorkflow?
     @Published var error: String?
     @Published var success = false
+    private(set) var planStore: ManagedPlanStore?
     init() {
         do {
             let directory = try FileMeasurementStore.applicationStore().url.deletingLastPathComponent()
@@ -12,7 +13,13 @@ import SwiftUI
             #else
             let testing = false
             #endif
-            workflow = try MappingWorkflow(store: FileMappingStore(url: directory.appendingPathComponent(testing ? "ui-testing-mapping.json" : "mapping-v1.json")))
+            #if DEBUG && targetEnvironment(simulator)
+            let namespace = ProcessInfo.processInfo.environment["FIELD_FORGE_TEST_RUN_ID"].flatMap(UUID.init(uuidString:)).map { "-" + $0.uuidString } ?? ""
+            #else
+            let namespace = ""
+            #endif
+            planStore = ManagedPlanStore(root: directory.appendingPathComponent(testing ? "ui-testing-plans\(namespace)" : "plans"))
+            workflow = try MappingWorkflow(store: FileMappingStore(url: directory.appendingPathComponent(testing ? "ui-testing-mapping\(namespace).json" : "mapping-v1.json")))
         } catch { self.error = "Не удалось открыть картирование. Запись заблокирована: \(error.localizedDescription)" }
     }
     func perform(_ action: (inout MappingWorkflow) throws -> Void) {
@@ -24,6 +31,7 @@ import SwiftUI
 struct MappingView: View {
     @EnvironmentObject private var mapping: MappingModel
     @State private var editor: ContextEditorKind?
+    @State private var showPlans = false
     @FocusState private var focused: Bool
     var body: some View {
         NavigationStack {
@@ -49,6 +57,12 @@ struct MappingView: View {
                     } label: { Label("Сервисы", systemImage: "ellipsis.circle") }.accessibilityIdentifier("mappingServices")
                 }
                 ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Готово") { focused = false } }
+            }
+        }
+        .sheet(isPresented: $showPlans) {
+            NavigationStack {
+                HorizonPlansView(selecting: true, onSelection: { showPlans = false })
+                    .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Вернуться") { showPlans = false } } }
             }
         }
         .sheet(item: $editor) { kind in ContextEditor(kind: kind) }
@@ -82,7 +96,7 @@ struct MappingView: View {
             // Context stays outside the scrolling draft during repeated capture.
             VStack(spacing: 4) {
                 selector("Проект", id: "projectPicker", values: w.journal.projects.map { ($0.id, $0.name) }, selection: context(\.projectID), kind: .project)
-                selector("Горизонт", id: "horizonPicker", values: w.horizons.map { ($0.id, $0.name) }, selection: context(\.horizonID), kind: .horizon)
+                selector("Горизонт", id: "horizonPicker", values: w.horizons.map { ($0.id, $0.displayName) }, selection: context(\.horizonID), kind: .horizon)
                 selector("Выработка", id: "excavationPicker", values: w.excavations.map { ($0.id, $0.name) }, selection: context(\.excavationID), kind: .excavation)
             }.padding(.horizontal).padding(.vertical, 6).background(.bar)
             Form {
@@ -91,26 +105,17 @@ struct MappingView: View {
                         .accessibilityIdentifier("mappingPicket").focused($focused)
                     Text("ПК км+метры: ПК 0+005 = 5 м; ПК 1+005 = 1005 м. Это не 100-метровые пикеты.")
                         .font(.caption).foregroundStyle(.secondary)
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Начало и направление отсчёта")
-                        TextField("Неизвестно", text: draft(\.chainageOriginAndDirection, fallback: "")).focused($focused)
-                    }
-                    Text("Без описания начало и направление хранятся как неизвестные.").font(.caption)
                     DatePicker("Дата наблюдения", selection: Binding(get: { mapping.workflow?.draft.observedAtOverride ?? Date() },
                         set: { value in mapping.perform { $0.draft.observedAtOverride = value } }))
                         .accessibilityIdentifier("mappingDate")
                     Text("Часовой пояс: \(w.draft.timeZoneID). Новая запись без изменения даты получает время сохранения.").font(.caption)
                 }
-                Section("Координаты · ручной ввод · метры") {
+                Section {
                     coordinate("X", \.x); coordinate("Y", \.y); coordinate("Z", \.z)
-                    TextField("СК / локальная система или «неизвестно»", text: draft(\.crs, fallback: "")).focused($focused)
-                        .accessibilityIdentifier("mappingCRS")
-                    TextField("Направления осей и высотная система", text: draft(\.axes, fallback: "")).focused($focused)
-                        .accessibilityIdentifier("mappingAxes")
-                    TextField("Источник / точность / ограничения", text: draft(\.coordinateProvenance, fallback: "")).focused($focused)
-                        .accessibilityIdentifier("mappingProvenance")
-                    Label("Выбор точки DXF ещё не реализован", systemImage: "map").foregroundStyle(.secondary)
-                    Text("X/Y/Z необязательны. Z не выводится из имени или отметки горизонта. GPS под землёй не используется.").font(.caption)
+                    Button("Выбрать на плане", systemImage: "map") { focused = false; showPlans = true }
+                        .disabled(w.context.horizonID == nil).accessibilityIdentifier("selectHorizonPlan")
+                } header: { Text("Координаты · XY: \(w.draft.xyUnits == "drawing" ? "ед. чертежа" : w.draft.xyUnits) · Z: м") } footer: {
+                    Text(w.draft.zOrigin == .horizonDefault ? "Z: по горизонту · номинальная отметка, не съёмка" : "Z: ручной ввод или неизвестно · метры")
                 }
                 Section("Измерения") {
                     NavigationLink("Открыть независимое измерение", destination: MeasurementView())
@@ -138,7 +143,7 @@ struct MappingView: View {
     }
     private func coordinate(_ name: String, _ key: WritableKeyPath<MappingDraft, String>) -> some View {
         HStack {
-            Text(name).frame(width: 28, alignment: .leading)
+            Text(name == "Z" ? "Z, м" : name).frame(width: 42, alignment: .leading)
             TextField("Неизвестно", text: draft(key, fallback: "")).keyboardType(.numbersAndPunctuation)
                 .focused($focused).accessibilityIdentifier("mapping\(name)")
         }
@@ -178,6 +183,7 @@ struct ContextEditor: View {
     @State private var datum = "неизвестно"
     @State private var horizonIDs: Set<UUID> = []
     @State private var error: String?
+    @FocusState private var inputFocused: Bool
     var body: some View {
         NavigationStack {
             Form {
@@ -188,26 +194,30 @@ struct ContextEditor: View {
                     if entries.isEmpty { Text("Пока нет записей") }
                 }
                 Section(editingID == nil ? "Создать" : "Изменить название / метаданные") {
-                    TextField("Название", text: $name).accessibilityIdentifier("contextName")
                     if kind == .horizon {
-                        TextField("Отметка, м (необязательно)", text: $elevation).keyboardType(.numbersAndPunctuation)
-                        TextField("Высотная система / неизвестно", text: $datum)
-                    }
+                        TextField("Отметка горизонта, м", text: $elevation).keyboardType(.numbersAndPunctuation).focused($inputFocused)
+                            .accessibilityIdentifier("contextElevation")
+                        if editingID != nil { Text("Исходное название: \(name)").font(.caption) }
+                        DisclosureGroup("Дополнительно") { TextField("Высотная система / неизвестно", text: $datum).focused($inputFocused) }
+                    } else { TextField("Название", text: $name).focused($inputFocused).accessibilityIdentifier("contextName") }
                     if kind == .excavation {
                         Text("Одна выработка может относиться к нескольким горизонтам.").font(.caption)
                         ForEach(mapping.workflow?.horizons ?? []) { horizon in
-                            Toggle(horizon.name, isOn: Binding(get: { horizonIDs.contains(horizon.id) }, set: { on in
+                            Toggle(horizon.displayName, isOn: Binding(get: { horizonIDs.contains(horizon.id) }, set: { on in
                                 if on { horizonIDs.insert(horizon.id) } else { horizonIDs.remove(horizon.id) }
                             }))
                         }
                     }
                     Button(editingID == nil ? "Создать" : "Сохранить изменения") { save() }
                         .accessibilityIdentifier("saveContext")
-                    if editingID != nil { Button("Новая запись") { editingID = nil; name = ""; elevation = "" } }
+                    if editingID != nil { Button("Новая запись") { editingID = nil; name = ""; elevation = ""; datum = "неизвестно"; error = nil } }
                     if let error { Text(error).foregroundStyle(.red) }
                 }
             }.navigationTitle(kind.title)
-                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Закрыть") { dismiss() } } }
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("Закрыть") { dismiss() } }
+                    ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Готово") { inputFocused = false } }
+                }
                 .onAppear { if let id = mapping.workflow?.context.horizonID { horizonIDs = [id] } }
         }
     }
@@ -215,14 +225,14 @@ struct ContextEditor: View {
         guard let w = mapping.workflow else { return [] }
         switch kind {
         case .project: return w.journal.projects.map { ($0.id, $0.name) }
-        case .horizon: return w.horizons.map { ($0.id, $0.name) }
+        case .horizon: return w.horizons.map { ($0.id, $0.displayName) }
         case .excavation: return w.journal.excavations.filter { $0.projectID == w.context.projectID }.map { ($0.id, $0.name) }
         }
     }
     private func load(_ id: UUID) {
         editingID = id; name = entries.first { $0.0 == id }?.1 ?? ""
         if let h = mapping.workflow?.journal.horizons.first(where: { $0.id == id }) {
-            elevation = h.elevationMeters.map { String($0) } ?? ""; datum = h.elevationDatum
+            name = h.name; elevation = h.elevationMeters.map { ElevationInput.text($0) } ?? ""; datum = h.elevationDatum
         }
         if let e = mapping.workflow?.journal.excavations.first(where: { $0.id == id }) { horizonIDs = e.horizonIDs }
     }
@@ -235,8 +245,8 @@ struct ContextEditor: View {
                 if let editingID { try mapping.workflow!.updateProject(id: editingID, name: name) }
                 else { try mapping.workflow!.createProject(name: name) }
             case .horizon:
-                if let editingID { try mapping.workflow!.updateHorizon(id: editingID, name: name, elevation: elevation, datum: datum) }
-                else { try mapping.workflow!.createHorizon(name: name, elevation: elevation, datum: datum) }
+                if let editingID { try mapping.workflow!.updateHorizon(id: editingID, elevation: elevation, datum: datum) }
+                else { try mapping.workflow!.createHorizon(elevation: elevation, datum: datum) }
             case .excavation:
                 if let editingID { try mapping.workflow!.updateExcavation(id: editingID, name: name, horizonIDs: horizonIDs) }
                 else { try mapping.workflow!.createExcavation(name: name, horizonIDs: horizonIDs) }

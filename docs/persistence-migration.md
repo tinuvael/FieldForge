@@ -1,5 +1,7 @@
 # Phase 1 → Phase 2 JSON migration
 
+**P2 update:** [P2 mapping and DXF contract](p2-dxf.md) supersedes historical P1 statements about optional horizon elevations, mandatory per-point coordinate strings, absent plans and schema 1. P2 adds nominal Z provenance and immutable managed DXF revisions on the same graph; orientation/measurement conventions are unchanged.
+
 ## Deployed compatibility contract
 
 Bundle identifier remains **`com.tinuvael.FieldForge`**. Do not uninstall the app or change its signing identity/bundle identifier to test an upgrade. Device records were not accessed by this work.

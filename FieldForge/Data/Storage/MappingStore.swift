@@ -9,6 +9,7 @@ protocol MappingStore {
 final class FileMappingStore: MappingStore {
     let url: URL
     var backupURL: URL { url.appendingPathExtension("previous") }
+    var migrationBackupURL: URL { url.appendingPathExtension("p1-backup") }
     private var loaded = false
     private var blocked = false
     private var loadedBytes: Data?
@@ -19,9 +20,23 @@ final class FileMappingStore: MappingStore {
     }
     func load() throws -> MappingJournal {
         do {
-            let data = try bytes()
-            let value = try data.map { try JSONDecoder().decode(MappingJournal.self, from: $0) } ?? MappingJournal()
+            var data = try bytes()
+            var value = try data.map { try JSONDecoder().decode(MappingJournal.self, from: $0) } ?? MappingJournal()
             try value.validate()
+            if value.schemaVersion == 1, let original = data {
+                value.schemaVersion = 2
+                let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
+                let migrated = try encoder.encode(value)
+                guard try JSONDecoder().decode(MappingJournal.self, from: migrated) == value else { throw StorageError.invalidRecord }
+                if FileManager.default.fileExists(atPath: migrationBackupURL.path) {
+                    guard try Data(contentsOf: migrationBackupURL) == original else { throw StorageError.invalidRecord }
+                } else {
+                    try original.write(to: migrationBackupURL, options: .withoutOverwriting)
+                }
+                guard try Data(contentsOf: migrationBackupURL) == original, try bytes() == original else { throw StorageError.changedFile }
+                try migrated.write(to: url, options: .atomic)
+                data = migrated
+            }
             loadedBytes = data; loaded = true; blocked = false
             return value
         } catch { blocked = true; throw error }
@@ -29,12 +44,14 @@ final class FileMappingStore: MappingStore {
     func save(_ journal: MappingJournal) throws {
         guard !blocked else { throw StorageError.writesBlocked }
         if !loaded { _ = try load() }
+        guard journal.schemaVersion == 2 else { throw StorageError.unsupportedVersion }
         try journal.validate()
         guard try bytes() == loadedBytes else { throw StorageError.changedFile }
         // Original observations are append-only; names/metadata can be managed separately.
         if let loadedBytes {
             let previous = try JSONDecoder().decode(MappingJournal.self, from: loadedBytes)
-            guard previous.observations.allSatisfy({ old in journal.observations.contains(old) }) else {
+            guard previous.observations.allSatisfy({ old in journal.observations.contains(old) }),
+                  previous.plans.allSatisfy({ old in journal.plans.contains(old) }) else {
                 throw StorageError.invalidRecord
             }
         }
@@ -55,7 +72,12 @@ struct MappingWorkflow {
     var draft = MappingDraft()
     private(set) var pendingContext: MappingContext?
     private let store: any MappingStore
-    init(store: any MappingStore) throws { self.store = store; journal = try store.load() }
+    init(store: any MappingStore) throws {
+        self.store = store; journal = try store.load()
+        draft.suggestElevation(selectedHorizon)
+    }
+    var selectedHorizon: MappingHorizon? { journal.horizons.first { $0.id == context.horizonID } }
+    private mutating func resetDraft() { draft = MappingDraft(); draft.suggestElevation(selectedHorizon) }
     var context: MappingContext { journal.selection }
     var horizons: [MappingHorizon] { journal.horizons.filter { $0.projectID == context.projectID } }
     var excavations: [MappingExcavation] {
@@ -73,7 +95,7 @@ struct MappingWorkflow {
     private mutating func applyContext(_ next: MappingContext) throws {
         var updated = journal; updated.selection = next
         try commit(updated)
-        draft = MappingDraft(); pendingContext = nil
+        resetDraft(); pendingContext = nil
     }
     mutating func confirmDiscard() throws { if let pendingContext { try applyContext(pendingContext) } }
     mutating func cancelContextChange() { pendingContext = nil }
@@ -83,18 +105,12 @@ struct MappingWorkflow {
         var next = journal; let id = UUID()
         next.projects.append(MappingProject(id: id, name: name)); try commit(next); return id
     }
-    @discardableResult mutating func createHorizon(name: String, elevation: String = "", datum: String = "неизвестно") throws -> UUID {
+    @discardableResult mutating func createHorizon(elevation: String, datum: String = "неизвестно") throws -> UUID {
         guard let p = context.projectID else { throw MappingError.invalid("Сначала выберите проект.") }
-        let name = try validName(name)
-        var height: Double?
-        if !elevation.isEmpty {
-            guard let value = Double(elevation.replacingOccurrences(of: ",", with: ".")), value.isFinite else {
-                throw MappingError.invalid("Высотная отметка должна быть конечным числом в метрах.")
-            }
-            height = value
-        }
+        let height = try ElevationInput.meters(elevation)
         var next = journal; let id = UUID()
-        next.horizons.append(MappingHorizon(id: id, projectID: p, name: name, elevationMeters: height, elevationDatum: try validName(datum)))
+        next.horizons.append(MappingHorizon(id: id, projectID: p, name: ElevationInput.label(height),
+            elevationMeters: height, elevationDatum: try validName(datum)))
         try commit(next); return id
     }
     @discardableResult mutating func createExcavation(name: String, horizonIDs: Set<UUID>) throws -> UUID {
@@ -108,19 +124,37 @@ struct MappingWorkflow {
         guard let i = next.projects.firstIndex(where: { $0.id == id }) else { throw StorageError.invalidRecord }
         next.projects[i].name = try validName(name); try commit(next)
     }
-    mutating func updateHorizon(id: UUID, name: String, elevation: String, datum: String) throws {
+    mutating func updateHorizon(id: UUID, elevation: String, datum: String) throws {
         var next = journal
         guard let i = next.horizons.firstIndex(where: { $0.id == id }) else { throw StorageError.invalidRecord }
-        let value = elevation.isEmpty ? nil : Double(elevation.replacingOccurrences(of: ",", with: "."))
-        guard elevation.isEmpty || value?.isFinite == true else { throw MappingError.invalid("Некорректная высотная отметка.") }
-        next.horizons[i].name = try validName(name); next.horizons[i].elevationMeters = value
-        next.horizons[i].elevationDatum = try validName(datum); try commit(next)
+        // Keep legacy names and identities. Historical observations retain their frozen Z and datum.
+        next.horizons[i].elevationMeters = try ElevationInput.meters(elevation)
+        next.horizons[i].elevationDatum = try validName(datum)
+        try commit(next)
+        if context.horizonID == id { draft.suggestElevation(selectedHorizon) }
     }
     mutating func updateExcavation(id: UUID, name: String, horizonIDs: Set<UUID>) throws {
         var next = journal
         guard let i = next.excavations.firstIndex(where: { $0.id == id }) else { throw StorageError.invalidRecord }
         next.excavations[i].name = try validName(name); next.excavations[i].horizonIDs = horizonIDs
         try commit(next)
+    }
+    var plans: [MappingPlanReference] { journal.plans.filter { $0.horizonID == context.horizonID } }
+    mutating func registerPlan(_ plan: MappingPlanReference) throws {
+        guard journal.horizons.contains(where: { $0.id == plan.horizonID }) else { throw StorageError.invalidRecord }
+        if journal.plans.contains(plan) { return }
+        var next = journal; next.plans.append(plan); try commit(next)
+    }
+    mutating func selectPlanPoint(_ point: PlanPoint, planID: UUID) throws {
+        guard let plan = plans.first(where: { $0.id == planID }),
+              journal.horizons.contains(where: { $0.id == plan.horizonID && $0.projectID == context.projectID }) else { throw StorageError.invalidRecord }
+        try draft.selectPlanPoint(point, plan: plan)
+    }
+    func points(on plan: MappingPlanReference, excavationID: UUID? = nil) -> [MappingObservation] {
+        guard plans.contains(plan) else { return [] }
+        // No inferred compatibility between different revisions/CRSs, including manual P1 coordinates.
+        return observations.filter { $0.horizonID == plan.horizonID && $0.coordinates?.planID == plan.id &&
+            $0.coordinates?.x != nil && $0.coordinates?.y != nil && (excavationID == nil || $0.excavationID == excavationID) }
     }
     private func validName(_ text: String) throws -> String {
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -143,7 +177,7 @@ struct MappingWorkflow {
             coordinates: try draft.coordinates(), measurementIDs: [], notes: draft.notes)
         var next = journal; next.observations.append(record)
         try commit(next)
-        draft = MappingDraft(); pendingContext = nil
+        resetDraft(); pendingContext = nil
         return record
     }
 }
