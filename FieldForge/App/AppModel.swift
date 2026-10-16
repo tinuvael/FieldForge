@@ -19,7 +19,8 @@ enum MeasurementMode: String, CaseIterable {
     let provider: any SensorProvider
     private var store: (any MeasurementStore)?
     private var storageWritable = false
-    private var measurementVisible = true
+    private var measurementVisible = false
+    var measurementScreenVisible = false
     private var foreground = false
     private var watchdog: Task<Void, Never>?
     var mock: MockSensorProvider? { provider as? MockSensorProvider }
@@ -66,6 +67,11 @@ enum MeasurementMode: String, CaseIterable {
         }
     }
 
+    func measurementScreenVisibilityChanged(_ visible: Bool) {
+        measurementScreenVisible = visible
+        measurementVisible = visible
+        updateAcquisition()
+    }
     func setLifecycle(measurementVisible: Bool, foreground: Bool) {
         self.measurementVisible = measurementVisible
         self.foreground = foreground

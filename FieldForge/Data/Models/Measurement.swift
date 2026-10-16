@@ -46,8 +46,23 @@ struct Measurement: Codable, Identifiable, Equatable, Sendable {
               quality != .invalid, quality != .uncertain, reference == sample.geographicReference,
               let dip = orientation.dipAngle, dip.isFinite, (0...90).contains(dip) else { return false }
         let expected = Self.process(sample, id: id)
-        return orientation == expected.orientation && quality == expected.quality
+        return Self.matchesPersistedSensorOrientation(orientation, expected.orientation) && quality == expected.quality
             && directionMeaning == expected.directionMeaning
             && plane == expected.plane && algorithmVersion == expected.algorithmVersion
+    }
+    /// Recomputing legacy diagnostics on another libm/CPU can differ by a few ULPs.
+    /// Validate numerical consistency without rewriting original evidence or rounding it.
+    private static func matchesPersistedSensorOrientation(_ stored: PlaneOrientation, _ expected: PlaneOrientation) -> Bool {
+        func close(_ a: Double?, _ b: Double?) -> Bool {
+            guard let a, let b else { return a == nil && b == nil }
+            return a.isFinite && b.isFinite && abs(a - b) <= 32 * max(1, abs(a), abs(b)).ulp
+        }
+        guard stored.status == expected.status, close(stored.dipAngle, expected.dipAngle),
+              close(stored.dipDirection, expected.dipDirection) else { return false }
+        switch (stored.normal, expected.normal) {
+        case (nil, nil): return true
+        case let (a?, b?): return close(a.x, b.x) && close(a.y, b.y) && close(a.z, b.z)
+        default: return false
+        }
     }
 }

@@ -1,5 +1,8 @@
 # Future geomechanical domain schema
 
+**P1 implementation update:** [Mapping workflow and persistence](p1-mapping.md) describes the implemented project/horizon/multi-horizon-excavation/point graph, context/draft state machine, atomic JSON decision, immutable observations and protected legacy inbox. The Phase 2 descriptions and larger future schema below are historical/design context; they do not override P1's implemented scope.
+
+
 This is the Phase 2 design for later implementation. Only original orientation observations and their safe persistence are implemented now. All entities use stable UUID primary keys, explicit foreign-key relationships, UTC instants, finite unrounded engineering numbers, and explicit units. Missing data is null with a reason, never an invented zero or rating. Distinguish original field inputs, calculated outputs, and interpreted representatives.
 
 The [product vision](product-vision.md) is authoritative for requirements: this shared domain serves exactly Geomechanical Mapping, Excavation Plans & Spatial Positioning, and Wedge Analysis on iPhone and future native iPad. The planned records below are documentation, not changes to the deployed JSON schema.

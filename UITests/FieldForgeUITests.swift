@@ -6,6 +6,7 @@ final class FieldForgeUITests: XCTestCase {
         app.launchArguments = ["--ui-testing"]
         let note = "Phase2-\(UUID().uuidString)"
         app.launch()
+        openService("Измерение", in: app)
         let mode = app.segmentedControls["measurementMode"]
         XCTAssertTrue(mode.waitForExistence(timeout: 10))
         mode.buttons["Геологический компас"].tap()
@@ -26,17 +27,16 @@ final class FieldForgeUITests: XCTestCase {
         XCTAssertTrue(save.isEnabled)
         save.tap(); XCTAssertFalse(save.isEnabled)
         capture("Manual measurement")
-        app.tabBars.buttons["Журнал"].tap()
+        openService("Неназначенные измерения", in: app, relaunch: true)
         let source = "Ручной ввод · геологический компас"
         XCTAssertTrue(app.staticTexts[source].firstMatch.waitForExistence(timeout: 5))
         app.cells.containing(.staticText, identifier: source).firstMatch.tap()
         XCTAssertTrue(app.staticTexts[note].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Сенсорная диагностика отсутствует."].exists)
-        app.terminate(); app.launch()
-        app.tabBars.buttons["Журнал"].tap()
+        openService("Неназначенные измерения", in: app, relaunch: true)
         app.cells.containing(.staticText, identifier: source).firstMatch.tap()
         XCTAssertTrue(app.staticTexts[note].waitForExistence(timeout: 5))
-        app.tabBars.buttons["Настройки"].tap()
+        openService("Настройки", in: app, relaunch: true)
         let export = app.buttons["exportButton"]
         for _ in 0..<8 {
             if export.isHittable { break }
@@ -51,6 +51,7 @@ final class FieldForgeUITests: XCTestCase {
         let app = XCUIApplication()
         app.launchArguments = ["--ui-testing"]
         app.launch()
+        openService("Измерение", in: app)
         XCTAssertTrue(app.staticTexts["mockBanner"].waitForExistence(timeout: 10))
         let save = app.buttons["saveButton"]
         XCTAssertFalse(save.isEnabled)
@@ -61,13 +62,12 @@ final class FieldForgeUITests: XCTestCase {
         XCTAssertTrue(save.isEnabled)
         save.tap()
         XCTAssertFalse(save.isEnabled)
-        app.tabBars.buttons["Журнал"].tap()
+        openService("Неназначенные измерения", in: app, relaunch: true)
         XCTAssertTrue(app.staticTexts["DEMO · Синтетическая запись"].firstMatch.waitForExistence(timeout: 5))
         capture("Journal")
-        app.terminate(); app.launch()
-        app.tabBars.buttons["Журнал"].tap()
+        openService("Неназначенные измерения", in: app, relaunch: true)
         XCTAssertTrue(app.staticTexts["DEMO · Синтетическая запись"].firstMatch.waitForExistence(timeout: 5))
-        app.tabBars.buttons["Настройки"].tap()
+        openService("Настройки", in: app, relaunch: true)
         capture("Settings")
         let export = app.buttons["exportButton"]
         for _ in 0..<8 {
@@ -79,6 +79,12 @@ final class FieldForgeUITests: XCTestCase {
         XCTAssertTrue(app.otherElements["ActivityListView"].waitForExistence(timeout: 5)
                       || app.buttons["Copy"].exists || app.buttons["Скопировать"].exists)
         capture("CSV Share Sheet")
+    }
+    @MainActor private func openService(_ name: String, in app: XCUIApplication, relaunch: Bool = false) {
+        if relaunch { app.terminate(); app.launch() }
+        let menu = app.buttons["mappingServices"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 10)); menu.tap()
+        app.buttons[name].tap()
     }
     @MainActor private func capture(_ name: String) {
         let attachment = XCTAttachment(screenshot: XCUIScreen.main.screenshot())

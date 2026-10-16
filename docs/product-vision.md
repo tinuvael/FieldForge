@@ -14,7 +14,7 @@ The product has **exactly three primary functional modules**, operating on one c
 | Excavation Plans & Spatial Positioning | Place and retrieve mapped observations on prepared excavation plans | План |
 | Wedge Analysis | Review candidate geometric configurations and, when a verified method is available, separate mechanical assessments | Клинья |
 
-Project selection and settings belong in secondary navigation. Measurement, interpretation, export and backup are shared capabilities or workflows within these modules, not additional primary modules. The current «Измерение / Журнал / Настройки» tabs remain unchanged until their corresponding product workflows are implemented.
+Project selection and settings belong in secondary navigation. Measurement, interpretation, export and backup are shared capabilities or workflows within these modules, not additional primary modules. P1 now opens «Картирование / План / Клинья» with the implemented mapping foundation; Plan/Wedge are explicitly unavailable placeholders. Measurement, the unassigned legacy journal and settings are secondary navigation.
 
 ## 1. Geomechanical Mapping
 

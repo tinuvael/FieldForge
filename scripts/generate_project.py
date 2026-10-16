@@ -21,6 +21,7 @@ app_sources = sorted(str(p.relative_to(ROOT)) for p in (ROOT / 'FieldForge').rgl
 unit_sources = sorted(str(p.relative_to(ROOT)) for p in (ROOT / 'Tests').glob('*.swift'))
 ui_sources = sorted(str(p.relative_to(ROOT)) for p in (ROOT / 'UITests').glob('*.swift'))
 resources = ['FieldForge/Resources/PrivacyInfo.xcprivacy', 'FieldForge/Resources/Assets.xcassets']
+obj('signingConfig', 'isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = \"Config/Signing.xcconfig\"; sourceTree = SOURCE_ROOT;')
 for p in app_sources + unit_sources + ui_sources + resources:
     kind = 'sourcecode.swift' if p.endswith('.swift') else 'folder.assetcatalog' if p.endswith('.xcassets') else 'text.xml'
     obj(p, f'isa = PBXFileReference; lastKnownFileType = {kind}; path = {q(p)}; sourceTree = SOURCE_ROOT;')
@@ -31,7 +32,7 @@ for name, ext, kind in [('FieldForge', 'app', 'wrapper.application'), ('FieldFor
 obj('appGroup', f'isa = PBXGroup; name = FieldForge; children = {refs(app_sources + resources + ["plist"])}; sourceTree = "<group>";')
 obj('testGroup', f'isa = PBXGroup; name = Tests; children = {refs(unit_sources + ui_sources)}; sourceTree = "<group>";')
 obj('products', f'isa = PBXGroup; name = Products; children = {refs(["product:FieldForge", "product:FieldForgeTests", "product:FieldForgeUITests"])}; sourceTree = "<group>";')
-obj('rootGroup', f'isa = PBXGroup; children = {refs(["appGroup", "testGroup", "products"])}; sourceTree = "<group>";')
+obj('rootGroup', f'isa = PBXGroup; children = {refs(["appGroup", "testGroup", "products", "signingConfig"])}; sourceTree = "<group>";')
 for target, sources in [('FieldForge', app_sources), ('FieldForgeTests', unit_sources), ('FieldForgeUITests', ui_sources)]:
     obj(target + ':sources', f'isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = {refs(["build:" + p for p in sources])}; runOnlyForDeploymentPostprocessing = 0;')
     obj(target + ':frameworks', 'isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0;')
@@ -50,6 +51,7 @@ for target, sources in [('FieldForge', app_sources), ('FieldForgeTests', unit_so
             'LD_RUNPATH_SEARCH_PATHS': '$(inherited) @executable_path/Frameworks @loader_path/Frameworks',
         }
         if target == 'FieldForge':
+            del settings['DEVELOPMENT_TEAM']
             settings.update({'INFOPLIST_FILE': 'FieldForge/Resources/Info.plist', 'MARKETING_VERSION': '0.1.0',
                 'CURRENT_PROJECT_VERSION': '1', 'ASSETCATALOG_COMPILER_APPICON_NAME': 'AppIcon',
                 'ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME': 'AccentColor',
@@ -59,7 +61,8 @@ for target, sources in [('FieldForge', app_sources), ('FieldForgeTests', unit_so
                 'BUNDLE_LOADER': '$(TEST_HOST)'})
         else:
             settings.update({'TEST_TARGET_NAME': 'FieldForge'})
-        obj(target + ':' + config, f'isa = XCBuildConfiguration; name = {config}; buildSettings = {{ ' + ' '.join(f'{k} = {q(v)};' for k, v in settings.items()) + ' };')
+        base_config = f'baseConfigurationReference = {uid("signingConfig")}; ' if target == 'FieldForge' else ''
+        obj(target + ':' + config, f'isa = XCBuildConfiguration; name = {config}; {base_config}buildSettings = {{ ' + ' '.join(f'{k} = {q(v)};' for k, v in settings.items()) + ' };')
     obj(target + ':configs', f'isa = XCConfigurationList; buildConfigurations = {refs([target + ":Debug", target + ":Release"])}; defaultConfigurationIsVisible = 0; defaultConfigurationName = Release;')
 for config in ['Debug', 'Release']:
     settings = {'SDKROOT': 'iphoneos', 'IPHONEOS_DEPLOYMENT_TARGET': '17.0', 'CLANG_ENABLE_MODULES': 'YES',
