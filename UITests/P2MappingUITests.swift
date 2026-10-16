@@ -159,19 +159,54 @@ final class P2MappingUITests: XCTestCase {
         app.buttons["Вернуться"].tap()
         app.buttons["mappingJournal"].tap()
         XCTAssertTrue(app.buttons["journalHorizonFilter"].waitForExistence(timeout: 5))
+        let records = app.collectionViews["journalObservations"].buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "journalRecord-"))
+        XCTAssertEqual(records.count, 1)
+        let recordID = records.element.identifier
         app.buttons["journalHorizonFilter"].tap()
-        XCTAssertTrue(app.searchFields.firstMatch.waitForExistence(timeout: 5))
-        app.searchFields.firstMatch.tap(); app.searchFields.firstMatch.typeText("\(level)")
-        app.buttons["+\(level) м"].tap()
+        let horizonSearch = app.navigationBars["Горизонт"].searchFields["journalHorizonSearch"]
+        let horizon = app.collectionViews["journalHorizonSearchResults"].buttons["+\(level) м"]
+        XCTAssertTrue(horizon.waitForExistence(timeout: 5))
+        search(horizonSearch, value: "no-match", app: app)
+        XCTAssertTrue(horizon.waitForNonExistence(timeout: 5))
+        search(horizonSearch, value: "\(level)", replacing: "no-match", app: app)
+        XCTAssertTrue(horizon.waitForExistence(timeout: 5)); horizon.tap()
+        XCTAssertTrue(horizonSearch.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["journalHorizonFilter"].label.contains("+\(level) м"))
         app.buttons["journalExcavationFilter"].tap()
-        app.searchFields.firstMatch.tap(); app.searchFields.firstMatch.typeText("\(level)")
-        app.buttons["Штрек \(level)"].tap()
-        app.searchFields.firstMatch.tap(); app.searchFields.firstMatch.typeText("no-match")
+        let excavationSearch = app.navigationBars["Выработка"].searchFields["journalExcavationSearch"]
+        let excavation = app.collectionViews["journalExcavationSearchResults"].buttons["Штрек \(level)"]
+        XCTAssertTrue(excavation.waitForExistence(timeout: 5))
+        search(excavationSearch, value: "no-match", app: app)
+        XCTAssertTrue(excavation.waitForNonExistence(timeout: 5))
+        search(excavationSearch, value: "\(level)", replacing: "no-match", app: app)
+        XCTAssertTrue(excavation.waitForExistence(timeout: 5)); excavation.tap()
+        XCTAssertTrue(excavationSearch.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["journalExcavationFilter"].label.contains("Штрек \(level)"))
+        let picketSearch = app.navigationBars["Журнал проекта"].searchFields["journalPicketSearch"]
+        search(picketSearch, value: "005", app: app)
+        XCTAssertEqual(records.count, 1)
+        XCTAssertTrue(records[recordID].exists)
+        search(picketSearch, value: "no-match", replacing: "005", app: app)
         XCTAssertTrue(app.staticTexts["journalEmpty"].waitForExistence(timeout: 5))
-        let cancel = app.buttons.matching(NSPredicate(format: "label IN %@", ["Cancel", "Отмена", "Отменить"])).firstMatch
-        if cancel.exists { cancel.tap() }
+        XCTAssertEqual(records.count, 0)
+        search(picketSearch, value: "пк", replacing: "no-match", app: app)
+        XCTAssertTrue(records[recordID].waitForExistence(timeout: 5))
+        let cancel = app.navigationBars["Журнал проекта"].buttons.matching(NSPredicate(format: "label IN %@", ["Cancel", "Close", "Отмена", "Отменить", "Закрыть"])).element
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5)); cancel.tap()
         app.buttons["journalClearFilters"].tap()
-        XCTAssertTrue(app.staticTexts["ПК 0+005"].waitForExistence(timeout: 5))
+        XCTAssertTrue(records[recordID].waitForExistence(timeout: 5))
+        XCTAssertEqual(records.count, 1)
+        XCTAssertTrue(app.buttons["journalHorizonFilter"].label.contains("Все горизонты"))
+        XCTAssertTrue(app.buttons["journalExcavationFilter"].label.contains("Все выработки"))
+    }
+    @MainActor private func search(_ field: XCUIElement, value: String, replacing old: String = "", app: XCUIApplication) {
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        XCTAssertTrue(field.isHittable)
+        field.tap()
+        XCTAssertTrue(app.keyboards.element.waitForExistence(timeout: 5))
+        if !old.isEmpty { field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: old.count)) }
+        field.typeText(value)
+        XCTAssertEqual(field.value as? String, value)
     }
     private func dxf(_ entities: String) -> String {
         "0\nSECTION\n2\nHEADER\n9\n$INSUNITS\n70\n6\n0\nENDSEC\n0\nSECTION\n2\nENTITIES\n\(entities)0\nENDSEC\n0\nEOF\n"

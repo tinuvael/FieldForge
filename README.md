@@ -87,7 +87,7 @@ UITests/                        mapping acceptance and automatic/manual save/rel
 scripts/generate_project.py     deterministic checked-in Xcode project
 ```
 
-Current P2 hotfix verification: see [Issue #14 original-DXF checks and results](docs/p2-hotfix-verification.md). The [original P2 verification](docs/p2-verification.md) is historical. Earlier Phase 1/2 verification reports are historical. Physical measurement accuracy and device upgrade behavior still require owner validation.
+Current P2 hotfix verification: see [Issue #14 original-DXF checks and journal search/focus results](docs/p2-hotfix-verification.md). Journal UI tests scope uniquely identified native search fields to their navigation bars and verify matching/empty results and reset. The [original P2 verification](docs/p2-verification.md) is historical. Earlier Phase 1/2 verification reports are historical. Physical measurement accuracy and device upgrade behavior still require owner validation.
 
 ## Architecture and next steps
 

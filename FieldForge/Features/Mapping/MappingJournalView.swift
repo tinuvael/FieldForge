@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct MappingJournalView: View {
     @EnvironmentObject private var mapping: MappingModel
@@ -62,17 +63,19 @@ struct MappingJournalView: View {
             Section("Независимые измерения") {
                 NavigationLink("Неназначенный журнал Phase 1/2", destination: JournalView())
             }
-        }.navigationTitle("Журнал проекта")
+        }.accessibilityIdentifier("journalObservations")
+            .navigationTitle("Журнал проекта")
+            .background(JournalSearchAccessibility(identifier: "journalPicketSearch"))
             .searchable(text: $query.picket, placement: .navigationBarDrawer(displayMode: .always), prompt: "Пикет или метры")
             .onChange(of: query.horizonID) { _, _ in query.excavationID = nil }
             .onChange(of: projectID) { _, _ in query = MappingJournalQuery(); datesEnabled = false }
             .sheet(item: $scope) { scope in
                 switch scope {
                 case .horizon:
-                    JournalScopeSelection(title: "Горизонт", all: "Все горизонты",
+                    JournalScopeSelection(title: "Горизонт", all: "Все горизонты", searchIdentifier: "journalHorizonSearch",
                         items: horizons.map { ($0.id, $0.displayName) }, selection: $query.horizonID)
                 case .excavation:
-                    JournalScopeSelection(title: "Выработка", all: "Все выработки",
+                    JournalScopeSelection(title: "Выработка", all: "Все выработки", searchIdentifier: "journalExcavationSearch",
                         items: excavations.map { ($0.id, $0.name) }, selection: $query.excavationID)
                 }
             }
@@ -90,6 +93,7 @@ private enum JournalScope: String, Identifiable {
 private struct JournalScopeSelection: View {
     let title: String
     let all: String
+    let searchIdentifier: String
     let items: [(UUID, String)]
     @Binding var selection: UUID?
     @State private var search = ""
@@ -103,8 +107,36 @@ private struct JournalScopeSelection: View {
                         HStack { Text(item.1); Spacer(); if selection == item.0 { Image(systemName: "checkmark") } }
                     }
                 }
-            }.navigationTitle(title).searchable(text: $search, prompt: "Поиск")
+            }.accessibilityIdentifier("\(searchIdentifier)Results")
+                .navigationTitle(title)
+                .background(JournalSearchAccessibility(identifier: searchIdentifier))
+                .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .always), prompt: "Поиск")
                 .toolbar { Button("Закрыть") { dismiss() } }
+        }
+    }
+}
+
+/// SwiftUI's searchable modifier does not expose the native search field's identifier.
+/// Tag only this navigation controller's field, including when a filter is presented.
+private struct JournalSearchAccessibility: UIViewControllerRepresentable {
+    let identifier: String
+
+    func makeUIViewController(context: Context) -> Controller { Controller(identifier: identifier) }
+    func updateUIViewController(_ controller: Controller, context: Context) {
+        controller.identifier = identifier
+        controller.identifySearchField()
+    }
+
+    final class Controller: UIViewController {
+        var identifier: String
+        init(identifier: String) { self.identifier = identifier; super.init(nibName: nil, bundle: nil) }
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+        override func viewDidAppear(_ animated: Bool) { super.viewDidAppear(animated); identifySearchField() }
+        override func viewDidLayoutSubviews() { super.viewDidLayoutSubviews(); identifySearchField() }
+
+        func identifySearchField() {
+            navigationController?.topViewController?.navigationItem.searchController?
+                .searchBar.searchTextField.accessibilityIdentifier = identifier
         }
     }
 }

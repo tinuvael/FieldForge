@@ -60,7 +60,7 @@ resources are included in the generated Xcode project and SPM.
 ## Simulator acceptance
 
 Target: iPhone 15 Pro Max simulator `BD08E87B-C0C8-4B44-AB68-BA35A4F3174D`,
-iOS 26.5, Xcode 26.6 (17F113). Simulator results are recorded below after completion.
+iOS 26.5, Xcode 26.6 (17F113). Final simulator results are recorded below.
 
 The original-file UI cases import **each** original, select the plan, assert
 polyline/vertex counts, pan/zoom and pick independent bounding-box centres,
@@ -69,6 +69,39 @@ open its original journal record and reopen the plan after relaunch. Journal
 horizon/excavation selectors/search/reset are also exercised. Existing two-plan,
 overlap, Files-picker open/cancel, mapping and standalone measurement UI cases
 remain in the complete suite.
+
+### PR #15 journal search/focus follow-up
+
+The three original-horizon UI tests were rerun before the fix; all three reproduced
+the keyboard-focus failure at the horizon search. Failure logs and accessibility
+hierarchies show that `app.searchFields.firstMatch` selected the underlying
+«Пикет или метры» field instead of the presented filter's search.
+
+The native fields now have distinct identifiers (`journalPicketSearch`,
+`journalHorizonSearch`, `journalExcavationSearch`) and the tests scope each query
+to its navigation bar. A journal-local UIKit accessibility adapter labels the
+native fields; filtering still uses the existing SwiftUI bindings and query.
+Filter search bars remain visible, and search dismissal recognizes iOS 26's
+«Закрыть» label within the journal navigation bar.
+
+The same three tests check keyboard availability, entered values, option removal
+and restoration for nonmatching/matching horizon and excavation searches, matching
+and case-insensitive picket searches, zero record rows for a nonmatch, and the same
+saved record UUID after cancel/reset. No DXF parsing, geometry, persistence or
+unrelated application behavior changed in this follow-up.
+
+Corrected targeted run: **3 tests, 0 failures, 0 skipped**
+(`/tmp/fieldforge-pr15-targeted.xcresult`), before the complete simulator suite.
+Full SPM rerun: **109 tests, 0 failures** (`/tmp/fieldforge-pr15-spm`). Two project
+generator runs produced byte-identical, unchanged project and scheme files.
+
+The subsequent **complete simulator suite passed all 116 tests: 109 core and
+7 UI, with 0 failures and 0 skipped** (`/tmp/fieldforge-pr15-complete.xcresult`).
+Both Xcode result-bundle summaries confirm the counts. Commands used the shared
+`FieldForge` scheme, the simulator above, `-parallel-testing-enabled NO` and
+`CODE_SIGNING_ALLOWED=NO`; the targeted run selected only the three
+`testOriginalHorizon{200,300,400}ImportProjectionPickingAndMarker` methods before
+the unfiltered `xcodebuild test` run.
 
 ## Limitations
 
