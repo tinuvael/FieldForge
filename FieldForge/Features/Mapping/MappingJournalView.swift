@@ -35,7 +35,7 @@ struct MappingJournalView: View {
             }
         }.navigationTitle("Журнал проекта")
     }
-    private func name(horizon: UUID) -> String { mapping.workflow?.journal.horizons.first { $0.id == horizon }?.name ?? horizon.uuidString }
+    private func name(horizon: UUID) -> String { mapping.workflow?.journal.horizons.first { $0.id == horizon }?.displayName ?? horizon.uuidString }
     private func name(excavation: UUID) -> String { mapping.workflow?.journal.excavations.first { $0.id == excavation }?.name ?? excavation.uuidString }
 }
 
@@ -55,7 +55,7 @@ struct MappingObservationDetail: View {
         List {
             Section("Исходное наблюдение · только просмотр") {
                 LabeledContent("Проект", value: mapping.workflow?.journal.projects.first { $0.id == record.projectID }?.name ?? record.projectID.uuidString)
-                LabeledContent("Горизонт", value: mapping.workflow?.journal.horizons.first { $0.id == record.horizonID }?.name ?? record.horizonID.uuidString)
+                LabeledContent("Горизонт", value: mapping.workflow?.journal.horizons.first { $0.id == record.horizonID }?.displayName ?? record.horizonID.uuidString)
                 LabeledContent("Выработка", value: mapping.workflow?.journal.excavations.first { $0.id == record.excavationID }?.name ?? record.excavationID.uuidString)
                 LabeledContent("Пикет", value: record.picket)
                 LabeledContent("Метры", value: CSVExporter.number(record.chainageMeters))
@@ -65,11 +65,14 @@ struct MappingObservationDetail: View {
             }
             Section("Координаты") {
                 if let c = record.coordinates {
-                    LabeledContent("X, м", value: c.x.map { CSVExporter.number($0) } ?? "Неизвестно")
-                    LabeledContent("Y, м", value: c.y.map { CSVExporter.number($0) } ?? "Неизвестно")
+                    let xyUnit = c.units == "drawing" ? "ед. чертежа" : c.units == "mm" ? "мм" : "м"
+                    LabeledContent("X, \(xyUnit)", value: c.x.map { CSVExporter.number($0) } ?? "Неизвестно")
+                    LabeledContent("Y, \(xyUnit)", value: c.y.map { CSVExporter.number($0) } ?? "Неизвестно")
                     LabeledContent("Z, м", value: c.z.map { CSVExporter.number($0) } ?? "Неизвестно")
                     LabeledContent("СК", value: c.crs); LabeledContent("Оси / высоты", value: c.axes)
-                    Text("Ручной ввод: \(c.provenance)")
+                    Text(c.provenance)
+                    LabeledContent("Источник Z", value: c.zOrigin == .horizonDefault ? "По горизонту · не съёмка" : c.zOrigin == .manualOverride ? "Ручное значение" : "Не указан в исходной записи")
+                    if let level = c.zHorizonElevation { Text("Исходная отметка: \(ElevationInput.label(level)); система: \(c.zDatum ?? "unknown")") }
                 } else { Text("Координаты не заданы") }
             }
             Section("Примечания") { Text(record.notes.isEmpty ? "Нет примечаний" : record.notes) }

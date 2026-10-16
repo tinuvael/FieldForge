@@ -19,7 +19,7 @@ final class MappingTests: XCTestCase {
         var w = try MappingWorkflow(store: store)
         let p = try w.createProject(name: "Рудник A")
         try w.requestContext(MappingContext(projectID: p))
-        let h = try w.createHorizon(name: "Горизонт +200", elevation: "200")
+        let h = try w.createHorizon(elevation: "200")
         try w.requestContext(MappingContext(projectID: p, horizonID: h))
         let e = try w.createExcavation(name: "Штрек 1", horizonIDs: [h])
         try w.requestContext(MappingContext(projectID: p, horizonID: h, excavationID: e))
@@ -39,7 +39,7 @@ final class MappingTests: XCTestCase {
         try w.requestContext(MappingContext(projectID: other))
         XCTAssertTrue(w.observations.isEmpty); XCTAssertTrue(w.horizons.isEmpty); XCTAssertTrue(w.excavations.isEmpty)
         XCTAssertNil(w.context.horizonID)
-        let h = try w.createHorizon(name: "Другой горизонт")
+        let h = try w.createHorizon(elevation: "-120")
         try w.requestContext(MappingContext(projectID: other, horizonID: h))
         let e = try w.createExcavation(name: "Штрек 1", horizonIDs: [h])
         try w.requestContext(MappingContext(projectID: other, horizonID: h, excavationID: e))
@@ -61,10 +61,10 @@ final class MappingTests: XCTestCase {
         XCTAssertEqual(first.chainageMeters, 5); XCTAssertEqual(first.coordinates?.x, 123.456789)
         XCTAssertNil(first.coordinates?.y); XCTAssertEqual(first.coordinates?.z, -5)
         XCTAssertEqual(first.observedTimeZoneID, "Asia/Almaty")
-        XCTAssertEqual(w.draft, MappingDraft()); XCTAssertEqual(w.context, context)
+        XCTAssertEqual(w.draft.z, "200"); XCTAssertFalse(w.draft.hasChanges); XCTAssertEqual(w.context, context)
         w.draft.picket = "ПК 0+010"
         let second = try w.save(now: now.addingTimeInterval(60))
-        XCTAssertEqual(second.chainageMeters, 10); XCTAssertNil(second.coordinates)
+        XCTAssertEqual(second.chainageMeters, 10); XCTAssertEqual(second.coordinates?.z, 200); XCTAssertEqual(second.coordinates?.zOrigin, .horizonDefault)
         XCTAssertEqual(second.observedAt, now.addingTimeInterval(60)); XCTAssertEqual(w.context, context)
         XCTAssertNotEqual(first.id, second.id); XCTAssertEqual(w.observations.count, 2)
         XCTAssertEqual(w.observations[0].observedAt, historical)
@@ -92,7 +92,7 @@ final class MappingTests: XCTestCase {
     }
     func testEveryContextLevelGuardsDirtyDraftIncludingDateOnly() throws {
         var w = try configured(MemoryStore()); let original = w.context
-        let h = try w.createHorizon(name: "H2")
+        let h = try w.createHorizon(elevation: "615,5")
         let e = try w.createExcavation(name: "E2", horizonIDs: [original.horizonID!])
         for next in [MappingContext(projectID: original.projectID),
                      MappingContext(projectID: original.projectID, horizonID: h),
@@ -104,10 +104,10 @@ final class MappingTests: XCTestCase {
     }
     func testMultipleHorizonsOneExcavationAndRename() throws {
         var w = try configured(MemoryStore()); let original = w.context
-        let h = try w.createHorizon(name: "H2")
+        let h = try w.createHorizon(elevation: "615,5")
         try w.updateExcavation(id: original.excavationID!, name: "Общая выработка", horizonIDs: [original.horizonID!, h])
         try w.updateProject(id: original.projectID!, name: "Новое название")
-        try w.updateHorizon(id: h, name: "Переименован", elevation: "-100,5", datum: "Неизвестно")
+        try w.updateHorizon(id: h, elevation: "-100,5", datum: "Неизвестно")
         try w.requestContext(MappingContext(projectID: original.projectID, horizonID: h))
         XCTAssertEqual(w.excavations.map(\.id), [original.excavationID!])
         XCTAssertEqual(w.journal.projects[0].name, "Новое название")
@@ -211,7 +211,7 @@ final class MappingTests: XCTestCase {
         }
         for text in ["1+05", "-5", "nan", "1e4", "ПК 1+1000", "", "5 м"] { XCTAssertThrowsError(try PicketInput.meters(text)) }
         var w = try configured(MemoryStore()); w.draft.picket = "5"; w.draft.x = "1"
-        XCTAssertThrowsError(try w.save()); w.draft.crs = "unknown"; w.draft.axes = "unknown"; w.draft.coordinateProvenance = "unknown"
-        let record = try w.save(); XCTAssertNil(record.coordinates?.z) // Never infer horizon elevation.
+        let record = try w.save(); XCTAssertEqual(record.coordinates?.z, 200)
+        XCTAssertEqual(record.coordinates?.crs, "unknown"); XCTAssertEqual(record.coordinates?.zOrigin, .horizonDefault)
     }
 }

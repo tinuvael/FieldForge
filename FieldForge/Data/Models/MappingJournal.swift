@@ -11,6 +11,7 @@ struct MappingHorizon: Codable, Equatable, Identifiable {
     var name: String
     var elevationMeters: Double?
     var elevationDatum: String
+    var displayName: String { elevationMeters.map { ElevationInput.label($0) } ?? name }
 }
 
 struct MappingExcavation: Codable, Equatable, Identifiable {
@@ -20,12 +21,13 @@ struct MappingExcavation: Codable, Equatable, Identifiable {
     var horizonIDs: Set<UUID>
 }
 
-/// Reserved plan metadata relationship; no plan importer or viewer in P1.
+/// One immutable DXF revision belongs to exactly one horizon/project through its parent.
 struct MappingPlanReference: Codable, Equatable, Identifiable {
     let id: UUID
     let horizonID: UUID
     let attachmentID: UUID
     let version: String
+    var file: ManagedPlanFile? = nil
 }
 
 struct MappingContext: Codable, Equatable {
@@ -43,6 +45,46 @@ struct MappingCoordinates: Codable, Equatable {
     let units: String
     let source: String
     let provenance: String
+    var zOrigin: ElevationOrigin? = nil
+    var zHorizonID: UUID? = nil
+    var zHorizonElevation: Double? = nil
+    var zDatum: String? = nil
+    var planID: UUID? = nil
+}
+
+enum ElevationOrigin: String, Codable { case horizonDefault, manualOverride }
+
+enum ElevationInput {
+    static func meters(_ text: String) throws -> Double {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard value.range(of: #"^[+-]?[0-9]+(?:[.,][0-9]+)?$"#, options: .regularExpression) != nil,
+              let number = Double(value.replacingOccurrences(of: ",", with: ".")), number.isFinite else {
+            throw MappingError.invalid("Введите числовую отметку в метрах, например +393, -120 или 615,5.")
+        }
+        return number
+    }
+    static func text(_ number: Double) -> String {
+        if number == 0 { return "0" }
+        let value = String(number)
+        guard let e = value.firstIndex(of: "e"), let exponent = Int(value[value.index(after: e)...]) else {
+            return value.hasSuffix(".0") ? String(value.dropLast(2)) : value
+        }
+        let negative = value.hasPrefix("-")
+        let mantissa = String(value[..<e]).replacingOccurrences(of: "-", with: "")
+        let parts = mantissa.split(separator: ".", omittingEmptySubsequences: false)
+        let digits = parts.joined()
+        let position = parts[0].count + exponent
+        var expanded: String
+        if position <= 0 { expanded = "0." + String(repeating: "0", count: -position) + digits }
+        else if position >= digits.count { expanded = digits + String(repeating: "0", count: position - digits.count) }
+        else { let split = digits.index(digits.startIndex, offsetBy: position); expanded = String(digits[..<split]) + "." + digits[split...] }
+        if expanded.contains(".") {
+            while expanded.hasSuffix("0") { expanded.removeLast() }
+            if expanded.hasSuffix(".") { expanded.removeLast() }
+        }
+        return (negative ? "-" : "") + expanded
+    }
+    static func label(_ number: Double) -> String { "\(number >= 0 ? "+" : "")\(text(number)) м" }
 }
 
 struct MappingObservation: Codable, Equatable, Identifiable {
@@ -65,7 +107,7 @@ struct MappingObservation: Codable, Equatable, Identifiable {
 }
 
 struct MappingJournal: Codable, Equatable {
-    var schemaVersion = 1
+    var schemaVersion = 2
     var projects: [MappingProject] = []
     var horizons: [MappingHorizon] = []
     var excavations: [MappingExcavation] = []
@@ -74,7 +116,7 @@ struct MappingJournal: Codable, Equatable {
     var selection = MappingContext()
 
     func validate() throws {
-        guard schemaVersion == 1 else { throw StorageError.unsupportedVersion }
+        guard [1, 2].contains(schemaVersion) else { throw StorageError.unsupportedVersion }
         func unique(_ ids: [UUID]) -> Bool { Set(ids).count == ids.count }
         guard unique(projects.map(\.id)), unique(horizons.map(\.id)),
               unique(excavations.map(\.id)), unique(plans.map(\.id)), unique(observations.map(\.id)),
@@ -83,7 +125,12 @@ struct MappingJournal: Codable, Equatable {
                   (h.elevationMeters?.isFinite ?? true) && !h.elevationDatum.isEmpty }),
               excavations.allSatisfy({ e in projects.contains { $0.id == e.projectID } && !e.name.isEmpty &&
                   !e.horizonIDs.isEmpty && e.horizonIDs.allSatisfy { id in horizons.contains { $0.id == id && $0.projectID == e.projectID } } }),
-              plans.allSatisfy({ p in horizons.contains { $0.id == p.horizonID } && !p.version.isEmpty }),
+              unique(plans.filter { $0.file != nil }.map(\.attachmentID)),
+              plans.allSatisfy({ p in horizons.contains { $0.id == p.horizonID } && !p.version.isEmpty &&
+                  (p.file.map { f in !f.originalFilename.isEmpty && !f.crs.isEmpty && !f.axes.isEmpty &&
+                      f.sha256.range(of: #"^[a-f0-9]{64}$"#, options: .regularExpression) != nil &&
+                      (1...10_000_000).contains(f.byteCount) && f.importedAt.timeIntervalSinceReferenceDate.isFinite &&
+                      f.unitDeclaration == "userConfirmedAtImport" } ?? true) }),
               validContext(selection) else { throw StorageError.invalidRecord }
         for o in observations {
             guard validContext(MappingContext(projectID: o.projectID, horizonID: o.horizonID, excavationID: o.excavationID)),
@@ -97,11 +144,20 @@ struct MappingJournal: Codable, Equatable {
                   (-18 * 3600...18 * 3600).contains(o.observedUTCOffsetSeconds),
                   o.measurementIDs.isEmpty else { throw StorageError.invalidRecord }
             if let c = o.coordinates {
-                guard [c.x, c.y, c.z].contains(where: { $0 != nil }),
+                guard ([c.x, c.y, c.z].contains(where: { $0 != nil }) || c.zOrigin == .manualOverride),
                       [c.x, c.y, c.z].allSatisfy({ $0?.isFinite ?? true }),
-                      !c.crs.isEmpty, !c.axes.isEmpty, c.units == "m", c.source == "manual", !c.provenance.isEmpty else {
+                      !c.crs.isEmpty, !c.axes.isEmpty, ["m", "mm", "drawing"].contains(c.units), ["manual", "plan", "manualInPlan"].contains(c.source), !c.provenance.isEmpty else {
                     throw StorageError.invalidRecord
                 }
+                if let planID = c.planID {
+                    guard ["plan", "manualInPlan"].contains(c.source), let plan = plans.first(where: { $0.id == planID }),
+                          plan.horizonID == o.horizonID, let file = plan.file, (c.source != "plan" || (c.x != nil && c.y != nil)),
+                          c.units == file.units.coordinateUnits, c.crs == file.crs, c.axes == file.axes else { throw StorageError.invalidRecord }
+                } else if c.source != "manual" || c.units != "m" { throw StorageError.invalidRecord }
+                if c.zOrigin == .horizonDefault {
+                    guard c.zHorizonID == o.horizonID, let elevation = c.zHorizonElevation,
+                          elevation.isFinite, c.z == elevation, c.zDatum?.isEmpty == false else { throw StorageError.invalidRecord }
+                } else if c.zHorizonID != nil || c.zHorizonElevation != nil || c.zDatum != nil { throw StorageError.invalidRecord }
             }
         }
     }
@@ -144,32 +200,53 @@ struct MappingDraft: Equatable {
     var chainageOriginAndDirection = ""
     var observedAtOverride: Date?
     var timeZoneID = TimeZone.current.identifier
-    var x = "", y = "", z = ""
+    var x = "" { didSet { markManualXYEdit() } }
+    var y = "" { didSet { markManualXYEdit() } }
+    private(set) var planID: UUID?
+    private(set) var xyUnits = "m"
+    private(set) var xySource = "manual"
+    private mutating func markManualXYEdit() {
+        if planID != nil {
+            xySource = "manualInPlan"
+            if !coordinateProvenance.contains("XY manually overridden") { coordinateProvenance += "; XY manually overridden in selected drawing frame" }
+        }
+    }
+    mutating func selectPlanPoint(_ point: PlanPoint, plan: MappingPlanReference) throws {
+        guard let file = plan.file, point.x.isFinite, point.y.isFinite else { throw StorageError.invalidRecord }
+        x = String(point.x); y = String(point.y)
+        planID = plan.id; xyUnits = file.units.coordinateUnits; xySource = "plan"
+        crs = file.crs; axes = file.axes
+        coordinateProvenance = "plan \(plan.id.uuidString); revision \(plan.version); SHA-256 \(file.sha256); drawing WCS XY; user selected; accuracy unknown; \(file.unitDeclaration)"
+    }
+    var z = "" { didSet { zOrigin = .manualOverride; zHorizonID = nil; zHorizonElevation = nil; zDatum = nil } }
+    private(set) var zOrigin: ElevationOrigin?
+    private(set) var zHorizonID: UUID?
+    private(set) var zHorizonElevation: Double?
+    private(set) var zDatum: String?
     var crs = "", axes = "", coordinateProvenance = ""
     var notes = ""
+    mutating func suggestElevation(_ horizon: MappingHorizon?) {
+        guard zOrigin != .manualOverride else { return }
+        z = horizon?.elevationMeters.map { ElevationInput.text($0) } ?? ""
+        zOrigin = horizon?.elevationMeters == nil ? nil : .horizonDefault
+        zHorizonID = zOrigin == nil ? nil : horizon?.id
+        zHorizonElevation = horizon?.elevationMeters
+        zDatum = zOrigin == nil ? nil : horizon?.elevationDatum
+    }
     var hasChanges: Bool {
-        ![picket, chainageOriginAndDirection, x, y, z, crs, axes, coordinateProvenance, notes].allSatisfy(\.isEmpty) || observedAtOverride != nil
+        ![picket, chainageOriginAndDirection, x, y, crs, axes, coordinateProvenance, notes].allSatisfy(\.isEmpty) ||
+            observedAtOverride != nil || zOrigin == .manualOverride
     }
     func coordinates() throws -> MappingCoordinates? {
         func number(_ text: String) throws -> Double? {
-            if text.trimmingCharacters(in: .whitespaces).isEmpty { return nil }
-            guard text.range(of: #"^-?[0-9]+(?:[.,][0-9]+)?$"#, options: .regularExpression) != nil,
-                  let value = Double(text.replacingOccurrences(of: ",", with: ".")), value.isFinite else {
-                throw MappingError.invalid("Координаты должны быть конечными числами; неизвестные значения оставьте пустыми.")
-            }
-            return value
+            if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return nil }
+            return try ElevationInput.meters(text)
         }
         let values = try [number(x), number(y), number(z)]
-        guard values.contains(where: { $0 != nil }) else {
-            if !crs.isEmpty || !axes.isEmpty || !coordinateProvenance.isEmpty { throw MappingError.invalid("Введите хотя бы одну координату или очистите её метаданные.") }
-            return nil
-        }
-        guard !crs.trimmingCharacters(in: .whitespaces).isEmpty,
-              !axes.trimmingCharacters(in: .whitespaces).isEmpty,
-              !coordinateProvenance.trimmingCharacters(in: .whitespaces).isEmpty else {
-            throw MappingError.invalid("Укажите СК, оси и источник координат. Если неизвестно — напишите «неизвестно».")
-        }
-        return MappingCoordinates(x: values[0], y: values[1], z: values[2], crs: crs, axes: axes,
-                                  units: "m", source: "manual", provenance: coordinateProvenance)
+        guard values.contains(where: { $0 != nil }) || zOrigin == .manualOverride else { return nil }
+        return MappingCoordinates(x: values[0], y: values[1], z: values[2],
+            crs: crs.isEmpty ? "unknown" : crs, axes: axes.isEmpty ? "unknown" : axes,
+            units: xyUnits, source: xySource, provenance: coordinateProvenance.isEmpty ? "manual; accuracy unknown" : coordinateProvenance,
+            zOrigin: zOrigin, zHorizonID: zHorizonID, zHorizonElevation: zHorizonElevation, zDatum: zDatum, planID: planID)
     }
 }
