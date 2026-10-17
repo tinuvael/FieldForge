@@ -21,10 +21,11 @@ Photo documentation is a core **future** Mapping/Plan workflow: named observatio
 - Save consecutive individual picket observations with numeric meters, original field date/timezone, optional X/Y/Z and notes. The compact form automatically records unknown/manual or selected-plan provenance. Horizon elevation suggests nominal Z; manual override/clear is preserved. Success resets per-point data and suggests horizon Z again; failures retain the draft.
 - Offline multi-DXF import from Files per horizon, original files with SHA-256, explicit unit/CRS setup, recoverable pending imports, pan/zoom and confirmed XY picking. LINE, straight LWPOLYLINE, 2D/3D POLYLINE in WCS XY projection, ARC/CIRCLE, POINT and bounded plain TEXT/MTEXT display; source 3D vertices and original bytes are retained separately from observation Z; unsupported entities including BLOCK/INSERT are reported. Saved source-plan markers open the same original journal records, with excavation filtering and overlapping-point selection. See [P2 workflow, DXF subset and data safety](docs/p2-dxf.md).
 - Project journal with searchable horizon/excavation selectors, picket/number search, an optional inclusive date period and secondary date/picket sorting; read-only original observations. Full relationships are validated in atomic versioned JSON commits with a previous-snapshot backup. See [P1 workflow/storage](docs/p1-mapping.md).
-- Automatic screen-plane measurements using Core Motion: dip angle, nullable dip direction, magnetic/motion diagnostics and quality checks; HOLD freezes a complete observation, SAVE stores it once.
+- Integrated point measurements: «Измерить iPhone» opens a native plane-orientation dial with HOLD/retake/add; «Ручной ввод» adds geological compass originals. Multiple mixed readings stay in the draft until one atomic point save; journal details show every original. See [P3.1 capture and storage](docs/p3-measurements.md) and [verification](docs/p3-verification.md).
+- Independent automatic screen-plane measurements using Core Motion: dip angle, nullable dip direction, magnetic/motion diagnostics and quality checks; HOLD freezes a complete observation, SAVE stores it once.
 - Manual geological-compass entry: dip angle 0–90°, dip direction 0–360°, magnetic/true/grid/unknown north and optional notes. Decimal comma/dot is accepted, validation is shown before saving, and 360° is stored as 0° with original input retained.
 - Horizontal manual planes require an undefined direction (blank field). Vertical manual planes permit blank direction or an explicitly confirmed conventional dip side. The latter is labeled as a convention.
-- A shared offline journal for manual, iPhone and simulator observations, details, original notes/inputs, source labels and deletion. Manual records contain no artificial sensor samples.
+- The independent offline journal for manual, iPhone and simulator observations, details, original notes/inputs, source labels and deletion. Manual records contain no artificial sensor samples.
 - CSV export through the native Share Sheet, including source, north, direction meaning and mixed observation types.
 - Automatic, validated migration of deployed Phase 1 JSON records with an exact original backup and failure protection.
 
@@ -36,7 +37,14 @@ The project owner reports a successful installation and launch on **iPhone 15 Pr
 
 They do **not** establish geological compass accuracy, repeatability, long-term reliability, magnetic interference rejection or Phase 2 upgrade behavior. High magnetometer calibration does not exclude local steel/rock/electrical interference. Controlled comparison with independent instruments and a validated phone fixture remains required; see the [physical validation procedure](docs/measurement-geometry.md).
 
-## Manual workflow
+## Mapping measurement workflow
+
+1. Select Project/Horizon/Excavation and enter the picket.
+2. Use «Измерить iPhone → Зафиксировать → Добавить замер» or «Ручной ввод → Добавить замер». Repeat for more originals; all remain unsaved point evidence.
+3. Tap «Сохранить наблюдение» to save the point and its originals together. Success keeps context and nominal horizon Z; failure keeps the draft. Tabs, DXF navigation, cancelled sheets and temporary backgrounding preserve added readings. Unsaved drafts do not survive process termination.
+4. Open the project journal or a saved plan marker to inspect the originals and raw/manual provenance. No automatic J1–J5 interpretation is performed.
+
+## Independent manual workflow
 
 1. Open «Картирование → Сервисы → Измерение» and select «Геологический компас».
 2. Enter dip and direction, select the recorded north type and optionally add notes. For 0° leave direction blank; for 90° confirm a conventional side if entering one.
@@ -53,7 +61,11 @@ The active journal stays at Application Support/FieldForge/`measurements-v1.json
 
 CSV uses UTF-8 BOM, comma separators, CRLF records, UTC ISO 8601 timestamps, round-trip numeric precision and empty cells for missing data. The first 24 Phase 1 column names/order are retained; four provenance/original-input columns are appended. Manual diagnostic cells are blank. Spreadsheet-formula-like text is protected. Consumers must accept additional columns/new enums and full-precision numeric formatting. Use Excel's UTF-8/comma/decimal-dot import when regional detection differs. Excel numeric precision may still reduce values; CSV is not a complete JSON/attachment backup.
 
-The project graph uses `mapping-v1.json` (schema 2, lossless P1 migration with immutable `.p1-backup`), isolated from the protected standalone measurement journal. It is atomically rewritten as one validated aggregate; `mapping-v1.json.previous` retains the prior snapshot. No legacy assignment/migration is guessed. Managed original DXF files and pending import manifests live beside it under `plans/`; a JSON-only copy is not a complete backup. SQLite remains a future storage step for large workloads; see the [P2 storage/recovery contract](docs/p2-dxf.md).
+The project graph uses `mapping-v1.json` (schema 3, lossless P1/P2 upgrade with immutable `.p1-backup`/`.p2-backup`), isolated from the protected standalone measurement journal. It is atomically rewritten as one validated aggregate; `mapping-v1.json.previous` retains the prior snapshot. No legacy assignment/migration is guessed. Managed original DXF files and pending import manifests live beside it under `plans/`; a JSON-only copy is not a complete backup. SQLite remains a future storage step for large workloads; see the [P2 storage/recovery contract](docs/p2-dxf.md).
+
+## Branding
+
+The current icon uses the owner-supplied faceted compass artwork. Its original master is preserved under `branding/`; regenerate the complete, proportional 1024px AppIcon with `python3 scripts/generate_app_icon.py` on macOS. See [artwork and generation details](branding/README.md).
 
 ## Development
 

@@ -101,22 +101,44 @@ struct MappingObservation: Codable, Equatable, Identifiable {
     let createdAt: Date
     let updatedAt: Date
     let coordinates: MappingCoordinates?
-    // Original measurement linking/capture is deferred to Issue #8.
     let measurementIDs: [UUID]
     let notes: String
 }
 
 struct MappingJournal: Codable, Equatable {
-    var schemaVersion = 2
+    var schemaVersion = 3
     var projects: [MappingProject] = []
     var horizons: [MappingHorizon] = []
     var excavations: [MappingExcavation] = []
     var plans: [MappingPlanReference] = []
     var observations: [MappingObservation] = []
     var selection = MappingContext()
+    var measurements: [Measurement] = []
+
+    init() {}
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, projects, horizons, excavations, plans, observations, selection, measurements
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try c.decode(Int.self, forKey: .schemaVersion)
+        projects = try c.decode([MappingProject].self, forKey: .projects)
+        horizons = try c.decode([MappingHorizon].self, forKey: .horizons)
+        excavations = try c.decode([MappingExcavation].self, forKey: .excavations)
+        plans = try c.decode([MappingPlanReference].self, forKey: .plans)
+        observations = try c.decode([MappingObservation].self, forKey: .observations)
+        selection = try c.decode(MappingContext.self, forKey: .selection)
+        // Only old schemas may omit the new evidence table. A damaged v3 file fails closed.
+        measurements = schemaVersion < 3 ? (try c.decodeIfPresent([Measurement].self, forKey: .measurements) ?? []) : try c.decode([Measurement].self, forKey: .measurements)
+    }
+
+    func measurements(for observation: MappingObservation) -> [Measurement] {
+        let byID = Dictionary(measurements.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return observation.measurementIDs.compactMap { byID[$0] }
+    }
 
     func validate() throws {
-        guard [1, 2].contains(schemaVersion) else { throw StorageError.unsupportedVersion }
+        guard [1, 2, 3].contains(schemaVersion) else { throw StorageError.unsupportedVersion }
         func unique(_ ids: [UUID]) -> Bool { Set(ids).count == ids.count }
         guard unique(projects.map(\.id)), unique(horizons.map(\.id)),
               unique(excavations.map(\.id)), unique(plans.map(\.id)), unique(observations.map(\.id)),
@@ -132,6 +154,11 @@ struct MappingJournal: Codable, Equatable {
                       (1...10_000_000).contains(f.byteCount) && f.importedAt.timeIntervalSinceReferenceDate.isFinite &&
                       f.unitDeclaration == "userConfirmedAtImport" } ?? true) }),
               validContext(selection) else { throw StorageError.invalidRecord }
+        let linkedIDs = observations.flatMap(\.measurementIDs)
+        guard unique(measurements.map(\.id)), unique(linkedIDs),
+              Set(linkedIDs) == Set(measurements.map(\.id)),
+              measurements.allSatisfy(\.isSavable),
+              schemaVersion == 3 || (measurements.isEmpty && linkedIDs.isEmpty) else { throw StorageError.invalidRecord }
         for o in observations {
             guard validContext(MappingContext(projectID: o.projectID, horizonID: o.horizonID, excavationID: o.excavationID)),
                   o.chainageMeters.isFinite, o.chainageMeters >= 0,
@@ -142,7 +169,7 @@ struct MappingJournal: Codable, Equatable {
                   o.updatedAt == o.createdAt,
                   TimeZone(identifier: o.observedTimeZoneID) != nil,
                   (-18 * 3600...18 * 3600).contains(o.observedUTCOffsetSeconds),
-                  o.measurementIDs.isEmpty else { throw StorageError.invalidRecord }
+                  unique(o.measurementIDs) else { throw StorageError.invalidRecord }
             if let c = o.coordinates {
                 guard ([c.x, c.y, c.z].contains(where: { $0 != nil }) || c.zOrigin == .manualOverride),
                       [c.x, c.y, c.z].allSatisfy({ $0?.isFinite ?? true }),
@@ -196,6 +223,12 @@ enum PicketInput {
 }
 
 struct MappingDraft: Equatable {
+    private(set) var measurements: [Measurement] = []
+    mutating func addMeasurement(_ reading: Measurement) throws {
+        guard reading.isSavable, !measurements.contains(where: { $0.id == reading.id }) else { throw StorageError.invalidRecord }
+        measurements.append(reading)
+    }
+    mutating func removeMeasurement(id: UUID) { measurements.removeAll { $0.id == id } }
     var picket = ""
     var chainageOriginAndDirection = ""
     var observedAtOverride: Date?
@@ -235,7 +268,7 @@ struct MappingDraft: Equatable {
     }
     var hasChanges: Bool {
         ![picket, chainageOriginAndDirection, x, y, crs, axes, coordinateProvenance, notes].allSatisfy(\.isEmpty) ||
-            observedAtOverride != nil || zOrigin == .manualOverride
+            observedAtOverride != nil || zOrigin == .manualOverride || !measurements.isEmpty
     }
     func coordinates() throws -> MappingCoordinates? {
         func number(_ text: String) throws -> Double? {

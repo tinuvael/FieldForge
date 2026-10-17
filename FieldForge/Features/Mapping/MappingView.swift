@@ -32,6 +32,7 @@ struct MappingView: View {
     @EnvironmentObject private var mapping: MappingModel
     @State private var editor: ContextEditorKind?
     @State private var showPlans = false
+    @State private var measurement: MappingCaptureKind?
     @FocusState private var focused: Bool
     var body: some View {
         NavigationStack {
@@ -65,6 +66,12 @@ struct MappingView: View {
                     .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Вернуться") { showPlans = false } } }
             }
         }
+        .sheet(item: $measurement) { kind in
+            MappingMeasurementSheet(automatic: kind == .automatic) { reading in
+                guard mapping.workflow != nil else { throw StorageError.writesBlocked }
+                try mapping.workflow!.draft.addMeasurement(reading)
+            }
+        }
         .sheet(item: $editor) { kind in ContextEditor(kind: kind) }
         .alert("Картирование", isPresented: Binding(get: { mapping.error != nil }, set: { if !$0 { mapping.error = nil } })) {
             Button("Понятно", role: .cancel) { mapping.error = nil }
@@ -75,7 +82,7 @@ struct MappingView: View {
             set: { if !$0 { mapping.perform { $0.cancelContextChange() } } })) {
                 Button("Удалить черновик", role: .destructive) { mapping.perform { try $0.confirmDiscard() } }
                 Button("Остаться", role: .cancel) { mapping.perform { $0.cancelContextChange() } }
-            } message: { Text("Пикет, дата, координаты и примечания ещё не сохранены.") }
+            } message: { Text("Пикет, дата, координаты, замеры и примечания ещё не сохранены.") }
     }
     private func draft<T>(_ key: WritableKeyPath<MappingDraft, T>, fallback: T) -> Binding<T> {
         Binding(get: { mapping.workflow?.draft[keyPath: key] ?? fallback },
@@ -114,8 +121,25 @@ struct MappingView: View {
                 } header: { Text(MappingCoordinateText.header(xyUnits: w.draft.xyUnits)) } footer: {
                     Text(w.draft.zOrigin == .horizonDefault ? "Z: по горизонту · номинальная отметка, не съёмка" : "Z: ручной ввод или неизвестно · метры")
                 }
-                Section("Измерения") {
-                    NavigationLink("Открыть независимое измерение", destination: MeasurementView())
+                Section {
+                    Button("Измерить iPhone", systemImage: "iphone.radiowaves.left.and.right") {
+                        focused = false; measurement = .automatic
+                    }.accessibilityIdentifier("captureMappingAutomatic")
+                    Button("Ручной ввод", systemImage: "pencil.and.list.clipboard") {
+                        focused = false; measurement = .manual
+                    }.accessibilityIdentifier("captureMappingManual")
+                    ForEach(w.draft.measurements) { reading in
+                        HStack {
+                            MeasurementSummary(reading: reading)
+                            Spacer()
+                            Button(role: .destructive) {
+                                mapping.perform { $0.draft.removeMeasurement(id: reading.id) }
+                            } label: { Image(systemName: "trash").frame(minWidth: 44, minHeight: 44) }
+                                .buttonStyle(.borderless).accessibilityLabel("Удалить замер из черновика")
+                        }.accessibilityIdentifier("draftMeasurement-\(reading.id.uuidString)")
+                    }
+                } header: { Text("Замеры: \(w.draft.measurements.count)") } footer: {
+                    Text("Исходные замеры сохраняются вместе с точкой. Системы J1–J5 не назначаются автоматически.")
                 }
                 Section("Примечания") {
                     TextField("Полевые примечания", text: draft(\.notes, fallback: ""), axis: .vertical)
@@ -251,4 +275,9 @@ struct ContextEditor: View {
             dismiss()
         } catch { self.error = error.localizedDescription }
     }
+}
+
+private enum MappingCaptureKind: String, Identifiable {
+    case automatic, manual
+    var id: String { rawValue }
 }

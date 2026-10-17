@@ -58,8 +58,94 @@ final class MappingUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["journalEmpty"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["ПК 0+005"].exists)
     }
+    @MainActor func testP3MixedDraftCaptureDismissBackgroundPlanTabsAndAtomicSave() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["FIELD_FORGE_TEST_RUN_ID"] = UUID().uuidString
+        app.launchArguments = ["--ui-testing"]; app.launch()
+        let suffix = String(UUID().uuidString.prefix(8))
+        let project = "P3-\(suffix)", excavation = "E-\(suffix)"
+        create("projectPicker", name: project, app: app); select("projectPicker", value: project, app: app)
+        create("horizonPicker", name: "+393 м", app: app); select("horizonPicker", value: "+393 м", app: app)
+        create("excavationPicker", name: excavation, app: app); select("excavationPicker", value: excavation, app: app)
+        app.textFields["mappingPicket"].tap(); app.textFields["mappingPicket"].typeText("ПК 0+005"); dismissKeyboard(app)
+        reveal("captureMappingManual", app: app); app.buttons["captureMappingManual"].tap()
+        let add = app.buttons["addMappingMeasurement"]
+        XCTAssertTrue(add.waitForExistence(timeout: 5)); XCTAssertFalse(add.isEnabled)
+        app.textFields["manualDip"].tap(); app.textFields["manualDip"].typeText("45,125")
+        app.textFields["manualDirection"].tap(); app.textFields["manualDirection"].typeText("270"); dismissKeyboard(app)
+        XCTAssertTrue(add.isEnabled); add.tap()
+        XCTAssertTrue(app.staticTexts["Замеры: 1"].waitForExistence(timeout: 5))
+        app.buttons["captureMappingAutomatic"].tap()
+        let hold = app.buttons["mappingHold"]
+        XCTAssertTrue(hold.waitForExistence(timeout: 5))
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "enabled == true"), object: hold)
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 5), .completed)
+        hold.tap(); XCTAssertEqual(hold.label, "Повторить"); XCTAssertTrue(add.isEnabled)
+        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screenshot.name = "P3 held plane dial"; screenshot.lifetime = .keepAlways; self.add(screenshot)
+        // A frozen complete reading remains addable after temporary backgrounding.
+        XCUIDevice.shared.press(.home); app.activate()
+        XCTAssertEqual(hold.label, "Повторить"); XCTAssertTrue(add.isEnabled)
+        add.tap(); XCTAssertTrue(app.staticTexts["Замеры: 2"].waitForExistence(timeout: 5))
+        app.buttons["captureMappingAutomatic"].tap()
+        XCTAssertTrue(app.buttons["closeMappingMeasurement"].waitForExistence(timeout: 5))
+        app.buttons["closeMappingMeasurement"].tap()
+        XCTAssertTrue(app.staticTexts["Замеры: 2"].waitForExistence(timeout: 5))
+        top(app); app.buttons["selectHorizonPlan"].tap()
+        XCTAssertTrue(app.buttons["Вернуться"].waitForExistence(timeout: 5)); app.buttons["Вернуться"].tap()
+        app.tabBars.buttons["План"].tap(); app.tabBars.buttons["Картирование"].tap()
+        reveal("captureMappingAutomatic", app: app); XCTAssertTrue(app.staticTexts["Замеры: 2"].exists)
+        app.buttons["projectPicker"].tap(); app.buttons["Не выбрано"].tap()
+        XCTAssertTrue(app.buttons["Остаться"].waitForExistence(timeout: 5)); app.buttons["Остаться"].tap()
+        XCTAssertTrue(app.staticTexts["Замеры: 2"].exists)
+        // An isolated standalone journal stays empty even after adding draft originals.
+        app.buttons["mappingServices"].tap(); app.buttons["Неназначенные измерения"].tap()
+        XCTAssertTrue(app.staticTexts["Неназначенных измерений нет"].waitForExistence(timeout: 5))
+        app.navigationBars.buttons.element(boundBy: 0).tap()
+        save(app); saved(app); top(app)
+        XCTAssertEqual(app.textFields["mappingZ"].value as? String, "393")
+        reveal("captureMappingAutomatic", app: app); XCTAssertTrue(app.staticTexts["Замеры: 0"].exists)
+        app.buttons["mappingJournal"].tap(); app.staticTexts["ПК 0+005"].tap()
+        let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "pointMeasurement-"))
+        revealMeasurements(rows, app: app)
+        XCTAssertEqual(rows.count, 2)
+        rows.firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["Исходный ручной ввод"].waitForExistence(timeout: 5))
+        let originalDip = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "45,125")).firstMatch
+        for _ in 0..<8 { if originalDip.exists { break }; scrollForm(app, up: true) }
+        XCTAssertTrue(originalDip.exists)
+        app.terminate(); app.launch(); app.buttons["mappingJournal"].tap(); app.staticTexts["ПК 0+005"].tap()
+        revealMeasurements(rows, app: app); XCTAssertEqual(rows.count, 2)
+    }
+    @MainActor private func revealMeasurements(_ rows: XCUIElementQuery, app: XCUIApplication) {
+        for _ in 0..<8 {
+            if rows.firstMatch.exists && rows.firstMatch.isHittable { return }
+            scrollForm(app, up: true)
+        }
+        XCTFail("Point originals not visible")
+    }
+    @MainActor private func reveal(_ identifier: String, app: XCUIApplication) {
+        top(app)
+        for _ in 0..<12 {
+            if app.buttons[identifier].exists && app.buttons[identifier].isHittable { return }
+            scrollForm(app, up: true)
+        }
+        XCTAssertTrue(app.buttons[identifier].isHittable)
+    }
     @MainActor private func top(_ app: XCUIApplication) {
-        for _ in 0..<16 { if app.textFields["mappingPicket"].isHittable { return }; app.swipeDown() }
+        let field = app.textFields["mappingPicket"]
+        for _ in 0..<16 {
+            let viewport = app.collectionViews.firstMatch.frame
+            if field.exists && viewport.contains(CGPoint(x: field.frame.midX, y: field.frame.midY)) && field.isHittable { return }
+            scrollForm(app, up: false)
+        }
+    }
+    @MainActor private func scrollForm(_ app: XCUIApplication, up: Bool) {
+        let form = app.collectionViews.firstMatch
+        let start = form.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: up ? 0.8 : 0.3))
+        let end = form.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.55))
+        start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
     }
     @MainActor private func create(_ picker: String, name: String, app: XCUIApplication) {
         let button = app.buttons["manage-\(picker)"]; XCTAssertTrue(button.waitForExistence(timeout: 10)); button.tap()
