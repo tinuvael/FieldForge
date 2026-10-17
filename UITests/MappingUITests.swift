@@ -128,11 +128,11 @@ final class MappingUITests: XCTestCase {
         create("horizonPicker", name: "+393 м", app: app); select("horizonPicker", value: "+393 м", app: app)
         create("excavationPicker", name: "E", app: app); select("excavationPicker", value: "E", app: app)
         fill(app.textFields["mappingPicket"], "ПК 0+005", app: app)
-        show(app.buttons["mappingInterval"], app: app); app.buttons["mappingInterval"].tap()
+        show(disclosure("Интервал и положение", app: app), app: app); disclosure("Интервал и положение", app: app).tap()
         fill(app.textFields["mappingStartPicket"], "5", app: app)
         fill(app.textFields["mappingEndPicket"], "10,5", app: app)
         show(app.buttons["mappingPosition"], app: app); app.buttons["mappingPosition"].tap(); app.buttons["Кровля"].tap()
-        app.buttons["mappingInterval"].tap()
+        disclosure("Интервал и положение", app: app).tap()
         for index in 1...2 {
             reveal("captureMappingManual", app: app); app.buttons["captureMappingManual"].tap()
             XCTAssertTrue(app.textFields["manualDip"].waitForExistence(timeout: 5))
@@ -140,7 +140,7 @@ final class MappingUITests: XCTestCase {
             fill(app.textFields["manualDirection"], "\(350 + index)", app: app)
             app.buttons["addMappingMeasurement"].tap()
         }
-        reveal("jointSetsSection", app: app); app.buttons["jointSetsSection"].tap()
+        top(app); show(disclosure("Системы трещин", app: app), app: app); disclosure("Системы трещин", app: app).tap()
         for index in 1...5 {
             show(app.buttons["addJointSet"], app: app); app.buttons["addJointSet"].tap()
             let edit = app.buttons["editJointSet-J\(index)"]; show(edit, app: app); edit.tap()
@@ -169,7 +169,7 @@ final class MappingUITests: XCTestCase {
         XCTAssertEqual(app.textFields["jointAperture"].value as? String, "-1")
         fill(app.textFields["jointAperture"], "0,125", app: app)
         back(app)
-        reveal("tectonicsSection", app: app); app.buttons["tectonicsSection"].tap()
+        top(app); show(disclosure("Тектоника:", app: app), app: app); disclosure("Тектоника:", app: app).tap()
         for index in 1...2 {
             show(app.buttons["addTectonicStructure"], app: app); app.buttons["addTectonicStructure"].tap()
             let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "editTectonic-"))
@@ -190,30 +190,33 @@ final class MappingUITests: XCTestCase {
         XCTAssertTrue(app.buttons["projectPicker"].label.contains(project))
         XCTAssertEqual(app.textFields["mappingPicket"].value as? String, "Пикет: ПК 0+005 или метры")
         XCTAssertEqual(app.textFields["mappingZ"].value as? String, "393")
-        reveal("jointSetsSection", app: app); XCTAssertTrue(app.buttons["jointSetsSection"].label.contains("0/5"))
-        reveal("tectonicsSection", app: app); XCTAssertTrue(app.buttons["tectonicsSection"].label.contains("0"))
+        top(app); show(disclosure("Системы трещин", app: app), app: app); XCTAssertTrue(disclosure("Системы трещин", app: app).label.contains("0/5"))
+        top(app); show(disclosure("Тектоника:", app: app), app: app); XCTAssertTrue(disclosure("Тектоника:", app: app).label.contains("0"))
         top(app); fill(app.textFields["mappingPicket"], "ПК 0+010", app: app); save(app); saved(app)
         app.terminate(); app.launch()
         app.buttons["mappingJournal"].tap()
         XCTAssertTrue(app.staticTexts["ПК 0+005"].waitForExistence(timeout: 5)); XCTAssertTrue(app.staticTexts["ПК 0+010"].exists)
         app.staticTexts["ПК 0+005"].tap()
         show(app.staticTexts["Кровля"], app: app)
-        for index in 1...5 { show(app.buttons["savedJointSet-J\(index)"], app: app) }
-        show(app.buttons["savedJointSet-J1"], app: app, upward: false); app.buttons["savedJointSet-J1"].tap()
+        for index in 1...5 { show(disclosure("J\(index) · интерпретация", app: app), app: app) }
+        show(disclosure("J1 · интерпретация", app: app), app: app, upward: false); disclosure("J1 · интерпретация", app: app).tap()
         show(app.staticTexts["0.12500000"], app: app)
         let links = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "jointSource-J1-"))
         show(links.firstMatch, app: app); XCTAssertEqual(links.count, 2)
         links.firstMatch.tap()
         XCTAssertTrue(app.staticTexts["Исходный ручной ввод"].waitForExistence(timeout: 5))
         back(app)
-        show(app.buttons["savedTectonic-1"], app: app); app.buttons["savedTectonic-1"].tap()
+        show(disclosure("№1 · Разлом", app: app), app: app); disclosure("№1 · Разлом", app: app).tap()
         show(app.staticTexts["0.50000000"].firstMatch, app: app)
-        show(app.buttons["savedTectonic-2"], app: app); app.buttons["savedTectonic-2"].tap()
+        show(disclosure("№2 · Разлом", app: app), app: app); disclosure("№2 · Разлом", app: app).tap()
         show(app.staticTexts["0.50000000"].firstMatch, app: app)
         let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         screenshot.name = "P32 saved tectonic structures"; screenshot.lifetime = .keepAlways; add(screenshot)
         back(app); app.staticTexts["ПК 0+010"].tap()
-        XCTAssertFalse(app.buttons["savedJointSet-J1"].exists)
+        XCTAssertFalse(disclosure("J1 · интерпретация", app: app).exists)
+    }
+    @MainActor private func disclosure(_ title: String, app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch
     }
     @MainActor private func fill(_ field: XCUIElement, _ text: String, app: XCUIApplication) {
         show(field, app: app); field.tap()
@@ -223,11 +226,10 @@ final class MappingUITests: XCTestCase {
     }
     @MainActor private func show(_ element: XCUIElement, app: XCUIApplication, upward: Bool = true) {
         for _ in 0..<24 {
-            let viewport = app.collectionViews.firstMatch.exists ? app.collectionViews.firstMatch.frame : app.scrollViews.firstMatch.frame
-            if element.exists && viewport.contains(CGPoint(x: element.frame.midX, y: element.frame.midY)) && element.isHittable { return }
+            if element.exists && element.isHittable { return }
             scrollForm(app, up: upward)
         }
-        XCTAssertTrue(element.exists && element.isHittable, "Element not visible: \(element)")
+        XCTFail("Element not visible: \(element)\n\(app.debugDescription)")
     }
     @MainActor private func back(_ app: XCUIApplication) { app.navigationBars.buttons.element(boundBy: 0).tap() }
     @MainActor private func revealMeasurements(_ rows: XCUIElementQuery, app: XCUIApplication) {
@@ -255,8 +257,8 @@ final class MappingUITests: XCTestCase {
     }
     @MainActor private func scrollForm(_ app: XCUIApplication, up: Bool) {
         let form = app.collectionViews.firstMatch
-        let start = form.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: up ? 0.8 : 0.3))
-        let end = form.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.55))
+        let start = form.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: up ? 0.8 : 0.3))
+        let end = form.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.55))
         start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
     }
     @MainActor private func create(_ picker: String, name: String, app: XCUIApplication) {

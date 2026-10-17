@@ -30,7 +30,7 @@ struct MappingIntervalForm: View {
             }.accessibilityIdentifier("mappingPosition")
             Text("Начало и конец — метры от того же начала и в том же направлении, что и основной пикет. Пустое поле остаётся неизвестным.")
                 .font(.caption).foregroundStyle(.secondary)
-        }.accessibilityIdentifier("mappingInterval")
+        }
     }
     private func picketError(_ text: String, field: String) -> String? {
         do { _ = try GeologyInput.optionalPicket(text, field: field); return nil } catch { return error.localizedDescription }
@@ -62,7 +62,7 @@ struct MappingGeologyForm: View {
                 }
                 Button("Добавить интерпретацию", action: addSet)
                     .disabled(sets.count >= 5).accessibilityIdentifier("addJointSet")
-            }.accessibilityIdentifier("jointSetsSection")
+            }
         }
         Section {
             DisclosureGroup("Тектоника: \(structures.count)") {
@@ -78,7 +78,7 @@ struct MappingGeologyForm: View {
                 }
                 Button("Добавить структуру") { structures.append(TectonicStructureDraft()) }
                     .accessibilityIdentifier("addTectonicStructure")
-            }.accessibilityIdentifier("tectonicsSection")
+            }
         }
     }
 }

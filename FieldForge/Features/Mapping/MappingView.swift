@@ -143,7 +143,7 @@ struct MappingView: View {
                         }.accessibilityIdentifier("draftMeasurement-\(reading.id.uuidString)")
                     }
                 } header: { Text("Замеры: \(w.draft.measurements.count)") } footer: {
-                    Text("Исходные замеры сохраняются вместе с точкой. Системы J1–J5 не назначаются автоматически. Удаление чернового замера также убирает ссылки на него из интерпретаций.")
+                    Text("Исходные замеры сохраняются вместе с точкой. Системы J1–J5 не назначаются автоматически.")
                 }
                 MappingGeologyForm(sets: draft(\.jointSets, fallback: []), structures: draft(\.tectonicStructures, fallback: []),
                                    measurements: w.draft.measurements, addSet: { mapping.perform { $0.draft.addJointSet() } })

@@ -30,7 +30,7 @@ struct MappingGeologyDetail: View {
                         }
                     }
                     Text(set.id.uuidString).font(.caption).textSelection(.enabled)
-                }.accessibilityIdentifier("savedJointSet-\(set.identifier.rawValue)")
+                }
             }
             if geology.jointSets.isEmpty { Text("Интерпретации не добавлены") }
         }
@@ -43,7 +43,7 @@ struct MappingGeologyDetail: View {
                     LabeledContent("Положение структуры", value: structure.position.isEmpty ? "Не указано" : structure.position)
                     LabeledContent("Описание", value: structure.description.isEmpty ? "Нет" : structure.description)
                     Text(structure.id.uuidString).font(.caption).textSelection(.enabled)
-                }.accessibilityIdentifier("savedTectonic-\(index + 1)")
+                }
             }
             if geology.tectonicStructures.isEmpty { Text("Структуры не добавлены") }
         }
