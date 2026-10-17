@@ -57,7 +57,7 @@ struct MappingView: View {
                         NavigationLink("Настройки", destination: SettingsView())
                     } label: { Label("Сервисы", systemImage: "ellipsis.circle") }.accessibilityIdentifier("mappingServices")
                 }
-                ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Готово") { focused = false } }
+                ToolbarItemGroup(placement: .keyboard) { Spacer(); if focused { Button("Готово") { focused = false } } }
             }
         }
         .sheet(isPresented: $showPlans) {
@@ -82,7 +82,7 @@ struct MappingView: View {
             set: { if !$0 { mapping.perform { $0.cancelContextChange() } } })) {
                 Button("Удалить черновик", role: .destructive) { mapping.perform { try $0.confirmDiscard() } }
                 Button("Остаться", role: .cancel) { mapping.perform { $0.cancelContextChange() } }
-            } message: { Text("Пикет, дата, координаты, замеры и примечания ещё не сохранены.") }
+            } message: { Text("Пикет, интервал, дата, координаты, замеры, интерпретации, тектоника и примечания ещё не сохранены.") }
     }
     private func draft<T>(_ key: WritableKeyPath<MappingDraft, T>, fallback: T) -> Binding<T> {
         Binding(get: { mapping.workflow?.draft[keyPath: key] ?? fallback },
@@ -115,6 +115,10 @@ struct MappingView: View {
                         .accessibilityIdentifier("mappingDate")
                 }
                 Section {
+                    MappingIntervalForm(start: draft(\.startPicket, fallback: ""), end: draft(\.endPicket, fallback: ""),
+                                        position: draft(\.observationPosition, fallback: nil))
+                }
+                Section {
                     coordinate("X", \.x); coordinate("Y", \.y); coordinate("Z", \.z)
                     Button("Выбрать на плане", systemImage: "map") { focused = false; showPlans = true }
                         .disabled(w.context.horizonID == nil).accessibilityIdentifier("selectHorizonPlan")
@@ -139,8 +143,10 @@ struct MappingView: View {
                         }.accessibilityIdentifier("draftMeasurement-\(reading.id.uuidString)")
                     }
                 } header: { Text("Замеры: \(w.draft.measurements.count)") } footer: {
-                    Text("Исходные замеры сохраняются вместе с точкой. Системы J1–J5 не назначаются автоматически.")
+                    Text("Исходные замеры сохраняются вместе с точкой. Системы J1–J5 не назначаются автоматически. Удаление чернового замера также убирает ссылки на него из интерпретаций.")
                 }
+                MappingGeologyForm(sets: draft(\.jointSets, fallback: []), structures: draft(\.tectonicStructures, fallback: []),
+                                   measurements: w.draft.measurements, addSet: { mapping.perform { $0.draft.addJointSet() } })
                 Section("Примечания") {
                     TextField("Полевые примечания", text: draft(\.notes, fallback: ""), axis: .vertical)
                         .lineLimit(3...8).focused($focused).accessibilityIdentifier("mappingNotes")
