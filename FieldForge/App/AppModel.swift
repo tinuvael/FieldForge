@@ -8,26 +8,24 @@ enum MeasurementMode: String, CaseIterable {
 
 @MainActor final class AppModel: ObservableObject {
     @Published private(set) var records: [Measurement] = []
-    @Published private(set) var sensorStatus = "Ожидание данных"
+    var sensorStatus: String { acquisition.status }
     @Published var errorMessage: String?
     @Published var notes = ""
     @Published private(set) var mode = MeasurementMode.automatic
     @Published var manualInput = ManualOrientationInput()
     @Published var manualNotes = ""
     @Published private(set) var savedManual: Measurement?
-    let session = MeasurementSession()
-    let provider: any SensorProvider
+    let acquisition: MeasurementAcquisition
+    var session: MeasurementSession { acquisition.session }
+    var provider: any SensorProvider { acquisition.provider }
     private var store: (any MeasurementStore)?
     private var storageWritable = false
-    private var measurementVisible = false
     var measurementScreenVisible = false
-    private var foreground = false
-    private var watchdog: Task<Void, Never>?
     var mock: MockSensorProvider? { provider as? MockSensorProvider }
     var displayed: Measurement? { session.displayed }
     var isHeld: Bool { session.isHeld }
     var canSave: Bool { session.canSave && storageWritable }
-    var canHold: Bool { session.live?.isSavable == true }
+    var canHold: Bool { session.canHold() }
     var manualValidationMessage: String? {
         do { _ = try manualInput.validated(); return nil }
         catch { return error.localizedDescription }
@@ -36,15 +34,20 @@ enum MeasurementMode: String, CaseIterable {
 
     init() {
         #if targetEnvironment(simulator)
-        provider = MockSensorProvider()
+        acquisition = MeasurementAcquisition(provider: MockSensorProvider())
         #else
-        provider = CoreMotionSensorProvider()
+        acquisition = MeasurementAcquisition(provider: CoreMotionSensorProvider())
         #endif
         do {
             let fileStore = try FileMeasurementStore.applicationStore()
+            #if DEBUG && targetEnvironment(simulator)
+            let namespace = ProcessInfo.processInfo.environment["FIELD_FORGE_TEST_RUN_ID"].flatMap(UUID.init(uuidString:)).map { "-" + $0.uuidString } ?? ""
+            #else
+            let namespace = ""
+            #endif
             #if DEBUG
             let selectedStore = ProcessInfo.processInfo.arguments.contains("--ui-testing")
-                ? FileMeasurementStore(url: fileStore.url.deletingLastPathComponent().appendingPathComponent("ui-testing.json"))
+                ? FileMeasurementStore(url: fileStore.url.deletingLastPathComponent().appendingPathComponent("ui-testing\(namespace).json"))
                 : fileStore
             #else
             let selectedStore = fileStore
@@ -53,59 +56,31 @@ enum MeasurementMode: String, CaseIterable {
             store = selectedStore
             storageWritable = true
         } catch { errorMessage = "Не удалось открыть журнал: \(error.localizedDescription) Запись заблокирована для сохранности файла." }
-        provider.onEvent = { [weak self] event in
-            guard let self, self.mode == .automatic else { return }
-            self.objectWillChange.send()
-            switch event {
-            case .sample(let sample):
-                self.session.receive(sample)
-                self.sensorStatus = sample.source == .simulatorMock ? "Демонстрационные данные" : "Данные Core Motion · 20 Гц"
-            case .unavailable(let reason):
-                self.session.invalidateLive()
-                self.sensorStatus = reason
-            }
-        }
+        acquisition.onChange = { [weak self] in self?.objectWillChange.send() }
     }
 
     func measurementScreenVisibilityChanged(_ visible: Bool) {
         measurementScreenVisible = visible
-        measurementVisible = visible
-        updateAcquisition()
+        acquisition.setVisible(visible)
     }
     func setLifecycle(measurementVisible: Bool, foreground: Bool) {
-        self.measurementVisible = measurementVisible
-        self.foreground = foreground
-        updateAcquisition()
-    }
-    private func updateAcquisition() {
-        watchdog?.cancel(); watchdog = nil
-        if mode == .automatic && measurementVisible && foreground && !isHeld {
-            provider.start()
-            watchdog = Task { [weak self] in
-                while !Task.isCancelled {
-                    do { try await Task.sleep(nanoseconds: 500_000_000) } catch { return }
-                    guard let self else { return }
-                    if let live = self.session.live,
-                       Date().timeIntervalSince(live.timestamp) > 1.5 {
-                        self.objectWillChange.send()
-                        self.session.invalidateLive()
-                        self.sensorStatus = "Данные устарели. Ожидание новых показаний."
-                    }
-                }
-            }
-        } else {
-            provider.stop()
-            objectWillChange.send()
-            session.invalidateLive()
-            if !isHeld { sensorStatus = "Датчики остановлены" }
-        }
+        acquisition.setLifecycle(visible: measurementVisible, foreground: foreground)
     }
     func toggleHold() {
         guard mode == .automatic else { return }
-        objectWillChange.send()
-        if isHeld { session.resume(); notes = "" }
-        else if !session.hold() { sensorStatus = "Нельзя фиксировать: нет свежего допустимого измерения." }
-        updateAcquisition()
+        if isHeld { acquisition.reset(); notes = "" }
+        else { acquisition.hold() }
+    }
+    // Mapping capture never calls the standalone store or depends on its writable state.
+    func beginMappingCapture() {
+        acquisition.setVisible(false)
+        acquisition.reset(); notes = ""
+        setMode(.automatic)
+        measurementScreenVisibilityChanged(true)
+    }
+    func endMappingCapture() {
+        measurementScreenVisibilityChanged(false)
+        acquisition.reset(); notes = ""
     }
     func saveFrozen() {
         guard mode == .automatic, canSave, let record = session.record(notes: notes), let store else { return }
@@ -118,7 +93,7 @@ enum MeasurementMode: String, CaseIterable {
     }
     func setMode(_ value: MeasurementMode) {
         mode = value
-        updateAcquisition()
+        acquisition.setAutomatic(value == .automatic)
     }
     func manualDraftChanged() { savedManual = nil }
     func saveManual() {

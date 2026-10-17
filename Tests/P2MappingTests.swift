@@ -84,7 +84,7 @@ final class P2MappingTests: XCTestCase {
         let original = try JSONDecoder().decode(MappingJournal.self, from: P1MappingFixture.data)
         try original.validate()
         let migrated = try store.load()
-        XCTAssertEqual(migrated.schemaVersion, 2)
+        XCTAssertEqual(migrated.schemaVersion, 3)
         XCTAssertEqual(migrated.projects, original.projects); XCTAssertEqual(migrated.horizons, original.horizons)
         XCTAssertEqual(migrated.excavations, original.excavations); XCTAssertEqual(migrated.observations, original.observations)
         XCTAssertEqual(migrated.selection, original.selection); XCTAssertEqual(migrated.plans, original.plans)

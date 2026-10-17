@@ -36,3 +36,7 @@ Tests compare **every original field** structurally and exact backup bytes, then
 ## P1 project journal
 
 P1 adds an isolated version-1 `mapping-v1.json` graph without migrating or assigning standalone measurements. See [P1 storage and recovery](p1-mapping.md). The v1/v2 path and original Phase 1 backup remain unchanged. Sensor recomputation validation now tolerates only 32 ULP numerical noise per orientation component across libm platforms; stored values, geometry/status/provenance and migration round-trip equality are preserved.
+
+## P3.1 mapping schema 3
+
+The independent measurement schema above is unchanged. The mapping aggregate at `mapping-v1.json` now adds an original-measurement table with exactly-one-point ownership through UUID references. The existing backup/validated round-trip/atomic upgrade sequence preserves old schema-1 bytes in `.p1-backup` and schema-2 bytes in `.p2-backup`, retaining observations and managed DXF references unchanged. Failed/unsupported/corrupt loads block writes, never reset. Schema 3 requires the evidence table even when empty. See [P3.1 contract](p3-measurements.md).

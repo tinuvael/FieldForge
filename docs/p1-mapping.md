@@ -1,5 +1,7 @@
 # P1 mapping workflow and persistence
 
+**P3.1 update:** [Integrated measurements](p3-measurements.md) supersedes historical standalone-only measurement navigation, empty measurement links and schema-1/2-only statements. Mapping now saves point-owned originals atomically in schema 3; the existing DXF contract is unchanged.
+
 **P2 update:** [P2 mapping and DXF contract](p2-dxf.md) supersedes historical P1 statements about optional horizon elevations, mandatory per-point coordinate strings, absent plans and schema 1. P2 adds nominal Z provenance and immutable managed DXF revisions on the same graph; orientation/measurement conventions are unchanged.
 
 ## Implemented workflow

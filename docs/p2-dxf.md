@@ -1,5 +1,7 @@
 # P2 mapping, nominal horizon elevations and offline DXF
 
+**P3.1 update:** [Integrated measurements](p3-measurements.md) supersedes historical standalone-only measurement navigation, empty measurement links and schema-1/2-only statements. Mapping now saves point-owned originals atomically in schema 3; the existing DXF contract is unchanged.
+
 P2 implements Issue #7 on the shared mapping graph. It supersedes the P1 descriptions of coordinate entry, horizon creation, plan availability and mapping schema. No geological orientation algorithm, manual/Core Motion capture, rating or wedge calculation changes.
 
 ## Capture and elevation

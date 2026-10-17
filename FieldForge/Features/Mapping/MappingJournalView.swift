@@ -177,6 +177,13 @@ struct MappingObservationDetail: View {
                     if let level = c.zHorizonElevation { Text("Исходная отметка: \(ElevationInput.label(level)); система: \(c.zDatum ?? "unknown")") }
                 } else { Text("Координаты не заданы") }
             }
+            Section("Исходные замеры: \(record.measurementIDs.count)") {
+                ForEach(mapping.workflow?.journal.measurements(for: record) ?? []) { reading in
+                    NavigationLink { MeasurementDetailView(record: reading) } label: { MeasurementSummary(reading: reading) }
+                        .accessibilityIdentifier("pointMeasurement-\(reading.id.uuidString)")
+                }
+                if record.measurementIDs.isEmpty { Text("Замеры не добавлены") }
+            }
             Section("Примечания") { Text(record.notes.isEmpty ? "Нет примечаний" : record.notes) }
             Section("Метаданные") {
                 LabeledContent("Создано", value: MeasurementDateText.format(record.createdAt, detailed: true))

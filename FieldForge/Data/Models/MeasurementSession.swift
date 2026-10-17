@@ -9,11 +9,14 @@ import Foundation
     var isHeld: Bool { frozen != nil }
     var canSave: Bool { frozen?.isSavable == true && !hasSavedFrozen }
 
+    func canHold(now: Date = Date()) -> Bool {
+        guard frozen == nil, let live, live.isSavable else { return false }
+        return (0...1.5).contains(now.timeIntervalSince(live.timestamp))
+    }
     func receive(_ sample: SensorSample) { live = Measurement.process(sample) }
     func invalidateLive() { live = nil }
     @discardableResult func hold(now: Date = Date()) -> Bool {
-        guard frozen == nil, let live, live.isSavable,
-              (0...1.5).contains(now.timeIntervalSince(live.timestamp)) else { return false }
+        guard canHold(now: now), let live else { return false }
         frozen = live
         hasSavedFrozen = false
         return true
