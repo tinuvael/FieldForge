@@ -118,6 +118,129 @@ final class MappingUITests: XCTestCase {
         app.terminate(); app.launch(); app.buttons["mappingJournal"].tap(); app.staticTexts["ПК 0+005"].tap()
         revealMeasurements(rows, app: app); XCTAssertEqual(rows.count, 2)
     }
+    @MainActor func testP32SetsEvidenceFaultsValidationResetAndOfflineReopen() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["FIELD_FORGE_TEST_RUN_ID"] = UUID().uuidString
+        app.launchArguments = ["--ui-testing"]; app.launch()
+        let project = "P32-\(String(UUID().uuidString.prefix(8)))"
+        create("projectPicker", name: project, app: app); select("projectPicker", value: project, app: app)
+        create("horizonPicker", name: "+393 м", app: app); select("horizonPicker", value: "+393 м", app: app)
+        create("excavationPicker", name: "E", app: app); select("excavationPicker", value: "E", app: app)
+        fill(app.textFields["mappingPicket"], "ПК 0+005", app: app)
+        show(disclosure("Интервал и положение", app: app), app: app); disclosure("Интервал и положение", app: app).tap()
+        fill(app.textFields["mappingStartPicket"], "5", app: app)
+        fill(app.textFields["mappingEndPicket"], "10,5", app: app)
+        show(app.buttons["mappingPosition"], app: app); app.buttons["mappingPosition"].tap(); app.buttons["Кровля"].tap()
+        disclosure("Интервал и положение", app: app).tap()
+        for index in 1...2 {
+            reveal("captureMappingManual", app: app); app.buttons["captureMappingManual"].tap()
+            XCTAssertTrue(app.textFields["manualDip"].waitForExistence(timeout: 5))
+            fill(app.textFields["manualDip"], "\(40 + index)", app: app)
+            fill(app.textFields["manualDirection"], "\(350 + index)", app: app)
+            app.buttons["addMappingMeasurement"].tap()
+        }
+        top(app); show(disclosure("Системы трещин", app: app), app: app); disclosure("Системы трещин", app: app).tap()
+        for index in 1...5 {
+            show(app.buttons["addJointSet"], app: app); app.buttons["addJointSet"].tap()
+            let edit = app.buttons["editJointSet-J\(index)"]; show(edit, app: app); edit.tap()
+            XCTAssertTrue(app.textFields["geologyDip"].waitForExistence(timeout: 5))
+            XCTAssertEqual(app.textFields["geologyDip"].value as? String, "Не указано")
+            fill(app.textFields["geologyDip"], "\(45 + index)", app: app)
+            fill(app.textFields["geologyDirection"], "120,125", app: app)
+            if index == 1 {
+                app.buttons["geologyNorth"].tap(); app.buttons["Сеточный север"].tap()
+                for evidence in 1...2 {
+                    let toggle = app.switches["jointEvidence-\(evidence)"]; show(toggle, app: app)
+                    toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.94, dy: 0.5)).tap()
+                    XCTAssertEqual(toggle.value as? String, "1")
+                }
+                fill(app.textFields["jointSpacing"], "0,25", app: app)
+                fill(app.textFields["jointAperture"], "-1", app: app)
+                XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "число ≥ 0")).firstMatch.exists)
+            }
+            back(app)
+        }
+        show(app.buttons["addJointSet"], app: app); XCTAssertFalse(app.buttons["addJointSet"].isEnabled)
+        save(app)
+        XCTAssertTrue(app.alerts["Картирование"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "J1:")).firstMatch.exists)
+        app.buttons["Понятно"].tap()
+        reveal("editJointSet-J1", app: app); app.buttons["editJointSet-J1"].tap()
+        show(app.textFields["jointAperture"], app: app)
+        XCTAssertEqual(app.textFields["jointAperture"].value as? String, "-1")
+        fill(app.textFields["jointAperture"], "0,125", app: app)
+        back(app)
+        top(app); show(disclosure("Тектоника:", app: app), app: app); disclosure("Тектоника:", app: app).tap()
+        for index in 1...2 {
+            show(app.buttons["addTectonicStructure"], app: app); app.buttons["addTectonicStructure"].tap()
+            let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "editTectonic-"))
+            let row = rows.element(boundBy: index - 1); show(row, app: app); row.tap()
+            XCTAssertTrue(app.textFields["geologyDip"].waitForExistence(timeout: 5))
+            fill(app.textFields["geologyDip"], "65", app: app)
+            fill(app.textFields["geologyDirection"], "210", app: app)
+            app.buttons["geologyNorth"].tap(); app.buttons["Истинный север"].tap()
+            fill(app.textFields["tectonicThickness"], "0,5", app: app)
+            fill(app.textFields["tectonicPicket"], "\(6 + index)", app: app)
+            back(app)
+        }
+        // Returning from the plan and temporary backgrounding retain geological drafts.
+        top(app); app.buttons["selectHorizonPlan"].tap()
+        XCTAssertTrue(app.buttons["Вернуться"].waitForExistence(timeout: 5)); app.buttons["Вернуться"].tap()
+        XCUIDevice.shared.press(.home); app.activate()
+        save(app); saved(app); top(app)
+        XCTAssertTrue(app.buttons["projectPicker"].label.contains(project))
+        XCTAssertEqual(app.textFields["mappingPicket"].value as? String, "Пикет: ПК 0+005 или метры")
+        XCTAssertEqual(app.textFields["mappingZ"].value as? String, "393")
+        top(app); show(disclosure("Системы трещин", app: app), app: app); XCTAssertTrue(disclosure("Системы трещин", app: app).label.contains("0/5"))
+        top(app); show(disclosure("Тектоника:", app: app), app: app); XCTAssertTrue(disclosure("Тектоника:", app: app).label.contains("0"))
+        top(app); fill(app.textFields["mappingPicket"], "ПК 0+010", app: app); save(app); saved(app)
+        app.terminate(); app.launch()
+        reviewP32Journal(app)
+    }
+    @MainActor private func journalValue(_ title: String, _ value: String, app: XCUIApplication) -> XCUIElement {
+        app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@ AND label CONTAINS %@", title, value)).firstMatch
+    }
+    @MainActor private func reviewP32Journal(_ app: XCUIApplication) {
+        app.buttons["mappingJournal"].tap()
+        XCTAssertTrue(app.staticTexts["ПК 0+005"].waitForExistence(timeout: 5)); XCTAssertTrue(app.staticTexts["ПК 0+010"].exists)
+        app.staticTexts["ПК 0+005"].tap()
+        show(journalValue("Положение", "Кровля", app: app), app: app)
+        for index in 1...5 { show(disclosure("J\(index) · интерпретация", app: app), app: app) }
+        show(disclosure("J1 · интерпретация", app: app), app: app, upward: false); disclosure("J1 · интерпретация", app: app).tap()
+        show(journalValue("Раскрытие, мм", "0.12500000", app: app), app: app)
+        let links = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "jointSource-J1-"))
+        show(links.element(boundBy: 1), app: app); XCTAssertEqual(links.count, 2)
+        links.firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["Исходный ручной ввод"].waitForExistence(timeout: 5))
+        back(app)
+        show(disclosure("№1 · Разлом", app: app), app: app); disclosure("№1 · Разлом", app: app).tap()
+        show(journalValue("Мощность, м", "0.50000000", app: app), app: app)
+        show(disclosure("№1 · Разлом", app: app), app: app, upward: false); disclosure("№1 · Разлом", app: app).tap()
+        show(disclosure("№2 · Разлом", app: app), app: app); disclosure("№2 · Разлом", app: app).tap()
+        show(journalValue("Мощность, м", "0.50000000", app: app), app: app)
+        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screenshot.name = "P32 saved tectonic structures"; screenshot.lifetime = .keepAlways; add(screenshot)
+        back(app); app.staticTexts["ПК 0+010"].tap()
+        XCTAssertFalse(disclosure("J1 · интерпретация", app: app).exists)
+    }
+    @MainActor private func disclosure(_ title: String, app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch
+    }
+    @MainActor private func fill(_ field: XCUIElement, _ text: String, app: XCUIApplication) {
+        show(field, app: app); field.tap()
+        let old = field.value as? String ?? ""
+        if old != field.placeholderValue { field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: old.count)) }
+        field.typeText(text); dismissKeyboard(app)
+    }
+    @MainActor private func show(_ element: XCUIElement, app: XCUIApplication, upward: Bool = true) {
+        for _ in 0..<24 {
+            if element.exists && element.isHittable { return }
+            scrollForm(app, up: upward)
+        }
+        XCTFail("Element not visible: \(element)\n\(app.debugDescription)")
+    }
+    @MainActor private func back(_ app: XCUIApplication) { app.navigationBars.buttons.element(boundBy: 0).tap() }
     @MainActor private func revealMeasurements(_ rows: XCUIElementQuery, app: XCUIApplication) {
         for _ in 0..<8 {
             if rows.firstMatch.exists && rows.firstMatch.isHittable { return }
@@ -143,8 +266,8 @@ final class MappingUITests: XCTestCase {
     }
     @MainActor private func scrollForm(_ app: XCUIApplication, up: Bool) {
         let form = app.collectionViews.firstMatch
-        let start = form.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: up ? 0.8 : 0.3))
-        let end = form.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.55))
+        let start = form.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: up ? 0.8 : 0.3))
+        let end = form.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.55))
         start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
     }
     @MainActor private func create(_ picker: String, name: String, app: XCUIApplication) {

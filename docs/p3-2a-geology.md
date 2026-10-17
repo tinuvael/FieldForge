@@ -1,0 +1,33 @@
+# P3.2a — interpreted joint sets and tectonic structures
+
+## Scope and workflow
+
+P3.1 original manual/iPhone capture remains the evidence workflow. Mapping adds compact, collapsed interval, `Системы трещин` and `Тектоника` sections. An optional start and/or end picket and observation position supplement the required single picket. Existing point-only capture requires no interval or interpretation.
+
+`Добавить интерпретацию` creates a blank J1–J5 draft using the first unused identifier. The user explicitly enters its representative orientation; readings never become sets automatically. At most five distinct identifiers are allowed. Removing J2 does not renumber J3; a subsequent addition offers J2 again. Each set can cite zero or more original measurement UUIDs from this point, and one original can support several sets. Selecting evidence neither copies nor averages angles. Mixed north references remain distinct and are displayed without conversion; an evidence link is not an assertion of common-frame compatibility.
+
+Set editors retain optional spacing (metres), persistence (observed trace extent, metres), aperture (millimetres), descriptive roughness/infill, notes and author. Roughness and infill are free field descriptions, not scores or empirical coefficients. Saved interpretations are immutable revision-1 records with an explicit `user-interpretation-v1` method, commit timestamp, optional entered author and exact input text. An absent author is unknown, not a fabricated identity. Later controlled correction/revision authoring is outside this change.
+
+Tectonics permits any number of separately identified records: fault, shear zone, fracture zone or other; orientation, optional thickness in metres, optional numeric picket, optional free position description and description. Visible numbers follow the order within this point; UUIDs define identity. No structural classification or engineering calculation is inferred.
+
+Editors change the same in-memory point draft. Navigating back, opening the DXF selector, changing tabs and temporary backgrounding retain it. Only the main `Сохранить наблюдение` commits the full point, originals, interpretations and structures. Validation and write errors retain the entire draft. Success resets every point-specific field and reference while retaining Project/Horizon/Excavation and suggesting nominal horizon Z. Context changes guard geological-only drafts too. Process termination still loses unsaved drafts; this phase does not implement draft recovery.
+
+The journal and existing DXF markers open the same read-only point. Original measurement rows remain separate from interpretation disclosures. Interpretation evidence links open full original diagnostics/manual inputs. Journal geology displays all saved fields, full original orientation spelling/precision, north and direction meaning, interpretation metadata and structure UUIDs.
+
+## Numeric conventions and missing data
+
+- Reuse the P3.1 manual-orientation validator: dip 0–90°, clockwise dip-direction azimuth 0–360° from the explicitly selected magnetic/true/grid/unknown north. Original 360° text is retained; the existing orientation accessor normalizes it to 0°. No declination/convergence conversion, clustering or averaging is introduced.
+- Horizontal dip (0°) requires a blank, undefined direction. A vertical plane (90°) accepts a blank direction or a separately confirmed conventional dip side; that side is labeled explicitly. Intermediate inclinations require direction. No missing dip/direction is fabricated to complete an orientation.
+- Optional dimensions accept decimal comma/dot, zero and positive finite values. Negative, nonnumeric, scientific-notation, NaN and infinite text is rejected. Zero is accepted only if entered; blanks become null. Units are named at entry and in the journal. No empirical range limits are invented.
+- Start/end/structure pickets reuse the current kilometre-plus-metre notation (`ПК 0+005`) or decimal metres. Both interval bounds are independently optional; if both exist, end must be greater than or equal to start. Equal bounds represent a point. No missing bound is inferred from the main picket, and no bound/location is inferred from DXF, device or GPS.
+- Interval and tectonic pickets share the parent observation's chainage origin/direction, which may remain explicitly unknown. Observation position is optional roof/left wall/right wall/face/other. Free structure position is a description, not a coordinate.
+
+## Persistence and compatibility
+
+The existing `mapping-v1.json` aggregate advances from schema 3 to **4**. An optional `MappingObservation.geology` payload contains interval bounds/position and arrays of interpreted sets and tectonic structures. Legacy observations have no payload; migration does not manufacture empty geological records or rewrite evidence. The P3.1 evidence table, relationships, coordinate provenance and source-plan references remain unchanged.
+
+Reuse the existing short lossless upgrade path: validate the old graph, set its envelope version, verify encode/decode equality, write/verify exact source bytes to `.p1-backup`, `.p2-backup` or `.p3-backup` according to the original version, and replace the journal atomically. Conflicting/unwritable backups, malformed files, unsupported schemas and external file changes block writes without resetting data. No new database or migration framework is introduced. Old schema-3 apps cannot read schema 4; downgrade needs reviewed recovery from a backup and must not discard later geology.
+
+Every commit validates unique set identifiers, at most five sets, unique record IDs, valid orientations/dimensions/pickets and evidence links restricted to the owning point. The original-evidence table remains immutable and fully owned by point UUIDs. Removing an unsaved original also removes its draft interpretation links, as stated in the form; it never alters persisted evidence. Existing append-only aggregate protection prevents overwriting/deleting a saved point including its interpretations and structures.
+
+Managed original DXF assets, SHA-256 manifests, bundle identifier, signing configuration and the standalone measurement store are untouched. JSON backups are not complete DXF backups. There is no new photo, export, LiDAR, Q, RMR or wedge functionality.

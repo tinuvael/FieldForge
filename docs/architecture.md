@@ -101,3 +101,7 @@ See [current safe migration](persistence-migration.md), [coordinate systems](coo
 ## P3.1 acquisition and atomic point save
 
 `MeasurementAcquisition` owns the single shared provider and HOLD session across automatic presentation, with explicit visibility/foreground control. Mapping capture appends validated originals into the in-memory workflow draft; only the point-level commit persists both point and original table in one schema-3 graph. Independent measurement storage remains separate for unassigned legacy observations. See [P3.1](p3-measurements.md) for lifecycle, ownership, compatibility and limits.
+
+## P3.2a implementation update
+
+The shared mapping aggregate now uses schema 4 with optional `MappingGeology` on immutable points: interval bounds/position, interpreted J1–J5 revision-1 records with point-local original-evidence UUID links, and arbitrary tectonic structures. Original measurements remain separate immutable evidence. The existing atomic aggregate and backup mechanism is extended without a new storage layer; legacy observations retain absent geology. See [P3.2a domain, units and persistence](p3-2a-geology.md). Planned relational entities elsewhere in this document remain future architecture.
