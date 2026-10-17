@@ -27,11 +27,8 @@ struct HorizonPlansView: View {
                 ForEach(["P2_PLAN_A", "P2_PLAN_B"], id: \.self) { key in
                     if let text = ProcessInfo.processInfo.environment[key] {
                         Button("Тестовый DXF: \(key)") {
-                            do {
-                                guard let h = mapping.workflow?.context.horizonID else { return }
-                                let data = Data(text.utf8)
-                                prepared = try PreparedPlanImport(id: UUID(), horizonID: h, filename: "\(key).dxf", data: data, drawing: DXFDocument.parse(data))
-                            } catch { self.error = error.localizedDescription }
+                            guard let h = mapping.workflow?.context.horizonID else { return }
+                            prepare(data: Data(text.utf8), filename: "\(key).dxf", horizonID: h)
                         }.accessibilityIdentifier(key)
                     }
                 }
@@ -61,7 +58,7 @@ struct HorizonPlansView: View {
                 }
             }
             Section {
-                Text("Поддерживается ограниченный текстовый 2D DXF: LINE, LWPOLYLINE, POLYLINE, ARC, CIRCLE. BLOCK/INSERT и кривые bulge пропускаются с предупреждением. Не DWG.").font(.caption)
+                Text("Текстовый DXF: LINE, LWPOLYLINE, 2D/3D POLYLINE (XY-проекция), ARC, CIRCLE, POINT, простые TEXT/MTEXT. BLOCK/INSERT и кривые bulge пропускаются с предупреждением. Не DWG.").font(.caption)
                 Text("Локальные координаты чертежа не подтверждают съёмочную точность. Z берётся из горизонта либо вводится вручную. GPS не используется.").font(.caption)
             }
         }.navigationTitle("Планы горизонта")
@@ -99,12 +96,28 @@ struct HorizonPlansView: View {
             }
         } catch { self.error = "Не удалось прочитать журнал импорта: \(error.localizedDescription). Файлы сохранены." }
     }
+    private func prepare(data: Data, filename: String, horizonID: UUID) {
+        busy = true
+        Task {
+            defer { busy = false }
+            do {
+                prepared = try await Task.detached(priority: .userInitiated) {
+                    try PreparedPlanImport(id: UUID(), horizonID: horizonID, filename: filename,
+                        data: data, drawing: DXFDocument.parse(data))
+                }.value
+            } catch { self.error = error.localizedDescription }
+        }
+    }
     private func recover(_ plan: MappingPlanReference) {
-        do {
-            guard let files = mapping.planStore, mapping.workflow != nil else { throw StorageError.writesBlocked }
-            _ = try DXFDocument.parse(files.read(plan))
-            try mapping.workflow!.registerPlan(plan); files.complete(plan); refreshPending()
-        } catch { self.error = error.localizedDescription }
+        busy = true
+        Task {
+            defer { busy = false }
+            do {
+                guard let files = mapping.planStore, mapping.workflow != nil else { throw StorageError.writesBlocked }
+                _ = try await Task.detached(priority: .userInitiated) { try DXFDocument.parse(files.read(plan)) }.value
+                try mapping.workflow!.registerPlan(plan); files.complete(plan); refreshPending()
+            } catch { self.error = error.localizedDescription }
+        }
     }
     private func prepare(_ url: URL) {
         guard let horizonID = mapping.workflow?.context.horizonID else { return }
@@ -234,6 +247,15 @@ struct HorizonPlanView: View {
     @State private var properties = false
     @State private var error: String?
     private var points: [MappingObservation] { mapping.workflow?.points(on: plan, excavationID: filter) ?? [] }
+    private func canvasDescription(_ viewport: PlanViewport) -> String {
+        let visibleMarkers = points.filter { record in
+            guard let x = record.coordinates?.x, let y = record.coordinates?.y else { return false }
+            return viewport.containsScreenPoint(viewport.screen(PlanPoint(x: x, y: y)))
+        }.count
+        let vertexCount = drawing.polylines.reduce(0) { $0 + $1.vertices.count }
+        return "Полилинии: \(drawing.polylines.count); вершины: \(vertexCount); маркеры в окне: \(visibleMarkers); POINT: \(drawing.points.count); подписи: \(drawing.labels.count)"
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             Picker("Выработка", selection: $filter) {
@@ -256,6 +278,19 @@ struct HorizonPlanView: View {
                         }
                         context.stroke(path, with: .color(.primary.opacity(0.7)), lineWidth: 1)
                     }
+                    for dot in drawing.points {
+                        let p = viewport.screen(dot.xy)
+                        guard viewport.containsScreenPoint(p) else { continue }
+                        context.fill(Path(ellipseIn: CGRect(x: p.x - 2, y: p.y - 2, width: 4, height: 4)), with: .color(.primary))
+                    }
+                    for label in drawing.labels {
+                        let p = viewport.screen(label.position.xy)
+                        var textContext = context
+                        textContext.translateBy(x: p.x, y: p.y)
+                        textContext.rotate(by: .degrees(-label.rotationDegrees))
+                        textContext.draw(Text(label.text).font(.system(size: min(96, max(6, label.height * viewport.scale))))
+                            .foregroundColor(.primary), at: .zero, anchor: label.topAligned ? .topLeading : .bottomLeading)
+                    }
                     for record in points {
                         if let x = record.coordinates?.x, let y = record.coordinates?.y {
                             let p = viewport.screen(PlanPoint(x: x, y: y))
@@ -273,6 +308,7 @@ struct HorizonPlanView: View {
                 }.background(Color(uiColor: .secondarySystemBackground))
                     .contentShape(Rectangle()).accessibilityIdentifier("planCanvas")
                     .accessibilityLabel("План. Синие точки — журнал, оранжевая — новая точка")
+                    .accessibilityValue(canvasDescription(viewport))
                     .gesture(DragGesture(minimumDistance: 5).updating($drag) { value, state, _ in state = value.translation }
                         .onEnded { pan.width += $0.translation.width; pan.height += $0.translation.height })
                     .simultaneousGesture(MagnificationGesture().updating($magnification) { value, state, _ in state = value }

@@ -55,7 +55,7 @@ final class MappingUITests: XCTestCase {
         XCTAssertEqual(picket.value as? String, "Пикет: ПК 0+005 или метры")
         XCTAssertTrue(app.buttons["projectPicker"].label.contains(other))
         app.buttons["mappingJournal"].tap()
-        XCTAssertTrue(app.staticTexts["В выбранном проекте нет наблюдений"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["journalEmpty"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.staticTexts["ПК 0+005"].exists)
     }
     @MainActor private func top(_ app: XCUIApplication) {
