@@ -15,12 +15,13 @@ struct MappingIntervalForm: View {
     @Binding var start: String
     @Binding var end: String
     @Binding var position: ObservationPosition?
+    let focus: FocusState<Bool>.Binding
     var body: some View {
         DisclosureGroup("Интервал и положение · необязательно") {
             GeologyField(title: "Начало интервала · пикет или м", text: $start, identifier: "mappingStartPicket",
-                         error: picketError(start, field: "Начало"))
+                         error: picketError(start, field: "Начало"), focus: focus)
             GeologyField(title: "Конец интервала · пикет или м", text: $end, identifier: "mappingEndPicket",
-                         error: picketError(end, field: "Конец"))
+                         error: picketError(end, field: "Конец"), focus: focus)
             if let a = try? PicketInput.meters(start), let b = try? PicketInput.meters(end), b < a {
                 Text("Конец интервала должен быть не раньше начала.").font(.caption).foregroundStyle(.red)
             }
@@ -90,7 +91,7 @@ private struct JointSetEditor: View {
     var body: some View {
         Form {
             Section("Представительная ориентация · интерпретация") {
-                GeologyOrientationForm(input: $draft.representative)
+                GeologyOrientationForm(input: $draft.representative, focus: $focused)
             }
             Section("Ссылки на исходные замеры этой точки") {
                 if measurements.isEmpty { Text("Исходные замеры не добавлены. Интерпретацию можно сохранить без ссылок.") }
@@ -106,9 +107,9 @@ private struct JointSetEditor: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Полевые характеристики · необязательно") {
-                GeologyField(title: "Расстояние между трещинами, м", text: $draft.spacing, identifier: "jointSpacing", nonnegative: true)
-                GeologyField(title: "Протяжённость, м", text: $draft.persistence, identifier: "jointPersistence", nonnegative: true)
-                GeologyField(title: "Раскрытие, мм", text: $draft.aperture, identifier: "jointAperture", nonnegative: true)
+                GeologyField(title: "Расстояние между трещинами, м", text: $draft.spacing, identifier: "jointSpacing", nonnegative: true, focus: $focused)
+                GeologyField(title: "Протяжённость, м", text: $draft.persistence, identifier: "jointPersistence", nonnegative: true, focus: $focused)
+                GeologyField(title: "Раскрытие, мм", text: $draft.aperture, identifier: "jointAperture", nonnegative: true, focus: $focused)
                 TextField("Шероховатость · описание, без рейтинга", text: $draft.roughness, axis: .vertical).focused($focused).accessibilityIdentifier("jointRoughness")
                 TextField("Заполнитель · описание", text: $draft.infill, axis: .vertical).focused($focused).accessibilityIdentifier("jointInfill")
                 TextField("Полевые примечания", text: $draft.notes, axis: .vertical).focused($focused).accessibilityIdentifier("jointNotes")
@@ -116,7 +117,7 @@ private struct JointSetEditor: View {
             }
             Section { Text("Черновик. Интерпретация сохранится вместе с точкой по кнопке «Сохранить наблюдение».").font(.footnote) }
         }.navigationTitle(draft.identifier.rawValue).navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItemGroup(placement: .keyboard) { if focused { Spacer(); Button("Готово") { focused = false } } } }
+            .toolbar { ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Готово") { focused = false } } }
     }
 }
 
@@ -129,17 +130,17 @@ private struct TectonicStructureEditor: View {
                 Picker("Тип структуры", selection: $draft.type) {
                     ForEach(TectonicStructureType.allCases, id: \.self) { Text($0.title).tag($0) }
                 }.accessibilityIdentifier("tectonicType")
-                GeologyOrientationForm(input: $draft.orientation)
+                GeologyOrientationForm(input: $draft.orientation, focus: $focused)
             }
             Section("Положение и описание") {
-                GeologyField(title: "Мощность, м · необязательно", text: $draft.thickness, identifier: "tectonicThickness", nonnegative: true)
-                GeologyField(title: "Пикет · необязательно", text: $draft.picket, identifier: "tectonicPicket", error: picketError)
+                GeologyField(title: "Мощность, м · необязательно", text: $draft.thickness, identifier: "tectonicThickness", nonnegative: true, focus: $focused)
+                GeologyField(title: "Пикет · необязательно", text: $draft.picket, identifier: "tectonicPicket", error: picketError, focus: $focused)
                 TextField("Положение · необязательно", text: $draft.position, axis: .vertical).focused($focused).accessibilityIdentifier("tectonicPosition")
                 TextField("Описание", text: $draft.description, axis: .vertical).focused($focused).accessibilityIdentifier("tectonicDescription")
             }
             Section { Text("Черновик структуры сохранится только вместе с точкой.").font(.footnote) }
         }.navigationTitle("Тектоника").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItemGroup(placement: .keyboard) { if focused { Spacer(); Button("Готово") { focused = false } } } }
+            .toolbar { ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Готово") { focused = false } } }
     }
     private var picketError: String? {
         do { _ = try GeologyInput.optionalPicket(draft.picket, field: "Пикет структуры"); return nil } catch { return error.localizedDescription }
@@ -148,9 +149,10 @@ private struct TectonicStructureEditor: View {
 
 private struct GeologyOrientationForm: View {
     @Binding var input: ManualOrientationInput
+    let focus: FocusState<Bool>.Binding
     var body: some View {
-        GeologyField(title: "Угол падения, ° · 0–90", text: $input.dipAngleText, identifier: "geologyDip")
-        GeologyField(title: "Азимут падения, ° · 0–360", text: $input.dipDirectionText, identifier: "geologyDirection")
+        GeologyField(title: "Угол падения, ° · 0–90", text: $input.dipAngleText, identifier: "geologyDip", focus: focus)
+        GeologyField(title: "Азимут падения, ° · 0–360", text: $input.dipDirectionText, identifier: "geologyDirection", focus: focus)
         Picker("Вид севера", selection: $input.reference) {
             ForEach(GeographicReference.manualChoices, id: \.self) { Text($0.title).tag($0) }
         }.accessibilityIdentifier("geologyNorth")
@@ -172,7 +174,7 @@ private struct GeologyField: View {
     let identifier: String
     var error: String? = nil
     var nonnegative = false
-    @FocusState private var focused: Bool
+    let focus: FocusState<Bool>.Binding
     private var validationError: String? {
         if let error { return error }
         guard nonnegative else { return nil }
@@ -181,9 +183,9 @@ private struct GeologyField: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title).font(.subheadline)
-            TextField("Не указано", text: $text).keyboardType(.numbersAndPunctuation).focused($focused).accessibilityIdentifier(identifier)
+            TextField("Не указано", text: $text).keyboardType(.numbersAndPunctuation).focused(focus).accessibilityIdentifier(identifier)
             if let validationError { Text(validationError).font(.caption).foregroundStyle(.red) }
-        }.toolbar { ToolbarItemGroup(placement: .keyboard) { if focused { Spacer(); Button("Готово") { focused = false } } } }
+        }
     }
 }
 

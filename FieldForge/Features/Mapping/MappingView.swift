@@ -57,7 +57,7 @@ struct MappingView: View {
                         NavigationLink("Настройки", destination: SettingsView())
                     } label: { Label("Сервисы", systemImage: "ellipsis.circle") }.accessibilityIdentifier("mappingServices")
                 }
-                ToolbarItemGroup(placement: .keyboard) { Spacer(); if focused { Button("Готово") { focused = false } } }
+                ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Готово") { focused = false } }
             }
         }
         .sheet(isPresented: $showPlans) {
@@ -116,7 +116,7 @@ struct MappingView: View {
                 }
                 Section {
                     MappingIntervalForm(start: draft(\.startPicket, fallback: ""), end: draft(\.endPicket, fallback: ""),
-                                        position: draft(\.observationPosition, fallback: nil))
+                                        position: draft(\.observationPosition, fallback: nil), focus: $focused)
                 }
                 Section {
                     coordinate("X", \.x); coordinate("Y", \.y); coordinate("Z", \.z)
