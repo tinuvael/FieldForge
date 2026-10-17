@@ -151,7 +151,9 @@ final class MappingUITests: XCTestCase {
             if index == 1 {
                 app.buttons["geologyNorth"].tap(); app.buttons["Сеточный север"].tap()
                 for evidence in 1...2 {
-                    let toggle = app.switches["jointEvidence-\(evidence)"]; show(toggle, app: app); toggle.tap()
+                    let toggle = app.switches["jointEvidence-\(evidence)"]; show(toggle, app: app)
+                    toggle.coordinate(withNormalizedOffset: CGVector(dx: 0.94, dy: 0.5)).tap()
+                    XCTAssertEqual(toggle.value as? String, "1")
                 }
                 fill(app.textFields["jointSpacing"], "0,25", app: app)
                 fill(app.textFields["jointAperture"], "-1", app: app)
@@ -194,22 +196,29 @@ final class MappingUITests: XCTestCase {
         top(app); show(disclosure("Тектоника:", app: app), app: app); XCTAssertTrue(disclosure("Тектоника:", app: app).label.contains("0"))
         top(app); fill(app.textFields["mappingPicket"], "ПК 0+010", app: app); save(app); saved(app)
         app.terminate(); app.launch()
+        reviewP32Journal(app)
+    }
+    @MainActor private func journalValue(_ title: String, _ value: String, app: XCUIApplication) -> XCUIElement {
+        app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@ AND label CONTAINS %@", title, value)).firstMatch
+    }
+    @MainActor private func reviewP32Journal(_ app: XCUIApplication) {
         app.buttons["mappingJournal"].tap()
         XCTAssertTrue(app.staticTexts["ПК 0+005"].waitForExistence(timeout: 5)); XCTAssertTrue(app.staticTexts["ПК 0+010"].exists)
         app.staticTexts["ПК 0+005"].tap()
-        show(app.staticTexts["Кровля"], app: app)
+        show(journalValue("Положение", "Кровля", app: app), app: app)
         for index in 1...5 { show(disclosure("J\(index) · интерпретация", app: app), app: app) }
         show(disclosure("J1 · интерпретация", app: app), app: app, upward: false); disclosure("J1 · интерпретация", app: app).tap()
-        show(app.staticTexts["0.12500000"], app: app)
+        show(journalValue("Раскрытие, мм", "0.12500000", app: app), app: app)
         let links = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "jointSource-J1-"))
-        show(links.firstMatch, app: app); XCTAssertEqual(links.count, 2)
+        show(links.element(boundBy: 1), app: app); XCTAssertEqual(links.count, 2)
         links.firstMatch.tap()
         XCTAssertTrue(app.staticTexts["Исходный ручной ввод"].waitForExistence(timeout: 5))
         back(app)
         show(disclosure("№1 · Разлом", app: app), app: app); disclosure("№1 · Разлом", app: app).tap()
-        show(app.staticTexts["0.50000000"].firstMatch, app: app)
+        show(journalValue("Мощность, м", "0.50000000", app: app), app: app)
+        show(disclosure("№1 · Разлом", app: app), app: app, upward: false); disclosure("№1 · Разлом", app: app).tap()
         show(disclosure("№2 · Разлом", app: app), app: app); disclosure("№2 · Разлом", app: app).tap()
-        show(app.staticTexts["0.50000000"].firstMatch, app: app)
+        show(journalValue("Мощность, м", "0.50000000", app: app), app: app)
         let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
         screenshot.name = "P32 saved tectonic structures"; screenshot.lifetime = .keepAlways; add(screenshot)
         back(app); app.staticTexts["ПК 0+010"].tap()
