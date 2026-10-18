@@ -108,18 +108,19 @@ struct MappingObservation: Codable, Equatable, Identifiable {
 }
 
 struct MappingJournal: Codable, Equatable {
-    var schemaVersion = 5
+    var schemaVersion = 6
     var projects: [MappingProject] = []
     var horizons: [MappingHorizon] = []
     var excavations: [MappingExcavation] = []
     var plans: [MappingPlanReference] = []
     var observations: [MappingObservation] = []
+    var revisions: [MappingObservationRevision] = []
     var selection = MappingContext()
     var measurements: [Measurement] = []
 
     init() {}
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, projects, horizons, excavations, plans, observations, selection, measurements
+        case schemaVersion, projects, horizons, excavations, plans, observations, selection, measurements, revisions
     }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -129,6 +130,11 @@ struct MappingJournal: Codable, Equatable {
         excavations = try c.decode([MappingExcavation].self, forKey: .excavations)
         plans = try c.decode([MappingPlanReference].self, forKey: .plans)
         observations = try c.decode([MappingObservation].self, forKey: .observations)
+        // Do not discard history under a damaged/old header: validation rejects nonempty
+        // revisions below schema 6. Only genuinely absent legacy tables default to empty.
+        revisions = schemaVersion < 6
+            ? (try c.decodeIfPresent([MappingObservationRevision].self, forKey: .revisions) ?? [])
+            : try c.decode([MappingObservationRevision].self, forKey: .revisions)
         selection = try c.decode(MappingContext.self, forKey: .selection)
         // Only old schemas may omit the new evidence table. A damaged v3 file fails closed.
         measurements = schemaVersion < 3 ? (try c.decodeIfPresent([Measurement].self, forKey: .measurements) ?? []) : try c.decode([Measurement].self, forKey: .measurements)
@@ -139,8 +145,10 @@ struct MappingJournal: Codable, Equatable {
         return observation.measurementIDs.compactMap { byID[$0] }
     }
 
-    func validate() throws {
-        guard [1, 2, 3, 4, 5].contains(schemaVersion) else { throw StorageError.unsupportedVersion }
+    func validate() throws { try validateGraph(includingRevisions: true) }
+
+    func validateGraph(includingRevisions: Bool) throws {
+        guard [1, 2, 3, 4, 5, 6].contains(schemaVersion) else { throw StorageError.unsupportedVersion }
         func unique(_ ids: [UUID]) -> Bool { Set(ids).count == ids.count }
         guard unique(projects.map(\.id)), unique(horizons.map(\.id)),
               unique(excavations.map(\.id)), unique(plans.map(\.id)), unique(observations.map(\.id)),
@@ -170,6 +178,7 @@ struct MappingJournal: Codable, Equatable {
             guard schemaVersion >= 5 || o.ratings == nil else { throw StorageError.invalidRecord }
             try o.ratings?.validate()
             try o.geology?.validate(pointMeasurementIDs: o.measurementIDs)
+            if includingRevisions, o.geology?.jointSets.contains(where: { $0.revision != 1 }) == true { throw StorageError.invalidRecord }
             guard validContext(MappingContext(projectID: o.projectID, horizonID: o.horizonID, excavationID: o.excavationID)),
                   o.chainageMeters.isFinite, o.chainageMeters >= 0,
                   try PicketInput.meters(o.picket) == o.chainageMeters,
@@ -197,6 +206,7 @@ struct MappingJournal: Codable, Equatable {
                 } else if c.zHorizonID != nil || c.zHorizonElevation != nil || c.zDatum != nil { throw StorageError.invalidRecord }
             }
         }
+        if includingRevisions { try validateRevisions() }
     }
 
     func validContext(_ c: MappingContext) -> Bool {
@@ -301,5 +311,31 @@ struct MappingDraft: Equatable {
             crs: crs.isEmpty ? "unknown" : crs, axes: axes.isEmpty ? "unknown" : axes,
             units: xyUnits, source: xySource, provenance: coordinateProvenance.isEmpty ? "manual; accuracy unknown" : coordinateProvenance,
             zOrigin: zOrigin, zHorizonID: zHorizonID, zHorizonElevation: zHorizonElevation, zDatum: zDatum, planID: planID)
+    }
+}
+
+
+extension MappingDraft {
+    /// Rehydrates field values, then restores frozen provenance after edit observers.
+    init(observation: MappingObservation, measurements: [Measurement]) {
+        self.init()
+        self.measurements = measurements
+        picket = observation.picket; chainageOriginAndDirection = observation.chainageOriginAndDirection
+        observedAtOverride = observation.observedAt; timeZoneID = observation.observedTimeZoneID
+        notes = observation.notes
+        if let c = observation.coordinates {
+            x = c.x.map(ElevationInput.text) ?? ""; y = c.y.map(ElevationInput.text) ?? ""
+            z = c.z.map(ElevationInput.text) ?? ""
+            planID = c.planID; xyUnits = c.units; xySource = c.source
+            crs = c.crs; axes = c.axes; coordinateProvenance = c.provenance
+            zOrigin = c.zOrigin; zHorizonID = c.zHorizonID; zHorizonElevation = c.zHorizonElevation; zDatum = c.zDatum
+        }
+        if let g = observation.geology {
+            startPicket = g.start?.text ?? ""; endPicket = g.end?.text ?? ""; observationPosition = g.position
+            jointSets = g.jointSets.map(JointSetDraft.init)
+            tectonicStructures = g.tectonicStructures.map(TectonicStructureDraft.init)
+        }
+        bartonQ = observation.ratings?.bartonQ?.input ?? BartonQInput()
+        rmr89 = observation.ratings?.rmr89?.input ?? RMR89Input()
     }
 }

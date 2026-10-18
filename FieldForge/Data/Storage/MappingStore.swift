@@ -23,9 +23,9 @@ final class FileMappingStore: MappingStore {
             var data = try bytes()
             var value = try data.map { try JSONDecoder().decode(MappingJournal.self, from: $0) } ?? MappingJournal()
             try value.validate()
-            if value.schemaVersion < 5, let original = data {
+            if value.schemaVersion < 6, let original = data {
                 let migrationBackupURL = url.appendingPathExtension("p\(value.schemaVersion)-backup")
-                value.schemaVersion = 5
+                value.schemaVersion = 6
                 let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
                 let migrated = try encoder.encode(value)
                 guard try JSONDecoder().decode(MappingJournal.self, from: migrated) == value else { throw StorageError.invalidRecord }
@@ -45,13 +45,14 @@ final class FileMappingStore: MappingStore {
     func save(_ journal: MappingJournal) throws {
         guard !blocked else { throw StorageError.writesBlocked }
         if !loaded { _ = try load() }
-        guard journal.schemaVersion == 5 else { throw StorageError.unsupportedVersion }
+        guard journal.schemaVersion == 6 else { throw StorageError.unsupportedVersion }
         try journal.validate()
         guard try bytes() == loadedBytes else { throw StorageError.changedFile }
         // Original observations are append-only; names/metadata can be managed separately.
         if let loadedBytes {
             let previous = try JSONDecoder().decode(MappingJournal.self, from: loadedBytes)
-            guard previous.observations.allSatisfy({ old in journal.observations.contains(old) }),
+            guard previous.revisions.allSatisfy({ journal.revisions.contains($0) }),
+                  previous.observations.allSatisfy({ old in journal.observations.contains(old) }),
                   previous.measurements.allSatisfy({ old in journal.measurements.contains(old) }),
                   previous.plans.allSatisfy({ old in journal.plans.contains(old) }) else {
                 throw StorageError.invalidRecord
@@ -86,8 +87,8 @@ struct MappingWorkflow {
         guard let horizonID = context.horizonID else { return [] }
         return journal.excavations.filter { $0.projectID == context.projectID && $0.horizonIDs.contains(horizonID) }
     }
-    var observations: [MappingObservation] { journal.observations.filter { $0.projectID == context.projectID } }
-    private mutating func commit(_ next: MappingJournal) throws { try store.save(next); journal = next }
+    var observations: [MappingObservation] { journal.effectiveObservations.filter { $0.projectID == context.projectID } }
+    mutating func commit(_ next: MappingJournal) throws { try store.save(next); journal = next }
 
     mutating func requestContext(_ next: MappingContext) throws {
         guard journal.validContext(next) else { throw StorageError.invalidRecord }
@@ -152,10 +153,10 @@ struct MappingWorkflow {
               journal.horizons.contains(where: { $0.id == plan.horizonID && $0.projectID == context.projectID }) else { throw StorageError.invalidRecord }
         try draft.selectPlanPoint(point, plan: plan)
     }
-    func points(on plan: MappingPlanReference, excavationID: UUID? = nil) -> [MappingObservation] {
-        guard plans.contains(plan) else { return [] }
+    func points(on plan: MappingPlanReference, excavationID: UUID? = nil, restrictToSelection: Bool = true) -> [MappingObservation] {
+        guard journal.plans.contains(plan), !restrictToSelection || plans.contains(plan) else { return [] }
         // No inferred compatibility between different revisions/CRSs, including manual P1 coordinates.
-        return observations.filter { $0.horizonID == plan.horizonID && $0.coordinates?.planID == plan.id &&
+        return journal.effectiveObservations.filter { $0.horizonID == plan.horizonID && $0.coordinates?.planID == plan.id &&
             $0.coordinates?.x != nil && $0.coordinates?.y != nil && (excavationID == nil || $0.excavationID == excavationID) }
     }
     private func validName(_ text: String) throws -> String {

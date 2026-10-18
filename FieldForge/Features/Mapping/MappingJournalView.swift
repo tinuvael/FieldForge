@@ -13,7 +13,7 @@ struct MappingJournalView: View {
         var effective = query
         effective.startDate = datesEnabled ? fromDate : nil
         effective.endDate = datesEnabled ? throughDate : nil
-        return effective.apply(mapping.workflow?.journal.observations ?? [], projectID: projectID)
+        return effective.apply(mapping.workflow?.journal.effectiveObservations ?? [], projectID: projectID)
     }
     private var horizons: [MappingHorizon] { mapping.workflow?.horizons ?? [] }
     private var excavations: [MappingExcavation] {
@@ -54,6 +54,9 @@ struct MappingJournalView: View {
                     NavigationLink { MappingObservationDetail(record: record) } label: {
                         VStack(alignment: .leading, spacing: 6) {
                             Text(record.picket).font(.headline)
+                            if let revision = mapping.workflow?.journal.history(for: record.id).last {
+                                Text("Версия \(revision.version) · исправлено \(MappingCorrectionDateText.format(revision.correctedAt))").font(.caption)
+                            }
                             Text(MappingDateText.format(record)).font(.subheadline)
                             Text("\(name(horizon: record.horizonID)) · \(name(excavation: record.excavationID))").font(.caption)
                         }.padding(.vertical, 4)
@@ -152,10 +155,33 @@ enum MappingDateText {
 
 struct MappingObservationDetail: View {
     @EnvironmentObject private var mapping: MappingModel
-    let record: MappingObservation
+    private let snapshot: MappingObservation
+    let historical: Bool
+    let historicalVersion: Int?
+    @State private var correction: MappingCorrectionDraft?
+    @State private var correctionError: String?
+    init(record: MappingObservation, historical: Bool = false, historicalVersion: Int? = nil) {
+        snapshot = record; self.historical = historical; self.historicalVersion = historicalVersion
+    }
+    private var record: MappingObservation { historical ? snapshot : (mapping.workflow?.journal.effectiveObservation(id: snapshot.id) ?? snapshot) }
     var body: some View {
         List {
-            Section("Исходное наблюдение · только просмотр") {
+            if historical, let historicalVersion { Text("Версия \(historicalVersion) · исторический снимок").font(.caption) }
+            if !historical {
+                Section {
+                    Button("Редактировать наблюдение") {
+                        do { correction = try mapping.workflow?.correction(for: record.id) }
+                        catch { correctionError = error.localizedDescription }
+                    }.accessibilityIdentifier("editMappingObservation")
+                    NavigationLink("История изменений") { MappingRevisionHistory(observationID: record.id) }
+                        .accessibilityIdentifier("mappingRevisionHistory")
+                    if let revision = mapping.workflow?.journal.history(for: record.id).last {
+                        Text("Версия \(revision.version) · исправлено \(MappingCorrectionDateText.format(revision.correctedAt))")
+                            .font(.caption).accessibilityIdentifier("mappingRevisionBadge")
+                    } else { Text("Версия 1 · исходное наблюдение").font(.caption) }
+                }
+            }
+            Section(historical ? "Исторический снимок · только просмотр" : "Наблюдение · актуальная версия") {
                 LabeledContent("Проект", value: mapping.workflow?.journal.projects.first { $0.id == record.projectID }?.name ?? record.projectID.uuidString)
                 LabeledContent("Горизонт", value: mapping.workflow?.journal.horizons.first { $0.id == record.horizonID }?.displayName ?? record.horizonID.uuidString)
                 LabeledContent("Выработка", value: mapping.workflow?.journal.excavations.first { $0.id == record.excavationID }?.name ?? record.excavationID.uuidString)
@@ -191,10 +217,22 @@ struct MappingObservationDetail: View {
             Section("Примечания") { Text(record.notes.isEmpty ? "Нет примечаний" : record.notes) }
             Section("Метаданные") {
                 LabeledContent("Создано", value: MeasurementDateText.format(record.createdAt, detailed: true))
-                LabeledContent("Обновлено", value: MeasurementDateText.format(record.updatedAt, detailed: true))
                 Text(record.id.uuidString).textSelection(.enabled)
-                Text("Редактирование исходных наблюдений не реализовано. Контролируемые исправления с историей ревизий запланированы отдельно.")
+                Text("UUID точки постоянный. Дата полевого наблюдения и время исправления хранятся отдельно. Исходные замеры неизменяемы.")
             }.font(.caption)
         }.navigationTitle(record.picket).navigationBarTitleDisplayMode(.inline)
+            .sheet(item: $correction) { draft in MappingCorrectionEditor(draft: draft) }
+            .alert("Исправление", isPresented: Binding(get: { correctionError != nil }, set: { if !$0 { correctionError = nil } })) {
+                Button("Понятно", role: .cancel) { correctionError = nil }
+            } message: { Text(correctionError ?? "") }
+    }
+}
+
+
+enum MappingCorrectionDateText {
+    static func format(_ date: Date) -> String {
+        let formatter = DateFormatter(); formatter.locale = Locale(identifier: "ru_RU")
+        formatter.timeZone = .current; formatter.dateFormat = "dd.MM.yyyy HH:mm:ss.SSS ZZZZZ"
+        return formatter.string(from: date)
     }
 }

@@ -5,6 +5,10 @@
 **P1 implementation update:** [Mapping workflow and persistence](p1-mapping.md) describes the implemented project/horizon/multi-horizon-excavation/point graph, context/draft state machine, atomic JSON decision, immutable observations and protected legacy inbox. The Phase 2 descriptions and larger future schema below are historical/design context; they do not override P1's implemented scope.
 
 
+## P3.3 implemented observation revisions
+
+[Saved observation corrections](p3-3-revisions.md) extends the same JSON aggregate to schema 6 with `MappingObservationRevision` snapshots. `observations` and `measurements` remain append-only originals. Each correction has a stable observation FK, unique revision UUID, sequential version starting at 2, predecessor UUID, exact correction instant, optional manual author and required reason. `MappingCorrectionDraft` freezes the current baseline and evidence; `saveCorrection` validates and commits before publishing. `effectiveObservations` supplies one snapshot per original UUID to journal queries, details and DXF overlays. Unchanged interpretation/assessment metadata is retained; changed J sets increment their local revision and Q uses the frozen NGI 2025 implementation. Historical snapshots keep exact input/evidence/plan references. There is no project reassignment or raw evidence editing.
+
 ## P3.2b classification implementation
 
 [Rock-mass assessments](p3-2b-ratings.md) adds Foundation-only versioned Q tables/evaluation and input-only RMR89 in `Data/Models/RockMassRatings.swift`. SwiftUI is an adapter to shared input values and stored snapshots; no sensor, DXF or geometry dependency is introduced. Point-level ratings use the existing atomic `MappingWorkflow.save`, schema-5 graph validation, backup/migration and append-only observation contract. Persisted Q results must match the exact method and original input; RMR numerical ratings remain unavailable.
