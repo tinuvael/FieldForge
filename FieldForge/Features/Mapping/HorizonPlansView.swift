@@ -209,16 +209,17 @@ private struct PlanImportSetup: View {
     }
 }
 
-private struct HorizonPlanLoader: View {
+struct HorizonPlanLoader: View {
     let plan: MappingPlanReference
     let selecting: Bool
     let onSelection: (() -> Void)?
+    var onPointSelection: ((PlanPoint, MappingPlanReference) throws -> Void)? = nil
     @EnvironmentObject private var mapping: MappingModel
     @State private var drawing: DXFDocument?
     @State private var error: String?
     var body: some View {
         Group {
-            if let drawing { HorizonPlanView(plan: plan, drawing: drawing, selecting: selecting, onSelection: onSelection) }
+            if let drawing { HorizonPlanView(plan: plan, drawing: drawing, selecting: selecting, onSelection: onSelection, onPointSelection: onPointSelection) }
             else if let error { ContentUnavailableView("План недоступен", systemImage: "exclamationmark.triangle", description: Text(error)) }
             else { ProgressView("Проверка оригинала…") }
         }.task {
@@ -236,6 +237,7 @@ struct HorizonPlanView: View {
     let drawing: DXFDocument
     let selecting: Bool
     let onSelection: (() -> Void)?
+    var onPointSelection: ((PlanPoint, MappingPlanReference) throws -> Void)? = nil
     @EnvironmentObject private var mapping: MappingModel
     @State private var zoom = 1.0
     @GestureState private var magnification = 1.0
@@ -246,7 +248,7 @@ struct HorizonPlanView: View {
     @State private var pointSelection: PlanPointSelection?
     @State private var properties = false
     @State private var error: String?
-    private var points: [MappingObservation] { mapping.workflow?.points(on: plan, excavationID: filter) ?? [] }
+    private var points: [MappingObservation] { mapping.workflow?.points(on: plan, excavationID: filter, restrictToSelection: onPointSelection == nil) ?? [] }
     private func canvasDescription(_ viewport: PlanViewport) -> String {
         let visibleMarkers = points.filter { record in
             guard let x = record.coordinates?.x, let y = record.coordinates?.y else { return false }
@@ -260,7 +262,9 @@ struct HorizonPlanView: View {
         VStack(spacing: 0) {
             Picker("Выработка", selection: $filter) {
                 Text("Все выработки").tag(nil as UUID?)
-                ForEach(mapping.workflow?.excavations ?? []) { Text($0.name).tag(Optional($0.id)) }
+                ForEach(mapping.workflow?.journal.excavations.filter { $0.horizonIDs.contains(plan.horizonID) } ?? []) {
+                    Text($0.name).tag(Optional($0.id))
+                }
             }.accessibilityIdentifier("planExcavationFilter")
             Text("\(plan.file?.units.label ?? "Неизвестно") · Z из DXF не используется").font(.caption)
             Button("Упрощённый 2D · ограничения: \(drawing.warnings.count)") { properties = true }
@@ -338,7 +342,8 @@ struct HorizonPlanView: View {
                     Button("Подтвердить X/Y") {
                         do {
                             guard mapping.workflow != nil else { throw StorageError.writesBlocked }
-                            try mapping.workflow!.selectPlanPoint(proposed, planID: plan.id)
+                            if let onPointSelection { try onPointSelection(proposed, plan) }
+                            else { try mapping.workflow!.selectPlanPoint(proposed, planID: plan.id) }
                             onSelection?()
                         } catch { self.error = error.localizedDescription }
                     }.buttonStyle(.borderedProminent).accessibilityIdentifier("confirmPlanXY")
@@ -348,8 +353,9 @@ struct HorizonPlanView: View {
         }.navigationTitle(plan.file?.originalFilename ?? "DXF").navigationBarTitleDisplayMode(.inline)
             .toolbar { Button("Свойства", systemImage: "info.circle") { properties = true } }
             .sheet(item: $pointSelection) { selection in
+                let records = selection.records.compactMap { old in points.first { $0.id == old.id } }
                 NavigationStack {
-                    List(selection.records) { record in
+                    List(records) { record in
                         NavigationLink {
                             MappingObservationDetail(record: record)
                                 .toolbar { ToolbarItem(placement: .cancellationAction) {
@@ -362,7 +368,7 @@ struct HorizonPlanView: View {
                                 Text(record.id.uuidString).font(.caption2)
                             }
                         }.accessibilityIdentifier("planPoint-\(record.id.uuidString)")
-                    }.navigationTitle("Наблюдения: \(selection.records.count)")
+                    }.navigationTitle("Наблюдения: \(records.count)")
                         .toolbar { ToolbarItem(placement: .cancellationAction) {
                             Button("Закрыть") { pointSelection = nil }
                         } }

@@ -28,7 +28,7 @@ struct MappingPicket: Codable, Equatable {
     }
 }
 
-/// Immutable revision 1. Evidence UUIDs identify exact immutable originals in this point.
+/// Immutable interpretation snapshot. Evidence UUIDs identify exact immutable originals in this point.
 /// ManualOrientationInput preserves interpreted text, north and vertical-side convention.
 struct InterpretedJointSet: Codable, Equatable, Identifiable {
     let id: UUID
@@ -48,7 +48,7 @@ struct InterpretedJointSet: Codable, Equatable, Identifiable {
 
     func validate(pointMeasurementIDs: [UUID]) throws {
         _ = try representative.validated()
-        guard revision == 1, method == "user-interpretation-v1", interpretedAt.timeIntervalSinceReferenceDate.isFinite,
+        guard revision >= 1, method == "user-interpretation-v1", interpretedAt.timeIntervalSinceReferenceDate.isFinite,
               author.map({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) ?? true,
               Set(measurementIDs).count == measurementIDs.count,
               Set(measurementIDs).isSubset(of: Set(pointMeasurementIDs)),
@@ -144,5 +144,33 @@ extension MappingDraft {
             jointSets: try jointSets.map { try $0.record(now: now) }, tectonicStructures: structures)
         try value.validate(pointMeasurementIDs: measurements.map(\.id))
         return value
+    }
+}
+
+
+extension JointSetDraft {
+    init(_ record: InterpretedJointSet) {
+        self.init(identifier: record.identifier, id: record.id)
+        representative = record.representative; measurementIDs = record.measurementIDs
+        spacing = record.spacingMeters.map(ElevationInput.text) ?? ""
+        persistence = record.persistenceMeters.map(ElevationInput.text) ?? ""
+        aperture = record.apertureMillimeters.map(ElevationInput.text) ?? ""
+        roughness = record.roughness; infill = record.infill; notes = record.notes; author = record.author ?? ""
+    }
+    func corrected(previous: InterpretedJointSet?, now: Date) throws -> InterpretedJointSet {
+        if let previous, self == JointSetDraft(previous) { return previous }
+        let value = try record(now: now)
+        return InterpretedJointSet(id: value.id, identifier: value.identifier, revision: (previous?.revision ?? 0) + 1,
+            interpretedAt: now, author: value.author, method: value.method, representative: value.representative,
+            measurementIDs: value.measurementIDs, spacingMeters: value.spacingMeters, persistenceMeters: value.persistenceMeters,
+            apertureMillimeters: value.apertureMillimeters, roughness: value.roughness, infill: value.infill, notes: value.notes)
+    }
+}
+extension TectonicStructureDraft {
+    init(_ record: TectonicStructure) {
+        self.init(id: record.id)
+        type = record.type; orientation = record.orientation
+        thickness = record.thicknessMeters.map(ElevationInput.text) ?? ""
+        picket = record.picket?.text ?? ""; position = record.position; description = record.description
     }
 }
