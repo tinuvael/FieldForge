@@ -82,7 +82,7 @@ struct MappingView: View {
             set: { if !$0 { mapping.perform { $0.cancelContextChange() } } })) {
                 Button("Удалить черновик", role: .destructive) { mapping.perform { try $0.confirmDiscard() } }
                 Button("Остаться", role: .cancel) { mapping.perform { $0.cancelContextChange() } }
-            } message: { Text("Пикет, интервал, дата, координаты, замеры, интерпретации, тектоника и примечания ещё не сохранены.") }
+            } message: { Text("Пикет, интервал, дата, координаты, замеры, интерпретации, тектоника, рейтинги и примечания ещё не сохранены.") }
     }
     private func draft<T>(_ key: WritableKeyPath<MappingDraft, T>, fallback: T) -> Binding<T> {
         Binding(get: { mapping.workflow?.draft[keyPath: key] ?? fallback },
@@ -147,6 +147,8 @@ struct MappingView: View {
                 }
                 MappingGeologyForm(sets: draft(\.jointSets, fallback: []), structures: draft(\.tectonicStructures, fallback: []),
                                    measurements: w.draft.measurements, addSet: { mapping.perform { $0.draft.addJointSet() } })
+                MappingRatingsForm(q: draft(\.bartonQ, fallback: BartonQInput()),
+                                   rmr: draft(\.rmr89, fallback: RMR89Input()), focus: $focused)
                 Section("Примечания") {
                     TextField("Полевые примечания", text: draft(\.notes, fallback: ""), axis: .vertical)
                         .lineLimit(3...8).focused($focused).accessibilityIdentifier("mappingNotes")

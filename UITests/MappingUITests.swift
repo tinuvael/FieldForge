@@ -268,6 +268,60 @@ final class MappingUITests: XCTestCase {
         back(app); app.staticTexts["ПК 0+010"].tap()
         XCTAssertFalse(disclosure("J1 · интерпретация", app: app).exists)
     }
+    @MainActor func testP32bRatingsPartialFailureCompleteQResetAndJournalReopen() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication(); app.launchEnvironment["FIELD_FORGE_TEST_RUN_ID"] = UUID().uuidString
+        app.launchArguments = ["--ui-testing"]; app.launch()
+        let project = "Q-" + String(UUID().uuidString.prefix(6)), excavation = "Q-штрек"
+        create("projectPicker", name: project, app: app); select("projectPicker", value: project, app: app)
+        create("horizonPicker", name: "+393 м", app: app); select("horizonPicker", value: "+393 м", app: app)
+        create("excavationPicker", name: excavation, app: app); select("excavationPicker", value: excavation, app: app)
+        fill(app.textFields["mappingPicket"], "5", app: app)
+        let qSection = disclosure("Barton Q", app: app); show(qSection, app: app); qSection.tap()
+        fill(app.textFields["qRQD"], "0,125", app: app)
+        show(app.buttons["qRQDSource"], app: app); app.buttons["qRQDSource"].tap()
+        app.buttons["Измерено по керну"].tap()
+        show(app.buttons["qLocation"], app: app); app.buttons["qLocation"].tap(); app.buttons["Обычный участок · Jn ×1"].tap()
+        show(app.buttons["qContact"], app: app); app.buttons["qContact"].tap(); app.buttons["a — контакт стенок"].tap()
+        let choices = [("jn", "Jn —", "F ·"), ("jr", "Jr —", "B ·"), ("ja", "Ja —", "C ·"),
+                       ("jw", "Jw —", "A ·"), ("srf", "SRF —", "G ·")]
+        for (parameter, title, rowPrefix) in choices {
+            let group = disclosure(title, app: app); show(group, app: app); group.tap()
+            let picker = app.buttons["qCategory-" + parameter]; show(picker, app: app); picker.tap()
+            let row = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", rowPrefix)).firstMatch
+            XCTAssertTrue(row.waitForExistence(timeout: 5), app.debugDescription); row.tap()
+            show(group, app: app, upward: false); group.tap()
+        }
+        fill(app.textFields["qAssessmentSource"], "UI field notebook", app: app)
+        show(app.staticTexts["qResult"], app: app); XCTAssertTrue(app.staticTexts["qResult"].label.contains("1,66667"))
+        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot()); screenshot.name = "NGI 2025 Q result and RQD minimum convention"; screenshot.lifetime = .keepAlways; add(screenshot)
+        show(qSection, app: app, upward: false); qSection.tap()
+        let rmrSection = disclosure("RMR", app: app); show(rmrSection, app: app); rmrSection.tap()
+        XCTAssertTrue(app.staticTexts["rmrUnavailable"].exists)
+        fill(app.textFields["rmrStrength"], "-1", app: app)
+        save(app)
+        XCTAssertTrue(app.buttons["Понятно"].waitForExistence(timeout: 5)); app.buttons["Понятно"].tap()
+        show(app.textFields["rmrStrength"], app: app, upward: false)
+        XCTAssertEqual(app.textFields["rmrStrength"].value as? String, "-1")
+        fill(app.textFields["rmrStrength"], "120", app: app)
+        show(rmrSection, app: app, upward: false); rmrSection.tap()
+        save(app); saved(app); top(app)
+        XCTAssertTrue(app.buttons["projectPicker"].label.contains(project)); XCTAssertTrue(app.buttons["excavationPicker"].label.contains(excavation))
+        XCTAssertEqual(app.textFields["mappingPicket"].value as? String, "Пикет: ПК 0+005 или метры")
+        XCTAssertEqual(app.textFields["mappingZ"].value as? String, "393")
+        show(qSection, app: app); qSection.tap()
+        show(app.textFields["qRQD"], app: app)
+        XCTAssertEqual(app.textFields["qRQD"].value as? String, "Не указано")
+        show(qSection, app: app, upward: false); qSection.tap()
+        top(app); fill(app.textFields["mappingPicket"], "10", app: app); save(app); saved(app)
+        app.terminate(); app.launch()
+        app.buttons["mappingJournal"].tap(); app.staticTexts["5"].tap()
+        let savedQ = disclosure("Barton Q ·", app: app); show(savedQ, app: app); savedQ.tap()
+        show(app.staticTexts["qResult"], app: app); XCTAssertTrue(app.staticTexts["qResult"].label.contains("1,66667"))
+        show(savedQ, app: app, upward: false); savedQ.tap()
+        let savedRMR = disclosure("RMR89 ·", app: app); show(savedRMR, app: app); savedRMR.tap()
+        XCTAssertTrue(app.staticTexts["savedRMRUnavailable"].exists)
+    }
     @MainActor private func disclosure(_ title: String, app: XCUIApplication) -> XCUIElement {
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch
     }
@@ -328,8 +382,17 @@ final class MappingUITests: XCTestCase {
     @MainActor private func dismissKeyboard(_ app: XCUIApplication) { if app.buttons["Готово"].exists { app.buttons["Готово"].tap() } }
     @MainActor private func save(_ app: XCUIApplication) {
         let button = app.buttons["saveMappingObservation"]
-        for _ in 0..<16 { if button.isHittable { break }; app.swipeUp() }
-        XCTAssertTrue(button.isHittable); button.tap()
+        // A partially exposed Form row can report hittable while its center is under the tab bar.
+        // Scroll the tap point into the form before tapping; do not mistake a tab tap for a save.
+        for _ in 0..<24 {
+            if button.exists && button.isHittable && app.collectionViews.firstMatch.frame.contains(
+                CGPoint(x: button.frame.midX, y: button.frame.midY)) && button.frame.midY < app.tabBars.firstMatch.frame.minY { break }
+            scrollForm(app, up: true)
+        }
+        XCTAssertTrue(button.isHittable)
+        XCTAssertTrue(app.collectionViews.firstMatch.frame.contains(CGPoint(x: button.frame.midX, y: button.frame.midY)))
+        XCTAssertLessThan(button.frame.midY, app.tabBars.firstMatch.frame.minY)
+        button.tap()
     }
     @MainActor private func saved(_ app: XCUIApplication) {
         XCTAssertTrue(app.alerts["Наблюдение сохранено"].waitForExistence(timeout: 5)); app.buttons["Продолжить"].tap()
