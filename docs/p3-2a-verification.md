@@ -34,6 +34,32 @@ At the owner's request, enlarged the compass after visually comparing Things 3, 
 
 Repeated icon generation is byte-identical: current asset SHA-256 `c167e778a5c2c49bb070a5d5856db1cf6c1f41c8645f61ca60542078b9131d17`. The generator validates 1024×1024 opaque RGB output and the asset reference. A subsequent `xcodebuild -project FieldForge.xcodeproj -scheme FieldForge -destination 'generic/platform=iOS Simulator' -derivedDataPath /tmp/FieldForge-Icon-Proportions CODE_SIGNING_ALLOWED=NO build` succeeded (exit 0; log `/tmp/fieldforge-icon-proportions-build.log`). No Swift source, project configuration or data changed in this follow-up. The full test counts above precede this artwork-only refinement; the entire UI suite was not repeated for it. No physical-device installation.
 
+## Focused tectonic-orientation update — 2026-10-18
+
+Existing PR #17 branch only. Tectonic fields now preserve complete, dip-only, azimuth-only and unknown orientation using the same schema-4 text/north/convention fields. No new migration/version or reset. Complete geological conventions remain unchanged; incomplete components do not become a `PlaneOrientation` or a measured original. The interval selector explains left/right walls relative to increasing picketage, without geographic or coordinate-axis inference.
+
+- Targeted `swift test --filter P32GeologyTests`: **18 passed, 0 failures**.
+- Complete `swift test`: **137 passed, 0 failures** (four additional domain/persistence tests).
+- Complete fresh Xcode simulator build/test: **137 unit + 9 UI = 146 passed, 0 failures**. UI runtime was 2635.705 seconds, including the expanded P3.2a end-to-end case (1009.888 seconds). All existing P3.1, sequential-point, standalone-journal and DXF scenarios passed in this same run.
+- Deterministic project generation: unchanged project/scheme SHA-256 across repeated runs. No source inventory, signing, DXF or artwork changes.
+
+Added coverage includes independent missing components and entered zero/360°, retained full precision/north, invalid partial angles/north/conventions, unchanged strict originals/J1–J5 validation, failed-save draft/graph retention and retry/reset. A literal previous PR #17 tectonic JSON fixture decodes in schema 4; loading leaves file bytes unchanged. Appending/reopening partial and unknown structures preserves every old point, manual original and raw iPhone sensor record, with only the existing `.previous` write backup and no migration backup. The existing UI acceptance scenario now creates two complete faults, a dip-only fault, an azimuth-only fault and a fault with unknown orientation, validates 91°/361° errors, and checks missing-value labels and nonorientation details after save/relaunch.
+
+Current run commands/evidence:
+
+```sh
+swift test --filter P32GeologyTests
+swift test
+python3 scripts/generate_project.py
+xcodebuild -project FieldForge.xcodeproj -scheme FieldForge \
+  -destination 'platform=iOS Simulator,id=9213E94D-6540-434F-AD58-074C439F967B' \
+  -derivedDataPath /tmp/FieldForge-Tectonic-Partial-Final \
+  -resultBundlePath /tmp/FieldForge-Tectonic-Partial-Final.xcresult \
+  CODE_SIGNING_ALLOWED=NO test
+```
+
+Local logs: `/tmp/fieldforge-tectonic-targeted.log`, `/tmp/fieldforge-tectonic-swift-full.log`, `/tmp/fieldforge-tectonic-xcode-full.log`. Earlier counts above are historical; this section records the focused follow-up. No physical-device installation or merge.
+
 ## Limits
 
 Simulator/mock results do not establish physical measurement accuracy. Existing independent compass/fixture validation remains required. Fault/interval/set authoring introduces no geological classification calculation. Saved records are read-only; controlled historical corrections/revisions are deferred. Drafts survive navigation/backgrounding in memory, not process termination. Storage-failure verification uses injected errors and file-conflict fixtures, not physical power-loss/disk-full trials. Schema 4 is unreadable by old builds; any downgrade requires a reviewed recovery plan. Q/RMR, photo, new export and LiDAR capabilities remain excluded.
