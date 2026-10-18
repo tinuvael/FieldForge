@@ -197,9 +197,9 @@ final class P32GeologyTests: XCTestCase {
             try bytes.write(to: url)
             var reopened = try MappingWorkflow(store: FileMappingStore(url: url))
             let oldJournal = reopened.journal
-            XCTAssertEqual(oldJournal.schemaVersion, 4)
+            XCTAssertEqual(oldJournal.schemaVersion, 5)
             XCTAssertEqual(oldJournal.observations[0].geology?.tectonicStructures, [legacy])
-            XCTAssertEqual(try Data(contentsOf: url), bytes) // Opening existing schema 4 does not rewrite it.
+            XCTAssertEqual(try Data(contentsOf: url), bytes) // Opening the current schema with legacy-shaped tectonic records does not rewrite it.
             reopened.draft.picket = "10"
             for input in [ManualOrientationInput(), ManualOrientationInput(dipAngleText: "45,25", reference: .trueNorth),
                           ManualOrientationInput(dipDirectionText: "360", reference: .gridNorth)] {
@@ -208,7 +208,7 @@ final class P32GeologyTests: XCTestCase {
             }
             let newPoint = try reopened.save(now: date)
             let again = try FileMappingStore(url: url).load()
-            XCTAssertEqual(again.schemaVersion, 4); XCTAssertEqual(again.observations, oldJournal.observations + [newPoint])
+            XCTAssertEqual(again.schemaVersion, 5); XCTAssertEqual(again.observations, oldJournal.observations + [newPoint])
             XCTAssertEqual(again.measurements, oldJournal.measurements)
             XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: dir.path)), ["mapping.json", "mapping.json.previous"])
         }
@@ -337,7 +337,7 @@ final class P32GeologyTests: XCTestCase {
             let bytes = try JSONEncoder().encode(graph), url = dir.appendingPathComponent("mapping.json")
             try bytes.write(to: url)
             let store = FileMappingStore(url: url); var reopened = try MappingWorkflow(store: store)
-            XCTAssertEqual(reopened.journal.schemaVersion, 4); XCTAssertEqual(reopened.observations, [old])
+            XCTAssertEqual(reopened.journal.schemaVersion, 5); XCTAssertEqual(reopened.observations, [old])
             XCTAssertEqual(reopened.journal.measurements, graph.measurements); XCTAssertEqual(reopened.journal.plans, [plan])
             XCTAssertEqual(try Data(contentsOf: url.appendingPathExtension("p3-backup")), bytes)
             XCTAssertNoThrow(try files.read(plan))

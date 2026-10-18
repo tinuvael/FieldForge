@@ -40,3 +40,7 @@ P1 adds an isolated version-1 `mapping-v1.json` graph without migrating or assig
 ## P3.1 mapping schema 3
 
 The independent measurement schema above is unchanged. The mapping aggregate at `mapping-v1.json` now adds an original-measurement table with exactly-one-point ownership through UUID references. The existing backup/validated round-trip/atomic upgrade sequence preserves old schema-1 bytes in `.p1-backup` and schema-2 bytes in `.p2-backup`, retaining observations and managed DXF references unchanged. Failed/unsupported/corrupt loads block writes, never reset. Schema 3 requires the evidence table even when empty. See [P3.1 contract](p3-measurements.md).
+
+## P3.2b mapping schema 5
+
+The existing mapping path stays `mapping-v1.json`; independent measurement files are unchanged. Schema 5 adds optional point-level Q/RMR89 assessment snapshots. Valid schema 1–4 graphs migrate through the existing exact-byte non-overwriting `pN-backup`, round-trip and source-change checks, then atomic replacement. Missing historical assessments stay nil. Saved Q method/result/input consistency is validated and unknown method versions fail closed. An incomplete Q record retains its missing list; RMR89 has no numerical result. Append-only observations protect assessments together with geology and source readings. Failure never creates an empty replacement journal. See [P3.2b methodology/storage contract](p3-2b-ratings.md).

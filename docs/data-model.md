@@ -65,7 +65,11 @@ Chainage is independent of strings such as «ПК 0+005». Define a display poli
 
 Describe joint characteristics such as spacing, persistence, roughness, infill, weathering and water conditions primarily at interval level in field descriptions or later verified structured fields. Do not require separate entries for each representative orientation.
 
-## Rock-mass assessment
+## P3.2b implemented rock-mass assessment
+
+Schema 5 adds optional `MappingObservation.ratings` containing `BartonQAssessment` and `RMR89Assessment`, each revision 1 with method/implementation version, timestamp and exact original input strings/source notes. Q stores a validated result snapshot (original/used RQD, effective coefficients, unrounded Q, seven-class value or outside-chart null) or an explicit missing list. RMR89 stores original inputs/missing list only, with numerical evaluation unavailable. Existing observations decode ratings as nil. Assessments belong to the immutable point/optional interval; no link or result is added to fracture measurements. See [exact tables, validation and migration](p3-2b-ratings.md).
+
+## Rock-mass assessment (future independent revision entities)
 
 `id` and required `mappingIntervalID`; assessments belong to an **interval**, never each individual joint measurement. Retain assessment revisions rather than overwrite field evidence.
 

@@ -104,10 +104,11 @@ struct MappingObservation: Codable, Equatable, Identifiable {
     let measurementIDs: [UUID]
     let notes: String
     let geology: MappingGeology?
+    var ratings: MappingRatings? = nil
 }
 
 struct MappingJournal: Codable, Equatable {
-    var schemaVersion = 4
+    var schemaVersion = 5
     var projects: [MappingProject] = []
     var horizons: [MappingHorizon] = []
     var excavations: [MappingExcavation] = []
@@ -139,7 +140,7 @@ struct MappingJournal: Codable, Equatable {
     }
 
     func validate() throws {
-        guard [1, 2, 3, 4].contains(schemaVersion) else { throw StorageError.unsupportedVersion }
+        guard [1, 2, 3, 4, 5].contains(schemaVersion) else { throw StorageError.unsupportedVersion }
         func unique(_ ids: [UUID]) -> Bool { Set(ids).count == ids.count }
         guard unique(projects.map(\.id)), unique(horizons.map(\.id)),
               unique(excavations.map(\.id)), unique(plans.map(\.id)), unique(observations.map(\.id)),
@@ -166,6 +167,8 @@ struct MappingJournal: Codable, Equatable {
               schemaVersion >= 3 || (measurements.isEmpty && linkedIDs.isEmpty) else { throw StorageError.invalidRecord }
         for o in observations {
             guard schemaVersion >= 4 || o.geology == nil else { throw StorageError.invalidRecord }
+            guard schemaVersion >= 5 || o.ratings == nil else { throw StorageError.invalidRecord }
+            try o.ratings?.validate()
             try o.geology?.validate(pointMeasurementIDs: o.measurementIDs)
             guard validContext(MappingContext(projectID: o.projectID, horizonID: o.horizonID, excavationID: o.excavationID)),
                   o.chainageMeters.isFinite, o.chainageMeters >= 0,
@@ -239,6 +242,8 @@ struct MappingDraft: Equatable {
         measurements.removeAll { $0.id == id }
         for index in jointSets.indices { jointSets[index].measurementIDs.removeAll { $0 == id } }
     }
+    var bartonQ = BartonQInput()
+    var rmr89 = RMR89Input()
     var jointSets: [JointSetDraft] = []
     var tectonicStructures: [TectonicStructureDraft] = []
     var startPicket = "", endPicket = ""
@@ -283,7 +288,7 @@ struct MappingDraft: Equatable {
     var hasChanges: Bool {
         ![picket, chainageOriginAndDirection, x, y, crs, axes, coordinateProvenance, notes].allSatisfy(\.isEmpty) ||
             observedAtOverride != nil || zOrigin == .manualOverride || !measurements.isEmpty ||
-            !jointSets.isEmpty || !tectonicStructures.isEmpty || !startPicket.isEmpty || !endPicket.isEmpty || observationPosition != nil
+            bartonQ.hasChanges || rmr89.hasChanges || !jointSets.isEmpty || !tectonicStructures.isEmpty || !startPicket.isEmpty || !endPicket.isEmpty || observationPosition != nil
     }
     func coordinates() throws -> MappingCoordinates? {
         func number(_ text: String) throws -> Double? {
