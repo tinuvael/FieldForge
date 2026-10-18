@@ -180,4 +180,10 @@ Automatic input loading means reading available shared records by stable ID, the
 
 ## Implemented P3.1 point evidence
 
-Mapping schema 3 stores original `Measurement` values in the shared mapping aggregate. `MappingObservation.measurementIDs` owns ordered UUID references; every original has exactly one point owner, inheriting its project/horizon/excavation context. Manual input and raw sensor diagnostics retain their original source, precision, north and timestamp. Originals and points are append-only; derived representative sets are not implemented. See [P3.1 capture/storage](p3-measurements.md).
+Mapping schema 3 stores original `Measurement` values in the shared mapping aggregate. `MappingObservation.measurementIDs` owns ordered UUID references; every original has exactly one point owner, inheriting its project/horizon/excavation context. Manual input and raw sensor diagnostics retain their original source, precision, north and timestamp. Originals and points are append-only. P3.2a adds explicitly interpreted representative sets separately from these originals; see the implementation update below. See [P3.1 capture/storage](p3-measurements.md).
+
+## P3.2a implementation update
+
+The shared mapping aggregate now uses schema 4 with optional `MappingGeology` on immutable points: interval bounds/position, interpreted J1–J5 revision-1 records with point-local original-evidence UUID links, and arbitrary tectonic structures. Original measurements remain separate immutable evidence. The existing atomic aggregate and backup mechanism is extended without a new storage layer; legacy observations retain absent geology. See [P3.2a domain, units and persistence](p3-2a-geology.md). Planned relational entities elsewhere in this document remain future architecture.
+
+Tectonic orientation may be complete, dip-only, azimuth-only or unknown using the same schema-4 orientation text/north/convention fields. Blank angle text is unknown, not zero. Partial validation does not yield a determined plane or weaken the original-measurement/J1–J5 validators. Left/right wall positions refer only to increasing chainage, not a geographic heading or coordinate axis. This clarification adds no schema version or migration.

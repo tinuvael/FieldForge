@@ -53,4 +53,26 @@ struct ManualOrientationInput: Codable, Equatable, Sendable {
                            plane: "geologicalPlane", algorithmVersion: "manual-entry-v1",
                            source: .manualCompass, directionMeaning: result.meaning, manualInput: self)
     }
+
+    /// Tectonic descriptions may retain independent, missing angle components.
+    /// Incomplete input never produces a PlaneOrientation or a measured observation.
+    /// The stored text/north/convention fields and their Codable representation are unchanged.
+    func validatedTectonic() throws -> (dipAngle: Double?, dipDirection: Double?) {
+        let hasDip = !dipAngleText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasDirection = !dipDirectionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let dip = number(dipAngleText), direction = number(dipDirectionText)
+        if hasDip {
+            guard let dip, (0...90).contains(dip) else { throw ManualEntryError.dipAngle }
+        }
+        if hasDirection {
+            guard let direction, (0...360).contains(direction) else { throw ManualEntryError.dipDirection }
+        }
+        guard GeographicReference.manualChoices.contains(reference) else { throw ManualEntryError.northReference }
+        if hasDip && hasDirection {
+            _ = try validated() // Preserve complete horizontal/vertical and conventional-side rules.
+        } else if usesConventionalDipSide {
+            throw ManualEntryError.verticalConvention
+        }
+        return (dip, direction)
+    }
 }

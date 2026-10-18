@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export the owner's opaque square artwork to the iOS 1024px AppIcon.
+"""Export the approved opaque square artwork to the iOS 1024px AppIcon.
 
 Requires native macOS sips. This is asset preparation only, not a runtime dependency.
 The source is preserved byte-for-byte; no crop, redesign or extra mask is applied.
@@ -24,7 +24,7 @@ def png_header(path):
 def main():
     width, height, depth, color = png_header(SOURCE)
     if width != height or width < 1024 or depth != 8 or color != 2:
-        raise ValueError("Expected the owner's square, opaque 8-bit RGB master at least 1024px")
+        raise ValueError("Expected a square, opaque 8-bit RGB master at least 1024px")
     contents = json.loads((ASSET / "Contents.json").read_text())
     if contents["images"] != [{"filename": "AppIcon.png", "idiom": "universal", "platform": "ios", "size": "1024x1024"}]:
         raise ValueError("Review changed AppIcon asset references before generation")

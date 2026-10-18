@@ -184,6 +184,9 @@ struct MappingObservationDetail: View {
                 }
                 if record.measurementIDs.isEmpty { Text("Замеры не добавлены") }
             }
+            if let geology = record.geology {
+                MappingGeologyDetail(geology: geology, measurements: mapping.workflow?.journal.measurements(for: record) ?? [])
+            }
             Section("Примечания") { Text(record.notes.isEmpty ? "Нет примечаний" : record.notes) }
             Section("Метаданные") {
                 LabeledContent("Создано", value: MeasurementDateText.format(record.createdAt, detailed: true))

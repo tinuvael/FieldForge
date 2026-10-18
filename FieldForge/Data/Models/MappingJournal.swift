@@ -103,10 +103,11 @@ struct MappingObservation: Codable, Equatable, Identifiable {
     let coordinates: MappingCoordinates?
     let measurementIDs: [UUID]
     let notes: String
+    let geology: MappingGeology?
 }
 
 struct MappingJournal: Codable, Equatable {
-    var schemaVersion = 3
+    var schemaVersion = 4
     var projects: [MappingProject] = []
     var horizons: [MappingHorizon] = []
     var excavations: [MappingExcavation] = []
@@ -138,7 +139,7 @@ struct MappingJournal: Codable, Equatable {
     }
 
     func validate() throws {
-        guard [1, 2, 3].contains(schemaVersion) else { throw StorageError.unsupportedVersion }
+        guard [1, 2, 3, 4].contains(schemaVersion) else { throw StorageError.unsupportedVersion }
         func unique(_ ids: [UUID]) -> Bool { Set(ids).count == ids.count }
         guard unique(projects.map(\.id)), unique(horizons.map(\.id)),
               unique(excavations.map(\.id)), unique(plans.map(\.id)), unique(observations.map(\.id)),
@@ -154,12 +155,18 @@ struct MappingJournal: Codable, Equatable {
                       (1...10_000_000).contains(f.byteCount) && f.importedAt.timeIntervalSinceReferenceDate.isFinite &&
                       f.unitDeclaration == "userConfirmedAtImport" } ?? true) }),
               validContext(selection) else { throw StorageError.invalidRecord }
+        let geologyIDs = observations.flatMap { observation in
+            (observation.geology?.jointSets.map(\.id) ?? []) + (observation.geology?.tectonicStructures.map(\.id) ?? [])
+        }
+        guard unique(geologyIDs) else { throw StorageError.invalidRecord }
         let linkedIDs = observations.flatMap(\.measurementIDs)
         guard unique(measurements.map(\.id)), unique(linkedIDs),
               Set(linkedIDs) == Set(measurements.map(\.id)),
               measurements.allSatisfy(\.isSavable),
-              schemaVersion == 3 || (measurements.isEmpty && linkedIDs.isEmpty) else { throw StorageError.invalidRecord }
+              schemaVersion >= 3 || (measurements.isEmpty && linkedIDs.isEmpty) else { throw StorageError.invalidRecord }
         for o in observations {
+            guard schemaVersion >= 4 || o.geology == nil else { throw StorageError.invalidRecord }
+            try o.geology?.validate(pointMeasurementIDs: o.measurementIDs)
             guard validContext(MappingContext(projectID: o.projectID, horizonID: o.horizonID, excavationID: o.excavationID)),
                   o.chainageMeters.isFinite, o.chainageMeters >= 0,
                   try PicketInput.meters(o.picket) == o.chainageMeters,
@@ -228,7 +235,14 @@ struct MappingDraft: Equatable {
         guard reading.isSavable, !measurements.contains(where: { $0.id == reading.id }) else { throw StorageError.invalidRecord }
         measurements.append(reading)
     }
-    mutating func removeMeasurement(id: UUID) { measurements.removeAll { $0.id == id } }
+    mutating func removeMeasurement(id: UUID) {
+        measurements.removeAll { $0.id == id }
+        for index in jointSets.indices { jointSets[index].measurementIDs.removeAll { $0 == id } }
+    }
+    var jointSets: [JointSetDraft] = []
+    var tectonicStructures: [TectonicStructureDraft] = []
+    var startPicket = "", endPicket = ""
+    var observationPosition: ObservationPosition?
     var picket = ""
     var chainageOriginAndDirection = ""
     var observedAtOverride: Date?
@@ -268,7 +282,8 @@ struct MappingDraft: Equatable {
     }
     var hasChanges: Bool {
         ![picket, chainageOriginAndDirection, x, y, crs, axes, coordinateProvenance, notes].allSatisfy(\.isEmpty) ||
-            observedAtOverride != nil || zOrigin == .manualOverride || !measurements.isEmpty
+            observedAtOverride != nil || zOrigin == .manualOverride || !measurements.isEmpty ||
+            !jointSets.isEmpty || !tectonicStructures.isEmpty || !startPicket.isEmpty || !endPicket.isEmpty || observationPosition != nil
     }
     func coordinates() throws -> MappingCoordinates? {
         func number(_ text: String) throws -> Double? {
