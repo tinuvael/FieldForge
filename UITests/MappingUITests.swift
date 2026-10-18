@@ -132,6 +132,9 @@ final class MappingUITests: XCTestCase {
         fill(app.textFields["mappingStartPicket"], "5", app: app)
         fill(app.textFields["mappingEndPicket"], "10,5", app: app)
         show(app.buttons["mappingPosition"], app: app); app.buttons["mappingPosition"].tap(); app.buttons["Кровля"].tap()
+        show(app.staticTexts["mappingWallConvention"], app: app)
+        XCTAssertEqual(app.staticTexts["mappingWallConvention"].label, "Левая и правая стенка — по направлению возрастания пикетажа.")
+        show(disclosure("Интервал и положение", app: app), app: app, upward: false)
         disclosure("Интервал и положение", app: app).tap()
         for index in 1...2 {
             reveal("captureMappingManual", app: app); app.buttons["captureMappingManual"].tap()
@@ -172,16 +175,37 @@ final class MappingUITests: XCTestCase {
         fill(app.textFields["jointAperture"], "0,125", app: app)
         back(app)
         top(app); show(disclosure("Тектоника:", app: app), app: app); disclosure("Тектоника:", app: app).tap()
-        for index in 1...2 {
+        for index in 1...5 {
             show(app.buttons["addTectonicStructure"], app: app); app.buttons["addTectonicStructure"].tap()
             let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "editTectonic-"))
             let row = rows.element(boundBy: index - 1); show(row, app: app); row.tap()
             XCTAssertTrue(app.textFields["geologyDip"].waitForExistence(timeout: 5))
-            fill(app.textFields["geologyDip"], "65", app: app)
-            fill(app.textFields["geologyDirection"], "210", app: app)
-            app.buttons["geologyNorth"].tap(); app.buttons["Истинный север"].tap()
+            XCTAssertEqual(app.textFields["geologyDip"].value as? String, "Не указано")
+            XCTAssertEqual(app.textFields["geologyDirection"].value as? String, "Не указано")
+            if index <= 2 {
+                fill(app.textFields["geologyDip"], "65", app: app)
+                fill(app.textFields["geologyDirection"], "210", app: app)
+                app.buttons["geologyNorth"].tap(); app.buttons["Истинный север"].tap()
+            } else if index == 3 {
+                fill(app.textFields["geologyDip"], "91", app: app)
+                XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "geologyOrientationError").firstMatch.exists)
+                fill(app.textFields["geologyDip"], "45", app: app)
+                show(app.staticTexts["Неполная ориентировка: азимут падения не определён"], app: app)
+            } else if index == 4 {
+                fill(app.textFields["geologyDirection"], "361", app: app)
+                XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "geologyOrientationError").firstMatch.exists)
+                fill(app.textFields["geologyDirection"], "360", app: app)
+                app.buttons["geologyNorth"].tap(); app.buttons["Сеточный север"].tap()
+                show(app.staticTexts["Неполная ориентировка: угол падения не указан"], app: app)
+            } else {
+                show(app.staticTexts["Ориентировка не определена"], app: app)
+            }
             fill(app.textFields["tectonicThickness"], "0,5", app: app)
             fill(app.textFields["tectonicPicket"], "\(6 + index)", app: app)
+            if index == 5 {
+                fill(app.textFields["tectonicPosition"], "У кровли", app: app)
+                fill(app.textFields["tectonicDescription"], "След разлома без замера", app: app)
+            }
             back(app)
         }
         // Returning from the plan and temporary backgrounding retain geological drafts.
@@ -214,13 +238,33 @@ final class MappingUITests: XCTestCase {
         links.firstMatch.tap()
         XCTAssertTrue(app.staticTexts["Исходный ручной ввод"].waitForExistence(timeout: 5))
         back(app)
-        show(disclosure("№1 · Разлом", app: app), app: app); disclosure("№1 · Разлом", app: app).tap()
-        show(journalValue("Мощность, м", "0.50000000", app: app), app: app)
-        show(disclosure("№1 · Разлом", app: app), app: app, upward: false); disclosure("№1 · Разлом", app: app).tap()
-        show(disclosure("№2 · Разлом", app: app), app: app); disclosure("№2 · Разлом", app: app).tap()
-        show(journalValue("Мощность, м", "0.50000000", app: app), app: app)
-        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
-        screenshot.name = "P32 saved tectonic structures"; screenshot.lifetime = .keepAlways; add(screenshot)
+        for index in 1...5 {
+            let row = disclosure("№\(index) · Разлом", app: app)
+            show(row, app: app); row.tap()
+            if index <= 2 {
+                show(journalValue("Мощность, м", "0.50000000", app: app), app: app)
+            } else if index == 3 {
+                show(app.staticTexts["Неполная ориентировка: азимут падения не определён"], app: app)
+                show(journalValue("Угол падения, °", "45", app: app), app: app)
+                show(journalValue("Азимут падения, °", "Не определён", app: app), app: app)
+            } else if index == 4 {
+                show(app.staticTexts["Неполная ориентировка: угол падения не указан"], app: app)
+                show(journalValue("Угол падения, °", "Не определён", app: app), app: app)
+                show(journalValue("Азимут падения, °", "360", app: app), app: app)
+                show(journalValue("Вид севера", "Сеточный север", app: app), app: app)
+            } else {
+                show(app.staticTexts["Ориентировка не определена"], app: app)
+                show(journalValue("Угол падения, °", "Не определён", app: app), app: app)
+                show(journalValue("Азимут падения, °", "Не определён", app: app), app: app)
+                show(journalValue("Мощность, м", "0.50000000", app: app), app: app)
+                show(journalValue("Пикет структуры", "11", app: app), app: app)
+                show(journalValue("Положение структуры", "У кровли", app: app), app: app)
+                show(journalValue("Описание", "След разлома без замера", app: app), app: app)
+                let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+                screenshot.name = "P32 saved tectonic structure without orientation"; screenshot.lifetime = .keepAlways; add(screenshot)
+            }
+            show(row, app: app, upward: false); row.tap()
+        }
         back(app); app.staticTexts["ПК 0+010"].tap()
         XCTAssertFalse(disclosure("J1 · интерпретация", app: app).exists)
     }

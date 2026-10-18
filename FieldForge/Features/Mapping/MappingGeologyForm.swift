@@ -29,6 +29,8 @@ struct MappingIntervalForm: View {
                 Text("Не указано").tag(nil as ObservationPosition?)
                 ForEach(ObservationPosition.allCases, id: \.self) { Text($0.title).tag(Optional($0)) }
             }.accessibilityIdentifier("mappingPosition")
+            Text("Левая и правая стенка — по направлению возрастания пикетажа.")
+                .font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("mappingWallConvention")
             Text("Начало и конец — метры от того же начала и в том же направлении, что и основной пикет. Пустое поле остаётся неизвестным.")
                 .font(.caption).foregroundStyle(.secondary)
         }
@@ -130,7 +132,9 @@ private struct TectonicStructureEditor: View {
                 Picker("Тип структуры", selection: $draft.type) {
                     ForEach(TectonicStructureType.allCases, id: \.self) { Text($0.title).tag($0) }
                 }.accessibilityIdentifier("tectonicType")
-                GeologyOrientationForm(input: $draft.orientation, focus: $focused)
+            }
+            Section("Ориентировка · известные параметры") {
+                GeologyOrientationForm(input: $draft.orientation, focus: $focused, permitsPartial: true)
             }
             Section("Положение и описание") {
                 GeologyField(title: "Мощность, м · необязательно", text: $draft.thickness, identifier: "tectonicThickness", nonnegative: true, focus: $focused)
@@ -150,21 +154,48 @@ private struct TectonicStructureEditor: View {
 private struct GeologyOrientationForm: View {
     @Binding var input: ManualOrientationInput
     let focus: FocusState<Bool>.Binding
+    var permitsPartial = false
     var body: some View {
+        if permitsPartial, let error { orientationError(error) }
         GeologyField(title: "Угол падения, ° · 0–90", text: $input.dipAngleText, identifier: "geologyDip", focus: focus)
         GeologyField(title: "Азимут падения, ° · 0–360", text: $input.dipDirectionText, identifier: "geologyDirection", focus: focus)
         Picker("Вид севера", selection: $input.reference) {
             ForEach(GeographicReference.manualChoices, id: \.self) { Text($0.title).tag($0) }
         }.accessibilityIdentifier("geologyNorth")
+        if permitsPartial {
+            Text("Укажите только известные угол и азимут. Пустое поле означает неизвестный параметр, оба поля можно оставить пустыми.")
+                .font(.caption).foregroundStyle(.secondary)
+            TectonicOrientationStatus(input: input)
+        }
         Toggle("Условная сторона вертикальной плоскости", isOn: $input.usesConventionalDipSide).accessibilityIdentifier("geologyConvention")
         Text("Азимут по часовой стрелке от выбранного севера: 0° — север, 90° — восток. При 0° падения азимут пустой. При 90° — пустой или явно подтверждённая условная сторона.")
             .font(.caption).foregroundStyle(.secondary)
-        if let error {
-            Label(error, systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.red).accessibilityIdentifier("geologyOrientationError")
-        }
+        if !permitsPartial, let error { orientationError(error) }
+    }
+    private func orientationError(_ error: String) -> some View {
+        Label(error, systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.red).accessibilityIdentifier("geologyOrientationError")
     }
     private var error: String? {
-        do { _ = try input.validated(); return nil } catch { return error.localizedDescription }
+        do {
+            if permitsPartial { _ = try input.validatedTectonic() } else { _ = try input.validated() }
+            return nil
+        } catch { return error.localizedDescription }
+    }
+}
+
+/// Describes missing field data without presenting an incomplete plane as measured.
+struct TectonicOrientationStatus: View {
+    let input: ManualOrientationInput
+    var body: some View {
+        if let value = try? input.validatedTectonic() {
+            if value.dipAngle == nil && value.dipDirection == nil {
+                Text("Ориентировка не определена").font(.caption).foregroundStyle(.secondary)
+            } else if value.dipAngle == nil {
+                Text("Неполная ориентировка: угол падения не указан").font(.caption).foregroundStyle(.secondary)
+            } else if value.dipDirection == nil {
+                Text("Неполная ориентировка: азимут падения не определён").font(.caption).foregroundStyle(.secondary)
+            }
+        }
     }
 }
 

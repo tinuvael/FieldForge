@@ -37,7 +37,7 @@ struct MappingGeologyDetail: View {
         Section("Тектоника: \(geology.tectonicStructures.count)") {
             ForEach(Array(geology.tectonicStructures.enumerated()), id: \.element.id) { index, structure in
                 DisclosureGroup("№\(index + 1) · \(structure.type.title)") {
-                    GeologicalOrientationDetail(input: structure.orientation)
+                    GeologicalOrientationDetail(input: structure.orientation, permitsPartial: true)
                     number("Мощность, м", structure.thicknessMeters)
                     LabeledContent("Пикет структуры", value: structure.picket.map { "\($0.text) · \(CSVExporter.number($0.meters)) м" } ?? "Не указан")
                     LabeledContent("Положение структуры", value: structure.position.isEmpty ? "Не указано" : structure.position)
@@ -55,10 +55,12 @@ struct MappingGeologyDetail: View {
 
 private struct GeologicalOrientationDetail: View {
     let input: ManualOrientationInput
+    var permitsPartial = false
     var body: some View {
+        if permitsPartial { TectonicOrientationStatus(input: input) }
         // Preserve the user's full precision and original 360°/decimal-comma spelling.
-        LabeledContent("Угол падения, °", value: input.dipAngleText)
-        LabeledContent("Азимут падения, °", value: input.dipDirectionText.isEmpty ? "Не определён" : input.dipDirectionText)
+        LabeledContent("Угол падения, °", value: input.dipAngleText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Не определён" : input.dipAngleText)
+        LabeledContent("Азимут падения, °", value: input.dipDirectionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Не определён" : input.dipDirectionText)
         LabeledContent("Вид севера", value: input.reference.title)
         if let value = try? input.validated() { Text(value.meaning.title).font(.caption) }
     }

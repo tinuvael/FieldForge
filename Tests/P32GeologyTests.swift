@@ -97,7 +97,10 @@ final class P32GeologyTests: XCTestCase {
                        ManualOrientationInput(dipAngleText: "45", dipDirectionText: "30", reference: .simulatedNorth)]
         for input in invalid {
             var joint = set(); joint.representative = input; XCTAssertThrowsError(try joint.record(now: date))
-            var tectonic = structure(); tectonic.orientation = input; XCTAssertThrowsError(try tectonic.record())
+            var tectonic = structure(); tectonic.orientation = input
+            if input.dipAngleText == "45" && input.dipDirectionText.isEmpty {
+                XCTAssertNoThrow(try tectonic.record()) // Tectonic partials differ from representative sets/originals.
+            } else { XCTAssertThrowsError(try tectonic.record()) }
         }
         for reference in GeographicReference.manualChoices {
             var joint = set(); joint.representative.reference = reference
@@ -107,6 +110,107 @@ final class P32GeologyTests: XCTestCase {
                       ManualOrientationInput(dipAngleText: "90", dipDirectionText: ""),
                       ManualOrientationInput(dipAngleText: "90", dipDirectionText: "180", usesConventionalDipSide: true)] {
             var joint = set(); joint.representative = input; XCTAssertNoThrow(try joint.record(now: date))
+            var tectonic = structure(); tectonic.orientation = input; XCTAssertNoThrow(try tectonic.record())
+        }
+    }
+    func testTectonicAnglesMayBeMissingIndependentlyWithoutSynthesizingValues() throws {
+        for reference in GeographicReference.manualChoices {
+            for (dip, direction, expectedDip, expectedDirection) in [
+                ("", "", nil as Double?, nil as Double?), (" \n", "\t", nil, nil),
+                ("0", "", 0, nil), ("90", "", 90, nil), ("45,123456789", "", 45.123456789, nil),
+                ("", "0", nil, 0), ("", "360", nil, 360), ("", "120,123456789", nil, 120.123456789),
+                ("65", "120", 65, 120)
+            ] {
+                var draft = structure()
+                draft.orientation = ManualOrientationInput(dipAngleText: dip, dipDirectionText: direction, reference: reference)
+                let record = try draft.record(), values = try record.orientation.validatedTectonic()
+                XCTAssertEqual(values.dipAngle, expectedDip); XCTAssertEqual(values.dipDirection, expectedDirection)
+                XCTAssertEqual(record.orientation, draft.orientation) // Exact text/north retained, including 360°.
+                XCTAssertEqual(record.thicknessMeters, 0.5); XCTAssertEqual(record.picket?.meters, 7)
+                XCTAssertEqual(record.position, draft.position); XCTAssertEqual(record.description, draft.description)
+                XCTAssertNoThrow(try record.validate())
+            }
+        }
+        // These permissive rules must never leak into measured originals or J1–J5 representatives.
+        for input in [ManualOrientationInput(), ManualOrientationInput(dipAngleText: "45"),
+                      ManualOrientationInput(dipDirectionText: "120")] {
+            XCTAssertThrowsError(try input.observation())
+            var joint = set(); joint.representative = input; XCTAssertThrowsError(try joint.record(now: date))
+        }
+    }
+    func testInvalidPartialTectonicAnglesRetainDraftGraphAndOriginals() throws {
+        let (_, initial) = try P2MappingTests().configured()
+        var invalid: [ManualOrientationInput] = []
+        for value in ["-1", "90.01", "NaN", "inf", "one", "1,2.3"] {
+            invalid.append(ManualOrientationInput(dipAngleText: value))
+        }
+        for value in ["-1", "360.01", "NaN", "inf", "one", "1,2.3"] {
+            invalid.append(ManualOrientationInput(dipDirectionText: value))
+        }
+        invalid += [ManualOrientationInput(reference: .simulatedNorth), ManualOrientationInput(reference: .unavailable),
+                    ManualOrientationInput(usesConventionalDipSide: true),
+                    ManualOrientationInput(dipAngleText: "90", usesConventionalDipSide: true)]
+        for input in invalid {
+            var w = initial; w.draft.picket = "5"; try w.draft.addMeasurement(original())
+            var draft = structure(); draft.orientation = input; w.draft.tectonicStructures = [draft]
+            let before = w.draft, journal = w.journal
+            XCTAssertThrowsError(try w.save()); XCTAssertEqual(w.draft, before); XCTAssertEqual(w.journal, journal)
+        }
+    }
+    func testUnknownAndPartialTectonicsRetainAllFieldsOnWriteFailureThenReset() throws {
+        let (store, initial) = try P2MappingTests().configured(); var w = initial
+        w.draft.picket = "5"; try w.draft.addMeasurement(original())
+        for input in [ManualOrientationInput(), ManualOrientationInput(dipAngleText: "45"), ManualOrientationInput(dipDirectionText: "120", reference: .gridNorth)] {
+            var value = structure(); value.orientation = input; w.draft.tectonicStructures.append(value)
+        }
+        let before = w.draft, journal = w.journal
+        store.fail = true; XCTAssertThrowsError(try w.save()); XCTAssertEqual(w.draft, before); XCTAssertEqual(w.journal, journal)
+        store.fail = false; let point = try w.save(now: date)
+        XCTAssertEqual(point.geology?.tectonicStructures.map(\.orientation), before.tectonicStructures.map(\.orientation))
+        XCTAssertEqual(w.journal.measurements, before.measurements)
+        XCTAssertTrue(w.draft.tectonicStructures.isEmpty); XCTAssertFalse(w.draft.hasChanges)
+    }
+    @MainActor func testSchema4CompleteTectonicFixtureAndPartialRecordsReopenWithoutMigration() async throws {
+        // Literal wire format emitted by the previous PR #17 model, not a newly encoded stand-in.
+        let legacyBytes = Data("""
+        {"id":"8BE4947A-61A3-4288-98C2-1CC17CDB73F8","type":"fault",
+         "orientation":{"dipAngleText":"65","dipDirectionText":"120","reference":"trueNorth","usesConventionalDipSide":false},
+         "thicknessMeters":0.5,"picket":{"text":"ПК 0+007","meters":7},"position":"Left side","description":"Fault trace"}
+        """.utf8)
+        let legacy = try JSONDecoder().decode(TectonicStructure.self, from: legacyBytes)
+        try legacy.validate(); XCTAssertEqual(legacy.orientation.reference, .trueNorth)
+        try directory { dir in
+            let (_, initial) = try P2MappingTests().configured(); var w = initial
+            try w.draft.addMeasurement(original())
+            var sample = MockSensorProvider.sample(dip: 60, direction: 270, timestamp: date)
+            sample.source = .coreMotion; sample.referenceFrame = .magneticNorthZVertical
+            sample.magneticAccuracy = .high; sample.magneticField.x = 40
+            let sensor = GeologicalOriginal.process(sample); try w.draft.addMeasurement(sensor)
+            w.draft.picket = "5"; w.draft.tectonicStructures = [structure()]
+            _ = try w.save(now: date)
+            var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(w.journal)) as? [String: Any])
+            var points = try XCTUnwrap(json["observations"] as? [[String: Any]])
+            var geology = try XCTUnwrap(points[0]["geology"] as? [String: Any])
+            geology["tectonicStructures"] = [try JSONSerialization.jsonObject(with: legacyBytes)]
+            points[0]["geology"] = geology; json["observations"] = points
+            let bytes = try JSONSerialization.data(withJSONObject: json), url = dir.appendingPathComponent("mapping.json")
+            try bytes.write(to: url)
+            var reopened = try MappingWorkflow(store: FileMappingStore(url: url))
+            let oldJournal = reopened.journal
+            XCTAssertEqual(oldJournal.schemaVersion, 4)
+            XCTAssertEqual(oldJournal.observations[0].geology?.tectonicStructures, [legacy])
+            XCTAssertEqual(try Data(contentsOf: url), bytes) // Opening existing schema 4 does not rewrite it.
+            reopened.draft.picket = "10"
+            for input in [ManualOrientationInput(), ManualOrientationInput(dipAngleText: "45,25", reference: .trueNorth),
+                          ManualOrientationInput(dipDirectionText: "360", reference: .gridNorth)] {
+                var value = structure(); value.orientation = input; value.type = .fractureZone
+                reopened.draft.tectonicStructures.append(value)
+            }
+            let newPoint = try reopened.save(now: date)
+            let again = try FileMappingStore(url: url).load()
+            XCTAssertEqual(again.schemaVersion, 4); XCTAssertEqual(again.observations, oldJournal.observations + [newPoint])
+            XCTAssertEqual(again.measurements, oldJournal.measurements)
+            XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: dir.path)), ["mapping.json", "mapping.json.previous"])
         }
     }
     func testOptionalFieldsRemainMissingAndTectonicsHaveNoCountLimit() throws {

@@ -67,7 +67,7 @@ struct TectonicStructure: Codable, Equatable, Identifiable {
     let position: String
     let description: String
     func validate() throws {
-        _ = try orientation.validated()
+        _ = try orientation.validatedTectonic()
         try picket?.validate()
         guard thicknessMeters.map({ $0.isFinite && $0 >= 0 }) ?? true else { throw StorageError.invalidRecord }
     }
@@ -119,7 +119,7 @@ struct TectonicStructureDraft: Equatable, Identifiable {
     var thickness = "", picket = "", position = "", description = ""
     init(id: UUID = UUID()) { self.id = id }
     func record() throws -> TectonicStructure {
-        _ = try orientation.validated()
+        _ = try orientation.validatedTectonic()
         return TectonicStructure(id: id, type: type, orientation: orientation,
             thicknessMeters: try GeologyInput.optionalNonnegative(thickness, field: "Мощность, м"),
             picket: try GeologyInput.optionalPicket(picket, field: "Пикет структуры"), position: position, description: description)
