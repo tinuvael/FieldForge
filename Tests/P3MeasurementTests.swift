@@ -126,7 +126,7 @@ private typealias OriginalReading = FieldForge.Measurement
         let bytes = try JSONSerialization.data(withJSONObject: json, options: [.sortedKeys])
         let url = directory.appendingPathComponent("mapping.json"); try bytes.write(to: url)
         let store = FileMappingStore(url: url); var reopened = try MappingWorkflow(store: store)
-        XCTAssertEqual(reopened.journal.schemaVersion, 7); XCTAssertEqual(reopened.journal.observations, [oldPoint])
+        XCTAssertEqual(reopened.journal.schemaVersion, 8); XCTAssertEqual(reopened.journal.observations, [oldPoint])
         XCTAssertEqual(reopened.journal.plans, [plan]); XCTAssertEqual(try Data(contentsOf: url), bytes)
         // Returning from a plan selection changes XY only and retains the full unsaved evidence.
         let reading = try manual(); try reopened.draft.addMeasurement(reading); reopened.draft.picket = "10"

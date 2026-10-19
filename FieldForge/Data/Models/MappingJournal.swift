@@ -108,7 +108,7 @@ struct MappingObservation: Codable, Equatable, Identifiable {
 }
 
 struct MappingJournal: Codable, Equatable {
-    static let currentSchemaVersion = 7
+    static let currentSchemaVersion = 8
     var schemaVersion = currentSchemaVersion
     var projects: [MappingProject] = []
     var horizons: [MappingHorizon] = []
@@ -243,6 +243,11 @@ enum PicketInput {
 }
 
 struct MappingDraft: Equatable {
+    let id: UUID
+    init(id: UUID = UUID()) { self.id = id }
+    var photoSessions: Set<UUID> = []
+    var photos: [PhotoImportOperation] = []
+    var saving = false
     private(set) var measurements: [Measurement] = []
     mutating func addMeasurement(_ reading: Measurement) throws {
         guard reading.isSavable, !measurements.contains(where: { $0.id == reading.id }) else { throw StorageError.invalidRecord }
@@ -296,7 +301,7 @@ struct MappingDraft: Equatable {
         zDatum = zOrigin == nil ? nil : horizon?.elevationDatum
     }
     var hasChanges: Bool {
-        ![picket, chainageOriginAndDirection, x, y, crs, axes, coordinateProvenance, notes].allSatisfy(\.isEmpty) ||
+        !photos.isEmpty || !photoSessions.isEmpty || ![picket, chainageOriginAndDirection, x, y, crs, axes, coordinateProvenance, notes].allSatisfy(\.isEmpty) ||
             observedAtOverride != nil || zOrigin == .manualOverride || !measurements.isEmpty ||
             bartonQ.hasChanges || rmr89.hasChanges || !jointSets.isEmpty || !tectonicStructures.isEmpty || !startPicket.isEmpty || !endPicket.isEmpty || observationPosition != nil
     }
@@ -318,7 +323,7 @@ struct MappingDraft: Equatable {
 extension MappingDraft {
     /// Rehydrates field values, then restores frozen provenance after edit observers.
     init(observation: MappingObservation, measurements: [Measurement]) {
-        self.init()
+        self.init(id: observation.id)
         self.measurements = measurements
         picket = observation.picket; chainageOriginAndDirection = observation.chainageOriginAndDirection
         observedAtOverride = observation.observedAt; timeZoneID = observation.observedTimeZoneID

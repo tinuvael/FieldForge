@@ -27,6 +27,7 @@ extension MappingModel {
         pendingPhotos = operations.values.sorted { $0.photo.importedAt < $1.photo.importedAt }
     }
     func importPhoto(_ received: ReceivedPhoto, context: PhotoContext) async {
+        guard context.locationBasis == .pointRevision else { photoError = "Фото черновика сохраняются только вместе с наблюдением."; return }
         guard let files = photoStore, workflow != nil else { photoError = "Хранилище фото недоступно."; return }
         let operation: PhotoImportOperation
         do {
@@ -49,6 +50,11 @@ extension MappingModel {
         } catch { photoError = "Фото не завершено: \(error.localizedDescription) " + liveRetryMessage }
     }
     func retryPhoto(_ operation: PhotoImportOperation, replacement: Data? = nil) async {
+        if operation.photo.context.locationBasis == .unknownBeforeFirstSave,
+           workflow?.journal.photos.contains(operation.photo) != true {
+            photoError = "Это файлы несохранённого черновика. Они не публикуются отдельно; используйте сохранение исходного черновика. После перезапуска форма не восстанавливается. Файлы сохранены."
+            return
+        }
         guard let files = photoStore, workflow != nil else { photoError = "Хранилище фото недоступно."; return }
         guard !photoBusy else { photoError = "Другая операция фото ещё выполняется. Дождитесь её завершения и повторите сохранение."; return }
         photoBusy = true; photoError = nil

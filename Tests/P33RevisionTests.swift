@@ -215,7 +215,7 @@ private typealias RevisionReading = FieldForge.Measurement
             try bytes.write(to: url)
             let store = FileMappingStore(url: url); var w = try MappingWorkflow(store: store)
             XCTAssertEqual(w.journal.observations, initial.journal.observations); XCTAssertEqual(w.journal.measurements, initial.journal.measurements)
-            XCTAssertEqual(w.journal.schemaVersion, 7); XCTAssertTrue(w.journal.revisions.isEmpty)
+            XCTAssertEqual(w.journal.schemaVersion, 8); XCTAssertTrue(w.journal.revisions.isEmpty)
             XCTAssertEqual(try Data(contentsOf: url), bytes)
             var edit = try w.correction(for: original.id); edit.reason = "After reopen"; edit.fields.picket = "10"
             try w.saveCorrection(edit, now: correctionTime)

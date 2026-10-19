@@ -77,11 +77,13 @@ struct MappingWorkflow {
     mutating func commit(_ next: MappingJournal) throws { try store.save(next); journal = next }
 
     mutating func requestContext(_ next: MappingContext) throws {
+        guard !draft.saving else { throw MappingError.invalid("Дождитесь сохранения наблюдения.") }
         guard journal.validContext(next) else { throw StorageError.invalidRecord }
         guard next != context else { return }
         if draft.hasChanges { pendingContext = next } else { try applyContext(next) }
     }
     private mutating func applyContext(_ next: MappingContext) throws {
+        guard !draft.saving else { throw MappingError.invalid("Дождитесь сохранения наблюдения.") }
         var updated = journal; updated.selection = next
         try commit(updated)
         resetDraft(); pendingContext = nil
@@ -135,6 +137,7 @@ struct MappingWorkflow {
         var next = journal; next.plans.append(plan); try commit(next)
     }
     mutating func selectPlanPoint(_ point: PlanPoint, planID: UUID) throws {
+        guard !draft.saving else { throw MappingError.invalid("Дождитесь сохранения наблюдения.") }
         guard let plan = plans.first(where: { $0.id == planID }),
               journal.horizons.contains(where: { $0.id == plan.horizonID && $0.projectID == context.projectID }) else { throw StorageError.invalidRecord }
         try draft.selectPlanPoint(point, plan: plan)
@@ -150,7 +153,7 @@ struct MappingWorkflow {
         guard !value.isEmpty else { throw MappingError.invalid("Название не может быть пустым.") }
         return value
     }
-    @discardableResult mutating func save(now: Date = Date()) throws -> MappingObservation {
+    func draftRecord(now: Date) throws -> MappingObservation {
         guard let p = context.projectID, let h = context.horizonID, let e = context.excavationID else {
             throw MappingError.invalid("Выберите проект, горизонт и выработку.")
         }
@@ -158,15 +161,28 @@ struct MappingWorkflow {
         let observed = draft.observedAtOverride ?? now
         guard let zone = TimeZone(identifier: draft.timeZoneID) else { throw StorageError.invalidRecord }
         let origin = draft.chainageOriginAndDirection.trimmingCharacters(in: .whitespacesAndNewlines)
-        let record = MappingObservation(id: UUID(), projectID: p, horizonID: h, excavationID: e,
+        return MappingObservation(id: draft.id, projectID: p, horizonID: h, excavationID: e,
             picket: draft.picket, chainageMeters: chainage,
             chainageOriginAndDirection: origin.isEmpty ? "unknown" : origin,
             observedAt: observed, observedTimeZoneID: zone.identifier,
             observedUTCOffsetSeconds: zone.secondsFromGMT(for: observed), createdAt: now, updatedAt: now,
             coordinates: try draft.coordinates(), measurementIDs: draft.measurements.map(\.id), notes: draft.notes,
             geology: try draft.geology(now: now), ratings: try draft.ratings(now: now))
+    }
+    @discardableResult mutating func save(now: Date = Date(), preparedPhotos: [PhotoImportOperation] = []) throws -> MappingObservation {
+        guard draft.photoSessions.isEmpty else { throw MappingError.invalid("Дождитесь завершения выбора и получения всех фотографий.") }
+        guard preparedPhotos == draft.photos else { throw MappingError.invalid("Сначала запишите все фотографии черновика. Повторите сохранение наблюдения.") }
+        let record = try draftRecord(now: now)
         var next = journal; next.observations.append(record)
         next.measurements.append(contentsOf: draft.measurements)
+        for operation in preparedPhotos {
+            try operation.validate()
+            let c = operation.photo.context
+            guard c.pointID == draft.id, c.pointRevisionID == draft.id, c.pointVersion == 1,
+                  c.projectID == record.projectID, c.horizonID == record.horizonID, c.excavationID == record.excavationID,
+                  c.locationBasis == .unknownBeforeFirstSave else { throw StorageError.invalidRecord }
+            next.photos.append(operation.photo); next.photoAttachments.append(operation.attachment)
+        }
         try commit(next)
         resetDraft(); pendingContext = nil
         return record

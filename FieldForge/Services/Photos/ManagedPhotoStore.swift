@@ -9,7 +9,7 @@ struct PhotoImportOperation: Codable, Equatable, Identifiable {
     let photo: PhotoObservation
     let attachment: PhotoAttachment
     func validate() throws {
-        guard version == 1, photo.attachmentID == attachment.id else { throw StorageError.invalidRecord }
+        guard version == 2, photo.attachmentID == attachment.id else { throw StorageError.invalidRecord }
         try photo.metadata.validate(); try attachment.validate()
     }
 }
@@ -65,7 +65,7 @@ final class ManagedPhotoStore {
             sha256: Self.digest(data), byteCount: data.count, format: uti.identifier,
             mimeType: uti.preferredMIMEType ?? "application/octet-stream", pixelWidth: width, pixelHeight: height,
             orientation: props[kCGImagePropertyOrientation] as? Int ?? 1, representation: representation)
-        let operation = PhotoImportOperation(version: 1, photo: PhotoObservation(id: UUID(), attachmentID: attachment.id,
+        let operation = PhotoImportOperation(version: 2, photo: PhotoObservation(id: UUID(), attachmentID: attachment.id,
             context: context, source: source, importedAt: now, capturedAt: capture, captureTimeText: captureText,
             captureTimeProvenance: capture != nil ? "\(timeSource) DateTimeOriginal + OffsetTimeOriginal; unverified" :
                 wallTime != nil ? "\(timeSource) wall time; UTC offset unknown; instant unknown" : "unknown",

@@ -36,7 +36,15 @@ import Combine
     }
     func perform(_ action: (inout MappingWorkflow) throws -> Void) {
         guard workflow != nil else { return }
-        do { try action(&workflow!) } catch { self.error = error.localizedDescription }
+        let oldID = workflow!.draft.id
+        do {
+            try action(&workflow!)
+            if workflow!.draft.id != oldID {
+                // Discard only volatile ownership. Never delete files or a saved original.
+                retainedPhotos = retainedPhotos.filter { $0.value.operation.photo.context.pointID != oldID }
+                refreshPhotoRecovery()
+            }
+        } catch { self.error = error.localizedDescription }
     }
 }
 

@@ -103,23 +103,7 @@ struct ObservationPhotosSection: View {
                         defer { loading = false }
                         for url in urls {
                             do {
-                                let received = try await Task.detached(priority: .userInitiated) {
-                                    let access = url.startAccessingSecurityScopedResource()
-                                    defer { if access { url.stopAccessingSecurityScopedResource() } }
-                                    // Coordinate File Provider downloads/read access, then copy before scope closes.
-                                    var readError: Error?; var data: Data?; var coordinatorError: NSError?
-                                    NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordinatorError) { readable in
-                                        do {
-                                            guard let size = try readable.resourceValues(forKeys: [.fileSizeKey]).fileSize,
-                                                  size <= ManagedPhotoStore.maximumBytes else { throw StorageError.invalidRecord }
-                                            data = try Data(contentsOf: readable)
-                                        } catch { readError = error }
-                                    }
-                                    if let error = coordinatorError ?? readError as NSError? { throw error }
-                                    guard let data else { throw StorageError.invalidRecord }
-                                    return ReceivedPhoto(data: data, filename: url.lastPathComponent, source: .files,
-                                        representation: "Files supplied file; received bytes preserved; upstream transformations unknown")
-                                }.value
+                                let received = try await PhotoFilesLoader.load(url)
                                 if let recovery { await mapping.retryPhoto(recovery, replacement: received.data) }
                                 else if let frozen { await mapping.importPhoto(received, context: frozen) }
                             } catch { mapping.photoError = "Не удалось прочитать файл: \(error.localizedDescription)" }

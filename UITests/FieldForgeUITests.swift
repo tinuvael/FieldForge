@@ -32,7 +32,12 @@ final class FieldForgeUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts[source].firstMatch.waitForExistence(timeout: 5))
         app.cells.containing(.staticText, identifier: source).firstMatch.tap()
         XCTAssertTrue(app.staticTexts[note].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.staticTexts["Сенсорная диагностика отсутствует."].exists)
+        let diagnostics = app.staticTexts["Сенсорная диагностика отсутствует."]
+        for _ in 0..<5 {
+            if diagnostics.exists { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(diagnostics.exists)
         openService("Неназначенные измерения", in: app, relaunch: true)
         app.cells.containing(.staticText, identifier: source).firstMatch.tap()
         XCTAssertTrue(app.staticTexts[note].waitForExistence(timeout: 5))

@@ -233,7 +233,7 @@ final class P41PhotoTests: XCTestCase {
             let url = root.appendingPathComponent("mapping.json"); try bytes.write(to: url)
             let store = FileMappingStore(url: url)
             let opened = try store.load()
-            XCTAssertEqual(opened.schemaVersion, 7); XCTAssertEqual(opened.revisions, w.journal.revisions)
+            XCTAssertEqual(opened.schemaVersion, 8); XCTAssertEqual(opened.revisions, w.journal.revisions)
             XCTAssertEqual(opened.observations, w.journal.observations); XCTAssertEqual(opened.measurements, w.journal.measurements)
             XCTAssertEqual(try Data(contentsOf: url), bytes)
             XCTAssertFalse(FileManager.default.fileExists(atPath: url.appendingPathExtension("p6-backup").path))

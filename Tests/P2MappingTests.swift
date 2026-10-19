@@ -87,7 +87,7 @@ final class P2MappingTests: XCTestCase {
         let historicalBytes = Data("existing unrelated experimental backup".utf8)
         try historicalBytes.write(to: historicalBackup)
         let opened = try store.load()
-        XCTAssertEqual(opened, original); XCTAssertEqual(opened.schemaVersion, 7)
+        XCTAssertEqual(opened, original); XCTAssertEqual(opened.schemaVersion, 8)
         XCTAssertNil(opened.observations[0].coordinates?.zOrigin)
         XCTAssertEqual(try Data(contentsOf: store.url), bytes)
         XCTAssertEqual(try FileMappingStore(url: store.url).load(), original)
@@ -100,7 +100,7 @@ final class P2MappingTests: XCTestCase {
     }
 
     func testOldExperimentalSchemasRefuseWritesWithoutChangingAnyFiles() throws {
-        for version in 1...6 {
+        for version in 1...7 {
             let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: dir) }
@@ -126,7 +126,7 @@ final class P2MappingTests: XCTestCase {
 /// Independently authored current wire format; unknown elevation is valid, not inferred from its label.
 enum CurrentMappingFixture {
     static let data = Data(#"""
-    {"schemaVersion":7,"measurements":[],"revisions":[],"photos":[],"photoAttachments":[],"photoRevisions":[],"projects":[{"id":"00000000-0000-0000-0000-000000000001","name":"Old project"}],
+    {"schemaVersion":8,"measurements":[],"revisions":[],"photos":[],"photoAttachments":[],"photoRevisions":[],"projects":[{"id":"00000000-0000-0000-0000-000000000001","name":"Old project"}],
     "horizons":[{"id":"00000000-0000-0000-0000-000000000002","projectID":"00000000-0000-0000-0000-000000000001","name":"+999 legacy","elevationDatum":"unknown"}],
     "excavations":[{"id":"00000000-0000-0000-0000-000000000003","projectID":"00000000-0000-0000-0000-000000000001","name":"E","horizonIDs":["00000000-0000-0000-0000-000000000002"]}],"plans":[],
     "selection":{"projectID":"00000000-0000-0000-0000-000000000001","horizonID":"00000000-0000-0000-0000-000000000002","excavationID":"00000000-0000-0000-0000-000000000003"},
