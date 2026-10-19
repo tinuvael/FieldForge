@@ -412,7 +412,16 @@ final class MappingUITests: XCTestCase {
         field.typeText(text); dismissKeyboard(app)
     }
     @MainActor private func show(_ element: XCUIElement, app: XCUIApplication, upward: Bool = true) {
-        photoReveal(element, app: app, upward: upward)
+        for _ in 0..<24 {
+            if element.exists && element.isHittable {
+                let centerY = element.frame.midY
+                let navigationBottom = app.navigationBars.allElementsBoundByIndex.filter(\.isHittable).map { $0.frame.maxY }.max() ?? 0
+                let tab = app.tabBars.firstMatch
+                if centerY > navigationBottom && (!tab.exists || !tab.isHittable || centerY < tab.frame.minY) { return }
+            }
+            scrollForm(app, up: upward)
+        }
+        XCTFail("Element not visible: \(element)")
     }
     @MainActor func testP42DraftPhotosCancelDiscardTwoPointsAndRelaunch() throws {
         continueAfterFailure = false
@@ -539,7 +548,7 @@ final class MappingUITests: XCTestCase {
     }
     @MainActor private func photoReveal(_ element: XCUIElement, app: XCUIApplication, upward: Bool = true) {
         for _ in 0..<24 {
-            let form = app.collectionViews.firstMatch
+            let form = activeForm(app)
             if element.exists && element.isHittable {
                 let center = CGPoint(x: element.frame.midX, y: element.frame.midY)
                 let tab = app.tabBars.firstMatch
@@ -576,10 +585,13 @@ final class MappingUITests: XCTestCase {
         }
     }
     @MainActor private func scrollForm(_ app: XCUIApplication, up: Bool) {
-        let form = app.collectionViews.firstMatch
+        let form = activeForm(app)
         let start = form.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: up ? 0.8 : 0.3))
         let end = form.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.55))
         start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
+    }
+    @MainActor private func activeForm(_ app: XCUIApplication) -> XCUIElement {
+        app.collectionViews.allElementsBoundByIndex.last(where: \.isHittable) ?? app.collectionViews.firstMatch
     }
     @MainActor private func create(_ picker: String, name: String, app: XCUIApplication) {
         let button = app.buttons["manage-\(picker)"]; XCTAssertTrue(button.waitForExistence(timeout: 10)); button.tap()

@@ -11,6 +11,7 @@ final class FieldForgeUITests: XCTestCase {
         XCTAssertTrue(mode.waitForExistence(timeout: 10))
         mode.buttons["Геологический компас"].tap()
         let save = app.buttons["saveManualButton"]
+        XCTAssertTrue(save.waitForExistence(timeout: 10))
         XCTAssertFalse(save.isEnabled)
         let dip = app.textFields["manualDip"]
         dip.tap(); dip.typeText("45,25")

@@ -33,6 +33,7 @@ import Combine
             photoStore = ManagedPhotoStore(root: directory.appendingPathComponent(testing ? "ui-testing-photos\(namespace)" : "photos"))
             workflow = try MappingWorkflow(store: FileMappingStore(url: directory.appendingPathComponent(testing ? "ui-testing-mapping\(namespace).json" : "mapping-v1.json")))
         } catch { self.error = "Не удалось открыть картирование. Запись заблокирована: \(error.localizedDescription)" }
+        refreshPhotoRecovery()
     }
     func perform(_ action: (inout MappingWorkflow) throws -> Void) {
         guard workflow != nil else { return }
