@@ -11,6 +11,7 @@ struct MappingExportView: View {
     @State private var firstDay = Date()
     @State private var lastDay = Date()
     @State private var timeZoneID = TimeZone.current.identifier
+    @State private var format: MappingExportFormat = .csv
     @State private var preview: MappingCSVExport?
     @State private var files: MappingExportFiles?
     @State private var sharing = false
@@ -55,6 +56,11 @@ struct MappingExportView: View {
                 Text("Григорианский календарь · \(timeZoneID). Отбор по дате наблюдения актуальной версии точки, включая весь последний день.")
                     .font(.caption)
             }.disabled(busy || sharing)
+            Section("Формат") {
+                Picker("Формат файла", selection: $format) {
+                    ForEach(MappingExportFormat.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }.accessibilityIdentifier("mappingExportFormat")
+            }.disabled(busy || sharing)
             Section {
                 Button("Предпросмотр") { prepare() }
                     .disabled(busy || selection == nil).accessibilityIdentifier("mappingExportPreview")
@@ -72,18 +78,18 @@ struct MappingExportView: View {
                     Text("Снимок зафиксирован. Для обновления данных откройте «Выгрузку» заново.").font(.caption)
                     DisclosureGroup("Связанные таблицы") {
                         ForEach(preview.tables, id: \.name) { table in
-                            LabeledContent(table.name + ".csv", value: String(table.rows.count))
+                            LabeledContent(table.name, value: String(table.rows.count))
                         }
                     }
-                    Button { share(preview) } label: { Label("Сохранить / поделиться CSV", systemImage: "square.and.arrow.up") }
+                    Button { share(preview) } label: { Label(format == .csv ? "Сохранить / поделиться CSV" : "Сохранить / поделиться Excel", systemImage: "square.and.arrow.up") }
                         .disabled(busy || sharing).accessibilityIdentifier("mappingExportShare")
                 }
             }
             Section("Состав и ограничения") {
-                Text("Связанные CSV и manifest.json передаются вместе через меню iOS, в том числе «Сохранить в Файлы».")
+                Text(format == .csv ? "Связанные CSV и manifest.json передаются вместе через меню iOS, в том числе «Сохранить в Файлы»." : "Одна книга Excel: «Сводка» и 14 связанных листов, закреплённые заголовки, фильтры и выделение строк. Передача через меню iOS, в том числе «Сохранить в Файлы».")
                 Text("Только метаданные фотографий. Оригиналы изображений не включены; их наличие и целостность не проверяются. Неизвестное место съёмки остаётся неизвестным.")
                 Text("Выгрузка для анализа, не полная резервная копия. Оценки сохранены без пересчёта; RMR — только исходные данные.")
-                Text("UTF-8 с BOM, запятая, CRLF. Excel может ограничивать числа 15 значащими цифрами. Исходный десятичный текст сохранён там, где он есть. Текст, похожий на формулу, защищён апострофом.")
+                Text(format == .csv ? "UTF-8 с BOM, запятая, CRLF. Excel может ограничивать числа 15 значащими цифрами. Исходный десятичный текст сохранён там, где он есть. Текст, похожий на формулу, защищён апострофом." : "В Excel значения более 15 значащих цифр сохраняются точным текстом. Отсутствующие значения — пустые ячейки. Пользовательские строки — текст, формулы не создаются.")
             }.font(.caption)
         }
         .environment(\.timeZone, zone).environment(\.calendar, calendar)
@@ -121,9 +127,10 @@ struct MappingExportView: View {
         }
     }
     private func share(_ preview: MappingCSVExport) {
+        let format = format
         busy = true; errorMessage = nil
         operation = Task { @MainActor in
-            let worker = Task.detached(priority: .userInitiated) { try MappingExportFiles.write(preview) }
+            let worker = Task.detached(priority: .userInitiated) { try MappingExportFiles.write(preview, format: format) }
             defer { busy = false }
             do {
                 let result = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })

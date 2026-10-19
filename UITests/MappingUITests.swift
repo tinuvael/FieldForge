@@ -32,6 +32,15 @@ final class MappingUITests: XCTestCase {
         XCTAssertTrue(share.waitForExistence(timeout: 5))
         // A second share uses the same preview after the previous temporary files were cleaned.
         photoReveal(share, app: app); share.tap(); XCTAssertTrue(cancel.waitForExistence(timeout: 10)); cancel.tap()
+        let format = app.buttons["mappingExportFormat"]
+        photoReveal(format, app: app, upward: false); format.tap()
+        app.buttons["Excel (.xlsx)"].tap()
+        XCTAssertEqual(count.label, "Точек: 1") // format switches keep the frozen preview
+        photoReveal(share, app: app); XCTAssertTrue(share.label.contains("Excel")); share.tap()
+        XCTAssertTrue(cancel.waitForExistence(timeout: 10))
+        let excelShot = XCTAttachment(screenshot: XCUIScreen.main.screenshot()); excelShot.name = "P5.2 XLSX native share"; excelShot.lifetime = .keepAlways; add(excelShot)
+        cancel.tap(); photoReveal(share, app: app); share.tap()
+        XCTAssertTrue(cancel.waitForExistence(timeout: 10)); cancel.tap()
         back(app); back(app); top(app)
         XCTAssertEqual(picket.value as? String, "10")
     }
@@ -439,6 +448,9 @@ final class MappingUITests: XCTestCase {
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch
     }
     @MainActor private func fill(_ field: XCUIElement, _ text: String, app: XCUIApplication) {
+        // Context pickers can leave the form below the picket. Start that field search
+        // at the top rather than scrolling farther away from a virtualized row.
+        if field.identifier == "mappingPicket" { top(app) }
         show(field, app: app); field.tap()
         let old = field.value as? String ?? ""
         if old != field.placeholderValue { field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: old.count)) }

@@ -1,0 +1,31 @@
+# P5.2 verification
+
+Base: fetched `origin/main` at `abc9f2a` (merged PR #26 / P5.1). One new feature branch `codex/p5-2-xlsx` in an isolated managed worktree. The owner's dirty original checkout is preserved. Current main already uses mapping schema 8; this PR changes no schema, migration, journal, measurement, sensor, geometry, DXF, signing, icon or bundle identifier. No physical iPhone installation or data reset.
+
+## Automated runs
+
+- Targeted `P52_EXPORT_FIXTURE_DIR=/tmp/fieldforge-p52-validation swift test --filter 'Mapping(CSV|XLSX)ExportTests'`: **23 passed, 0 failed, 0 skipped** (11 existing CSV + 12 XLSX). Includes synthetic fixture generation.
+- Complete `swift test`: **227 passed, 0 failed, 1 skipped** (228 discovered). The skip is the opt-in XLSX fixture writer when its environment path is absent; that test ran successfully in the targeted run above.
+- `python3 scripts/generate_project.py` twice: **51 app sources, 21 unit-test files, 3 UI-test files**. SHA-256 of the project and shared scheme is identical across generations. Source inventory is committed. `git diff --check` passes.
+- Xcode 26.6 / iPhone 15 Pro / iOS 17.2 full Simulator test run: still running. All 227 ordinary unit tests passed and the opt-in fixture was skipped. Existing UI selectors in ratings, sets and correction scenarios have failed; the complete final counts will be recorded when the run finishes.
+- Independent iPhone 15 / iOS 17.2 focused UI run (`test-without-building -only-testing:FieldForgeUITests/MappingUITests/testP51MappingCSVPreviewShareCancelAndDraftRetention`): **1 passed, 0 failed, 0 skipped**. Result: `/tmp/p52-export-smoke.xcresult`. Exercises CSV then Excel on the same frozen preview, native sharing dismissal/repeat, and next-draft retention. Exported screenshots were visually inspected: XLSX appears as one **Office Spreadsheet** with **Сохранить в Файлы**; the preview shows the format picker, explicit zone, inclusive dates and point count.
+
+An initial diagnostic full attempt was interrupted after repeated legacy UI scroll-selector failures. A small test-only change now returns the picket search to the top of the form after context selection. Application behavior is unchanged. The repeated complete run still exposes unrelated legacy disclosure selectors; no all-green full UI claim is made.
+
+The 12 XLSX tests independently read ZIP central-directory records and descriptors, parse all XML, and compare every cell in generated data sheets against its typed frozen source snapshot. Coverage includes two independent projects/date periods, optional scopes, empty sheets, exact DST boundaries, one corrected current point, original multi-measurement/evidence links, long decimal coordinates and orientation text, complete/partial/unknown faults, stored Q and incomplete Q/input-only RMR, plan/version/units/parent metadata, historical photo context/unknown capture time/location, missing original files, Russian multiline/quoted/formula-like strings, literal apostrophes, control/escape handling, nulls, oversized text rejection, cancellation before/during writes, injected partial write failure, retry, repeat sharing ownership cleanup and snapshot independence after source edits. CSV tests continue to verify the existing byte-level contract and selection behavior.
+
+## Independent XLSX validation
+
+The Swift fixture contains synthetic data only and is not committed. `scripts/validate_mapping_xlsx.py` uses Python `zipfile`, ElementTree and **openpyxl 3.1.5** (read-only validation, no workbook authoring and no application dependency). Result: **PASS** for ZIP CRCs, **22 XML/relationship parts**, **15 sheets**, **307 typed data cells** matched against the fixture's expected values/types, canonical headers, row counts, all represented UUID joins, sheet/package targets and content-type overrides, styles, frozen panes, filters, alternating rows, blanks, formula safety and exact decimal text. There are no formula/macro/external-workbook parts. X is exactly the string `-123.12345678912345`; the photo name is the literal `=1+1`, without a CSV apostrophe or executable formula. This is structural/reader interoperability, not formal exhaustive ISO schema certification.
+
+Reproduce with the fixture environment above and `python3 scripts/validate_mapping_xlsx.py /tmp/fieldforge-p52-validation` in a Python environment with openpyxl.
+
+## Actual desktop spreadsheet application
+
+Numbers Creator Studio successfully opened the generated `.xlsx`. AppleScript read **all 15 sheet names**, `Сводка!B2 = FieldForge-Mapping-XLSX/1`, exact `points!T2 = -123.12345678912345`, literal `photos!I2 = =1+1` with **no formula**, blank `photos!Q2` capture timestamp, and original `measurements!M2 = 360`.
+
+Numbers imports data into its own tables and may add empty rows (the one-point sheet became ten table rows). Its imported `points` table reports zero semantic header rows even though OOXML freeze panes are verified independently. Thus Numbers import is not evidence that its table headers/filter UI exactly reproduce Excel's frozen row behavior. Microsoft Excel is not installed; no actual Excel UI testing is claimed. Additional Numbers reads confirmed X has AppleScript `text` type and chainage has `real` type, the header uses `Calibri-Bold` with a dark fill, first-column width is 234 pt and header height is 36 pt. Russian multiline photo notes and the original decimal-comma dip text `45,125` were preserved. All 15 imported table dimensions were queried; Numbers pads small tables to at least ten rows/five columns. This is actual application-level readback, not a full visual/interaction acceptance test.
+
+## Limitations
+
+Analysis workbook only: no originals, DXF bytes, complete history, backup/restore or original-file integrity scan. The frozen dataset remains in memory, while ZIP content streams to disk without a full-workbook buffer. ZIP32/Excel row/column/text limits fail clearly without truncating source data. Large JSON/notes may require CSV instead. High-precision cells intentionally remain text and need deliberate high-precision parsing downstream. No physical-device accuracy test, native iPad acceptance, external share-extension completion, actual Files destination write/reopen, full Dynamic Type/VoiceOver matrix, or actual Excel compatibility check is claimed.

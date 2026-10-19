@@ -184,11 +184,19 @@ final class MappingExportFiles {
     let urls: [URL]
     private init(directory: URL, urls: [URL]) { self.directory = directory; self.urls = urls }
     static func write(_ export: MappingCSVExport, parent: URL = FileManager.default.temporaryDirectory,
-                      write: (Data, URL) throws -> Void = { try $0.write(to: $1, options: .atomic) }) throws -> MappingExportFiles {
+                      format: MappingExportFormat = .csv,
+                      write: (Data, URL) throws -> Void = { try $0.write(to: $1, options: .atomic) },
+                      xlsxAppend: @escaping (Data, FileHandle) throws -> Void = { try $1.write(contentsOf: $0) }) throws -> MappingExportFiles {
         try Task.checkCancellation()
         let directory = parent.appendingPathComponent("FieldForge-Mapping-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         do {
+            if format == .xlsx {
+                let url = directory.appendingPathComponent("FieldForge-Mapping.xlsx")
+                try MappingXLSXExport.write(export, to: url, append: xlsxAppend)
+                try Task.checkCancellation()
+                return MappingExportFiles(directory: directory, urls: [url])
+            }
             var urls: [URL] = []
             for table in export.tables {
                 try Task.checkCancellation()
