@@ -2,6 +2,39 @@ import XCTest
 import UIKit
 
 final class MappingUITests: XCTestCase {
+    @MainActor func testP51MappingCSVPreviewShareCancelAndDraftRetention() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["FIELD_FORGE_TEST_RUN_ID"] = UUID().uuidString
+        app.launchArguments = ["--ui-testing"]; app.launch()
+        let project = "Выгрузка-\(UUID().uuidString.prefix(8))"
+        create("projectPicker", name: project, app: app); select("projectPicker", value: project, app: app)
+        create("horizonPicker", name: "+393 м", app: app); select("horizonPicker", value: "+393 м", app: app)
+        create("excavationPicker", name: "Штрек", app: app); select("excavationPicker", value: "Штрек", app: app)
+        let picket = app.textFields["mappingPicket"]
+        picket.tap(); picket.typeText("5"); dismissKeyboard(app); save(app); saved(app); top(app)
+        picket.tap(); picket.typeText("10"); dismissKeyboard(app)
+        app.buttons["mappingJournal"].tap()
+        XCTAssertTrue(app.buttons["mappingExportAction"].waitForExistence(timeout: 5)); app.buttons["mappingExportAction"].tap()
+        XCTAssertTrue(app.buttons["mappingExportTimeZone"].waitForExistence(timeout: 5))
+        let preview = app.buttons["mappingExportPreview"]
+        photoReveal(preview, app: app); preview.tap()
+        let count = app.staticTexts["mappingExportPointCount"]
+        XCTAssertTrue(count.waitForExistence(timeout: 10)); XCTAssertEqual(count.label, "Точек: 1")
+        let share = app.buttons["mappingExportShare"]; photoReveal(share, app: app)
+        let previewShot = XCTAttachment(screenshot: XCUIScreen.main.screenshot()); previewShot.name = "P5.1 frozen export preview"; previewShot.lifetime = .keepAlways; add(previewShot)
+        share.tap()
+        let activity = app.otherElements["ActivityListView"]
+        let cancel = activity.buttons.firstMatch
+        XCTAssertTrue(activity.waitForExistence(timeout: 10) || cancel.waitForExistence(timeout: 5))
+        let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot()); shot.name = "P5.1 mapping multi-file native share"; shot.lifetime = .keepAlways; add(shot)
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5)); cancel.tap()
+        XCTAssertTrue(share.waitForExistence(timeout: 5))
+        // A second share uses the same preview after the previous temporary files were cleaned.
+        photoReveal(share, app: app); share.tap(); XCTAssertTrue(cancel.waitForExistence(timeout: 10)); cancel.tap()
+        back(app); back(app); top(app)
+        XCTAssertEqual(picket.value as? String, "10")
+    }
     @MainActor func testSuccessiveObservationsContextGuardJournalAndRelaunch() throws {
         let app = XCUIApplication(); app.launchEnvironment["FIELD_FORGE_TEST_RUN_ID"] = UUID().uuidString; app.launchArguments = ["--ui-testing"]; app.launch()
         let suffix = String(UUID().uuidString.prefix(8))

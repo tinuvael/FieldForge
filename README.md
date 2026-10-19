@@ -1,5 +1,7 @@
 # FieldForge
 
+P5.1: **Картирование → Журнал → Выгрузка** exports a selected project and inclusive field-date period in an explicit time zone, with optional horizon/excavation filters. Preview counts and native Share Sheet / Files use the same frozen effective-version snapshot. Includes 14 related CSV tables and a versioned manifest, original measurement provenance, stored assessments and photo metadata with historical point context. Image originals are excluded and their integrity is not checked; this is an analysis export, not a backup. See [contract](docs/p5-1-mapping-csv.md) and [verification](docs/p5-1-verification.md).
+
 Native, offline iOS application for geological field observations. Swift/SwiftUI, iOS 17+, Russian UI, English code and engineering documentation. No accounts, backend or third-party runtime dependencies.
 
 **Geological measurement accuracy has not been validated.** Display resolution is not accuracy. Simulator observations remain permanently labeled DEMO.
@@ -59,7 +61,7 @@ They do **not** establish geological compass accuracy, repeatability, long-term 
 1. Open «Картирование → Сервисы → Измерение» and select «Геологический компас».
 2. Enter dip and direction, select the recorded north type and optionally add notes. For 0° leave direction blank; for 90° confirm a conventional side if entering one.
 3. Check the validation message and normalized preview, then tap «Сохранить». The same unchanged draft cannot be saved twice; «Новое измерение» starts another capture.
-4. Open «Картирование → Сервисы → Неназначенные измерения» to inspect originals. «Сервисы → Настройки → Экспортировать CSV» exports the standalone measurements (mapping export is deferred).
+4. Open «Картирование → Сервисы → Неназначенные измерения» to inspect originals. «Сервисы → Настройки → Экспортировать CSV» exports the standalone measurements. Use «Картирование → Журнал → Выгрузка» for the project mapping graph, field-date filters, preview and related CSV files.
 
 Switching to manual stops acquisition; returning to automatic retains an existing HOLD snapshot. The automatic workflow remains HOLD → optional notes → SAVE → «Продолжить». Simulator presets and DEMO labels apply to automatic observations only.
 
@@ -69,7 +71,7 @@ Keep bundle identifier **`com.tinuvael.FieldForge`** and upgrade in place. Do no
 
 The active journal stays at Application Support/FieldForge/`measurements-v1.json`. Phase 2 introduces schema **2** while retaining this path. Migration preserves UUIDs, timestamps, orientations, raw diagnostics and notes. It validates all records and a v2 round trip, creates/verifies `measurements-v1.json.phase1-backup`, then replaces the active file atomically. Load, unknown-version, invalid-record or backup failures block writes and preserve the source. A conflicting backup requires explicit recovery; no automatic reset/rollback is performed. See [migration and recovery](docs/persistence-migration.md). Phase 1 cannot read v2; downgrade requires a reviewed recovery plan.
 
-CSV uses UTF-8 BOM, comma separators, CRLF records, UTC ISO 8601 timestamps, round-trip numeric precision and empty cells for missing data. The first 24 Phase 1 column names/order are retained; four provenance/original-input columns are appended. Manual diagnostic cells are blank. Spreadsheet-formula-like text is protected. Consumers must accept additional columns/new enums and full-precision numeric formatting. Use Excel's UTF-8/comma/decimal-dot import when regional detection differs. Excel numeric precision may still reduce values; CSV is not a complete JSON/attachment backup.
+The standalone measurement CSV uses UTF-8 BOM, comma separators, CRLF records, UTC ISO 8601 timestamps, round-trip numeric precision and empty cells for missing data. The first 24 Phase 1 column names/order are retained; four provenance/original-input columns are appended. Manual diagnostic cells are blank. Spreadsheet-formula-like text is protected. Consumers must accept additional columns/new enums and full-precision numeric formatting. Use Excel's UTF-8/comma/decimal-dot import when regional detection differs. Excel numeric precision may still reduce values; CSV is not a complete JSON/attachment backup.
 
 Before MVP, `mapping-v1.json` has one current experimental format: **schema 8**. Older mapping schemas are intentionally unsupported: no automatic migration, new `.pN-backup`, reset or deletion. Missing files start a fresh current journal; current files open without rewriting; incompatible/corrupt files block writes and preserve all existing data, images, DXF and backups. Atomic validated commits, `.previous`, external-change detection and append-only evidence/history remain. This owner decision is recorded in [AGENTS.md](AGENTS.md); the independent `measurements-v1.json` journal and its deployed compatibility are unchanged. Photos live in `photos/originals`, `photos/operations`, `photos/staging` and regenerable `photos/thumbnails`; DXF originals/intents remain under `plans/`. A complete backup needs a consistent graph/history, originals, DXF, pending operations/staging, existing backups and a verified inventory/manifest with missing-file reports. JSON alone is not a complete backup. No ZIP/XLSX package or automated restore is provided; see [recovery and backup](docs/p4-1-photos.md).
 
@@ -102,7 +104,7 @@ FieldForge/Core/Sensors/         diagnostic values, Core Motion and mock adapter
 FieldForge/Data/Models/          project graph, mapping draft, observation provenance, validation and HOLD
 FieldForge/Data/Storage/         versioned JSON, migration, backup and integrity protection
 FieldForge/Features/             Russian SwiftUI mapping/context, measurement, journals and settings
-FieldForge/Services/Export/      CSV and temporary export file
+FieldForge/Services/Export/      standalone CSV, frozen mapping CSV tables/manifest, owned temporary files
 FieldForge/Services/Plans/       bounded DXF adapter, viewport and managed original-file integrity
 FieldForge/Services/Photos/      received originals, integrity, staging/intents and thumbnails
 Tests/                          mapping/reset/context/integrity, geometry, observations, migration and CSV XCTest
