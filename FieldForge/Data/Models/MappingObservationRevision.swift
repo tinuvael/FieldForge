@@ -25,7 +25,7 @@ extension MappingJournal {
         return observations.map { latest[$0.id] ?? $0 }
     }
     func validateRevisions() throws {
-        guard (schemaVersion >= 6 || revisions.isEmpty), Set(revisions.map(\.id)).count == revisions.count else {
+        guard Set(revisions.map(\.id)).count == revisions.count else {
             throw StorageError.invalidRecord
         }
         var latest: [UUID: MappingObservationRevision] = [:]

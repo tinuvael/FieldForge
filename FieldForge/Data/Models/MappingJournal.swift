@@ -108,36 +108,39 @@ struct MappingObservation: Codable, Equatable, Identifiable {
 }
 
 struct MappingJournal: Codable, Equatable {
-    var schemaVersion = 6
+    static let currentSchemaVersion = 7
+    var schemaVersion = currentSchemaVersion
     var projects: [MappingProject] = []
     var horizons: [MappingHorizon] = []
     var excavations: [MappingExcavation] = []
     var plans: [MappingPlanReference] = []
     var observations: [MappingObservation] = []
     var revisions: [MappingObservationRevision] = []
+    var photos: [PhotoObservation] = []
+    var photoAttachments: [PhotoAttachment] = []
+    var photoRevisions: [PhotoMetadataRevision] = []
     var selection = MappingContext()
     var measurements: [Measurement] = []
 
     init() {}
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, projects, horizons, excavations, plans, observations, selection, measurements, revisions
+        case schemaVersion, projects, horizons, excavations, plans, observations, selection, measurements, revisions, photos, photoAttachments, photoRevisions
     }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         schemaVersion = try c.decode(Int.self, forKey: .schemaVersion)
+        guard schemaVersion == Self.currentSchemaVersion else { throw MappingDatabaseError.incompatibleVersion(schemaVersion) }
         projects = try c.decode([MappingProject].self, forKey: .projects)
         horizons = try c.decode([MappingHorizon].self, forKey: .horizons)
         excavations = try c.decode([MappingExcavation].self, forKey: .excavations)
         plans = try c.decode([MappingPlanReference].self, forKey: .plans)
         observations = try c.decode([MappingObservation].self, forKey: .observations)
-        // Do not discard history under a damaged/old header: validation rejects nonempty
-        // revisions below schema 6. Only genuinely absent legacy tables default to empty.
-        revisions = schemaVersion < 6
-            ? (try c.decodeIfPresent([MappingObservationRevision].self, forKey: .revisions) ?? [])
-            : try c.decode([MappingObservationRevision].self, forKey: .revisions)
+        revisions = try c.decode([MappingObservationRevision].self, forKey: .revisions)
+        photos = try c.decode([PhotoObservation].self, forKey: .photos)
+        photoAttachments = try c.decode([PhotoAttachment].self, forKey: .photoAttachments)
+        photoRevisions = try c.decode([PhotoMetadataRevision].self, forKey: .photoRevisions)
         selection = try c.decode(MappingContext.self, forKey: .selection)
-        // Only old schemas may omit the new evidence table. A damaged v3 file fails closed.
-        measurements = schemaVersion < 3 ? (try c.decodeIfPresent([Measurement].self, forKey: .measurements) ?? []) : try c.decode([Measurement].self, forKey: .measurements)
+        measurements = try c.decode([Measurement].self, forKey: .measurements)
     }
 
     func measurements(for observation: MappingObservation) -> [Measurement] {
@@ -148,7 +151,7 @@ struct MappingJournal: Codable, Equatable {
     func validate() throws { try validateGraph(includingRevisions: true) }
 
     func validateGraph(includingRevisions: Bool) throws {
-        guard [1, 2, 3, 4, 5, 6].contains(schemaVersion) else { throw StorageError.unsupportedVersion }
+        guard schemaVersion == Self.currentSchemaVersion else { throw MappingDatabaseError.incompatibleVersion(schemaVersion) }
         func unique(_ ids: [UUID]) -> Bool { Set(ids).count == ids.count }
         guard unique(projects.map(\.id)), unique(horizons.map(\.id)),
               unique(excavations.map(\.id)), unique(plans.map(\.id)), unique(observations.map(\.id)),
@@ -171,11 +174,8 @@ struct MappingJournal: Codable, Equatable {
         let linkedIDs = observations.flatMap(\.measurementIDs)
         guard unique(measurements.map(\.id)), unique(linkedIDs),
               Set(linkedIDs) == Set(measurements.map(\.id)),
-              measurements.allSatisfy(\.isSavable),
-              schemaVersion >= 3 || (measurements.isEmpty && linkedIDs.isEmpty) else { throw StorageError.invalidRecord }
+              measurements.allSatisfy(\.isSavable) else { throw StorageError.invalidRecord }
         for o in observations {
-            guard schemaVersion >= 4 || o.geology == nil else { throw StorageError.invalidRecord }
-            guard schemaVersion >= 5 || o.ratings == nil else { throw StorageError.invalidRecord }
             try o.ratings?.validate()
             try o.geology?.validate(pointMeasurementIDs: o.measurementIDs)
             if includingRevisions, o.geology?.jointSets.contains(where: { $0.revision != 1 }) == true { throw StorageError.invalidRecord }
@@ -206,7 +206,7 @@ struct MappingJournal: Codable, Equatable {
                 } else if c.zHorizonID != nil || c.zHorizonElevation != nil || c.zDatum != nil { throw StorageError.invalidRecord }
             }
         }
-        if includingRevisions { try validateRevisions() }
+        if includingRevisions { try validateRevisions(); try validatePhotos() }
     }
 
     func validContext(_ c: MappingContext) -> Bool {
@@ -337,5 +337,16 @@ extension MappingDraft {
         }
         bartonQ = observation.ratings?.bartonQ?.input ?? BartonQInput()
         rmr89 = observation.ratings?.rmr89?.input ?? RMR89Input()
+    }
+}
+
+/// Pre-MVP mapping databases are experimental; there is deliberately no upgrade or reset path.
+enum MappingDatabaseError: LocalizedError {
+    case incompatibleVersion(Int)
+    var errorDescription: String? {
+        switch self {
+        case .incompatibleVersion(let version):
+            return "Несовместимая экспериментальная база картирования: схема \(version), поддерживается только \(MappingJournal.currentSchemaVersion). Автоматическая миграция и сброс не выполняются. Файл, вложения и резервные копии сохранены."
+        }
     }
 }

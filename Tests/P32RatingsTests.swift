@@ -227,7 +227,7 @@ final class P32RatingsTests: XCTestCase {
         workflow.draft.rmr89.application = .tunnelsAndMines
         try workflow.requestContext(MappingContext()); XCTAssertNotNil(workflow.pendingContext)
     }
-    func testSchema4MigrationPreservesExactBackupAndHistoricalGeologyEvidenceAndPlans() throws {
+    func testCurrentReopenPreservesHistoricalGeologyEvidenceAndPreviousSnapshot() throws {
         try withDirectory { dir in
             let (_, initial) = try P2MappingTests().configured(); var old = initial
             old.draft.picket = "5"; old.draft.startPicket = "0"; old.draft.endPicket = "10"
@@ -240,17 +240,17 @@ final class P32RatingsTests: XCTestCase {
             var fault = TectonicStructureDraft(); fault.orientation = ManualOrientationInput(dipAngleText: "63,125", reference: .trueNorth)
             fault.description = "Legacy dip-only fault"; old.draft.tectonicStructures = [fault]
             let point = try old.save(now: now)
-            var legacy = old.journal; legacy.schemaVersion = 4
+            let legacy = old.journal
             let original = try JSONEncoder().encode(legacy), url = dir.appendingPathComponent("mapping-v1.json")
             try original.write(to: url)
             let store = FileMappingStore(url: url); var reopened = try MappingWorkflow(store: store)
-            XCTAssertEqual(reopened.journal.schemaVersion, 6); XCTAssertEqual(reopened.observations, [point])
+            XCTAssertEqual(reopened.journal.schemaVersion, 7); XCTAssertEqual(reopened.observations, [point])
             XCTAssertEqual(reopened.journal.measurements, [reading]); XCTAssertEqual(reopened.journal.plans, legacy.plans)
             XCTAssertNil(reopened.observations[0].ratings)
-            XCTAssertEqual(try Data(contentsOf: url.appendingPathExtension("p4-backup")), original)
+            XCTAssertEqual(try Data(contentsOf: url), original)
             reopened.draft.picket = "10"; reopened.draft.bartonQ = q(); let second = try reopened.save(now: now)
             let again = try MappingWorkflow(store: FileMappingStore(url: url)); XCTAssertEqual(again.observations, [point, second])
-            XCTAssertEqual(try Data(contentsOf: url.appendingPathExtension("p4-backup")), original)
+            XCTAssertEqual(try Data(contentsOf: store.backupURL), original)
         }
     }
     func testTamperedResultVersionAndInvalidInputsFailClosedWithoutReset() throws {
@@ -281,7 +281,7 @@ final class P32RatingsTests: XCTestCase {
             }
         }
     }
-    func testRatingsAreAppendOnlyAndFailedMigrationLeavesOriginalBytes() throws {
+    func testRatingsAreAppendOnlyAndOldSchemaRefusalLeavesOriginalBytes() throws {
         try withDirectory { dir in
             let (_, initial) = try P2MappingTests().configured(); var workflow = initial
             workflow.draft.picket = "5"; workflow.draft.bartonQ = q(); _ = try workflow.save(now: now)
@@ -292,8 +292,8 @@ final class P32RatingsTests: XCTestCase {
             var legacy = workflow.journal; legacy.observations[0].ratings = nil; legacy.schemaVersion = 4
             let bytes = try JSONEncoder().encode(legacy), legacyURL = dir.appendingPathComponent("legacy.json")
             try bytes.write(to: legacyURL); try Data("Different backup".utf8).write(to: legacyURL.appendingPathExtension("p4-backup"))
-            let migration = FileMappingStore(url: legacyURL); XCTAssertThrowsError(try migration.load())
-            XCTAssertThrowsError(try migration.save(MappingJournal())); XCTAssertEqual(try Data(contentsOf: legacyURL), bytes)
+            let unsupported = FileMappingStore(url: legacyURL); XCTAssertThrowsError(try unsupported.load())
+            XCTAssertThrowsError(try unsupported.save(MappingJournal())); XCTAssertEqual(try Data(contentsOf: legacyURL), bytes)
         }
     }
 }

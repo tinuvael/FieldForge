@@ -12,9 +12,11 @@ Prepared PDF/raster plans and DXF-derived survey geometry will support manual po
 
 Future native iPad support shares models, storage and engineering services with iPhone through adaptive SwiftUI layouts. Full CAD/GIS/geological modeling, numerical simulation and DWG editing are outside scope; STL/OBJ support is optional. Native iPad layouts, wedge analysis and raster/PDF georeferencing remain future work.
 
-Photo documentation is a core **future** Mapping/Plan workflow: named observation points, multiple camera/imported photos, explicit location provenance, offline originals/thumbnails and workstation ZIP packages with a photograph register and manifest. It also works without georeferenced plans or coordinates. No photo capture, database or XLSX functionality is implemented yet; see the [product vision](docs/product-vision.md).
+P4.1 adds multiple camera/Photos/Files photographs to saved Mapping/Plan observations, including points without plans or coordinates. It preserves frozen point revisions, received image bytes, hashes and metadata history with recoverable imports, thumbnails and zoom. Draft-point/point-free photos and workstation XLSX/ZIP packages remain future work; see the [implemented photo contract](docs/p4-1-photos.md).
 
 ## Working features
+
+- Saved-point photographs: camera capability/permission handling, multi-image Photos/Files imports, individual names/numbers/descriptions/categories, capture versus import time, immutable metadata history, thumbnails and full-screen pinch zoom. UUID paths and SHA-256 originals stay offline; pending operations resume without duplicate records. Received camera bytes remain in the running model through intent/staging failures, allowing normal retry without another shutter. Unwritten memory-only bytes cannot survive process termination. Missing/corrupt originals stay visible. See [P4.1 scope, recovery and backup composition](docs/p4-1-photos.md).
 
 - Main tabs «Картирование / План / Клинья»; mapping has a fixed project/horizon/excavation context panel, project journal and secondary measurement/settings navigation. The Plan tab opens imported horizon plans; wedge analysis remains unavailable.
 - Create/rename projects, create/edit numeric signed/decimal horizon elevations (preserving legacy names/UUIDs), and manage one excavation across multiple horizons. Context persists between sessions.
@@ -67,7 +69,7 @@ The active journal stays at Application Support/FieldForge/`measurements-v1.json
 
 CSV uses UTF-8 BOM, comma separators, CRLF records, UTC ISO 8601 timestamps, round-trip numeric precision and empty cells for missing data. The first 24 Phase 1 column names/order are retained; four provenance/original-input columns are appended. Manual diagnostic cells are blank. Spreadsheet-formula-like text is protected. Consumers must accept additional columns/new enums and full-precision numeric formatting. Use Excel's UTF-8/comma/decimal-dot import when regional detection differs. Excel numeric precision may still reduce values; CSV is not a complete JSON/attachment backup.
 
-The project graph uses `mapping-v1.json` (schema 6, lossless schema 1–5 upgrade with immutable `.pN-backup`, including `.p5-backup`), isolated from the protected standalone measurement journal. It is atomically rewritten as one validated aggregate; `mapping-v1.json.previous` retains the prior snapshot. No legacy assignment/migration is guessed. Managed original DXF files and pending import manifests live beside it under `plans/`; a JSON-only copy is not a complete backup. SQLite remains a future storage step for large workloads; see the [P2 storage/recovery contract](docs/p2-dxf.md).
+Before MVP, `mapping-v1.json` has one current experimental format: **schema 7**. Older mapping schemas are intentionally unsupported: no automatic migration, new `.pN-backup`, reset or deletion. Missing files start a fresh current journal; current files open without rewriting; incompatible/corrupt files block writes and preserve all existing data, images, DXF and backups. Atomic validated commits, `.previous`, external-change detection and append-only evidence/history remain. This owner decision is recorded in [AGENTS.md](AGENTS.md); the independent `measurements-v1.json` journal and its deployed compatibility are unchanged. Photos live in `photos/originals`, `photos/operations`, `photos/staging` and regenerable `photos/thumbnails`; DXF originals/intents remain under `plans/`. A complete backup needs a consistent graph/history, originals, DXF, pending operations/staging, existing backups and a verified inventory/manifest with missing-file reports. JSON alone is not a complete backup. No ZIP/XLSX package or automated restore is provided; see [recovery and backup](docs/p4-1-photos.md).
 
 ## Branding
 
@@ -89,7 +91,7 @@ xcodebuild -project FieldForge.xcodeproj -scheme FieldForge \
   -derivedDataPath /tmp/FieldForge-DerivedData CODE_SIGNING_ALLOWED=NO test
 ```
 
-Set `DEVELOPER_DIR` to a supported Xcode installation when necessary. Project generation uses Python 3 only and is deterministic. Machine-local signing overrides belong in ignored `Config/LocalSigning.xcconfig` (`DEVELOPMENT_TEAM = your Team`), optionally included by `Config/Signing.xcconfig`; they survive regeneration. Identifier and deployment settings remain unchanged. Core tests run via Swift Package Manager on macOS; managed-plan integrity uses system CryptoKit, while UI and Core Motion use Apple SDKs. Linux plan-store builds are not qualified. Debug UI tests use separate journals and UUID-scoped mapping/plan stores, never physical-device journals.
+Set `DEVELOPER_DIR` to a supported Xcode installation when necessary. Project generation uses Python 3 only and is deterministic. Machine-local signing overrides belong in ignored `Config/LocalSigning.xcconfig` (`DEVELOPMENT_TEAM = your Team`), optionally included by `Config/Signing.xcconfig`; they survive regeneration. Identifier and deployment settings remain unchanged. Core tests run via Swift Package Manager on macOS; managed-plan/photo integrity uses system CryptoKit and photo decoding uses ImageIO, while UI and Core Motion use Apple SDKs. Linux plan-store builds are not qualified. Debug UI tests use separate journals and UUID-scoped mapping/plan/photo stores, never physical-device journals.
 
 ```text
 FieldForge/App/                  composition, lifecycle, automatic session and manual draft
@@ -100,10 +102,13 @@ FieldForge/Data/Storage/         versioned JSON, migration, backup and integrity
 FieldForge/Features/             Russian SwiftUI mapping/context, measurement, journals and settings
 FieldForge/Services/Export/      CSV and temporary export file
 FieldForge/Services/Plans/       bounded DXF adapter, viewport and managed original-file integrity
+FieldForge/Services/Photos/      received originals, integrity, staging/intents and thumbnails
 Tests/                          mapping/reset/context/integrity, geometry, observations, migration and CSV XCTest
 UITests/                        mapping acceptance and automatic/manual save/relaunch/export workflows
 scripts/generate_project.py     deterministic checked-in Xcode project
 ```
+
+P4.1 verification: see [photo storage, current-schema refusal, live retry and Simulator checks](docs/p4-1-verification.md). Real camera verification is a separate owner manual check.
 
 P3.3 verification: see [saved observation revisions, compatibility and test results](docs/p3-3-verification.md).
 
@@ -115,4 +120,4 @@ P3.2a verification: see [joint sets, tectonics, compatibility and test results](
 
 See the authoritative [product vision](docs/product-vision.md), [development rules](AGENTS.md), [architecture and persistence decision](docs/architecture.md), [future shared domain schema](docs/data-model.md), [coordinates](docs/coordinate-systems.md), [export and prepared-plan boundaries](docs/import-export.md), and [roadmap](docs/roadmap.md).
 
-P2 supplies individual mapping points, numeric nominal horizons and source-plan DXF positioning with a project-aware journal. P3.1/P3.2a supply original measurement capture, evidence-linked interpreted sets, optional intervals and tectonic observations; standalone interval entities, photo documentation, surveyed/raster georeferencing and wedge analysis follow separately, with native iPad adaptation planned from the shared codebase. P3.3 adds immutable correction snapshots for saved points and their optional intervals. P3.2b adds verified NGI 2025 Q assessment; numerical RMR89, XLSX, spatial transforms and wedge calculations remain future work; mechanical wedge implementation depends on the owner's verified methodology. A whole-mine 3D viewer is not a primary product goal.
+P2 supplies individual mapping points, numeric nominal horizons and source-plan DXF positioning with a project-aware journal. P3.1/P3.2a supply original measurement capture, evidence-linked interpreted sets, optional intervals and tectonic observations; standalone interval entities, draft/point-free photos, surveyed/raster georeferencing and wedge analysis follow separately, with native iPad adaptation planned from the shared codebase. P3.3 adds immutable correction snapshots for saved points and their optional intervals. P4.1 adds photographs on saved points with frozen references to those snapshots. P3.2b adds verified NGI 2025 Q assessment; numerical RMR89, XLSX, spatial transforms and wedge calculations remain future work; mechanical wedge implementation depends on the owner's verified methodology. A whole-mine 3D viewer is not a primary product goal.

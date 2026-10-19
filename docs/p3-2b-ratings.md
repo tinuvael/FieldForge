@@ -1,5 +1,7 @@
 # P3.2b — point/interval rock-mass assessments
 
+**Pre-MVP owner storage decision:** mapping uses only current experimental schema **7**. No automatic mapping migrations, new `.pN-backup`, resets or deletions; old/corrupt files fail closed and all existing files are preserved. Earlier mapping-schema descriptions below are historical, not supported compatibility. Atomic current saves/`.previous`, integrity, external-change guards and immutable evidence/history remain. The independent original-measurement journal keeps its deployed compatibility. See [current storage/recovery](p4-1-photos.md) and [AGENTS.md](../AGENTS.md).
+
 ## Qualified reference and edition
 
 Barton Q uses **NGI, April 2025, _Using the Q-system: Rock mass classification and support design_**, not an unspecified original/2015 table. [Official handbook](https://www.ngi.no/globalassets/bilder/forskning-og-radgivning/bygg-og-anlegg/q-handbook_2025_english_final.pdf), retrieved 2026-10-18, PDF SHA-256 `30477f4b8f1b026a637343807d654d74e45ebdeb4381b68d88cd7429bc37ce57`. Publication date was checked on PDF page 2, preface on page 4. Relevant printed pages: formula p.6; selection guidance pp.9–27; tables 3-1…3-7; appendix tables 1–6 pp.53–57 (the separate stress-ratio table 3-7 is on p.25); quality classes in Figure 4-1 p.31 (PDF page 35). Appendix tables and the class chart were rendered and visually checked as well as read as text. The appendix numbering jumps from 6 to 8; tables 8–9 concern support design and are excluded from this feature.

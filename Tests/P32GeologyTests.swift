@@ -170,8 +170,8 @@ final class P32GeologyTests: XCTestCase {
         XCTAssertEqual(w.journal.measurements, before.measurements)
         XCTAssertTrue(w.draft.tectonicStructures.isEmpty); XCTAssertFalse(w.draft.hasChanges)
     }
-    @MainActor func testSchema4CompleteTectonicFixtureAndPartialRecordsReopenWithoutMigration() async throws {
-        // Literal wire format emitted by the previous PR #17 model, not a newly encoded stand-in.
+    @MainActor func testCurrentCompleteTectonicFixtureAndPartialRecordsReopenWithoutRewrite() async throws {
+        // Independent literal complete tectonic record in the current schema.
         let legacyBytes = Data("""
         {"id":"8BE4947A-61A3-4288-98C2-1CC17CDB73F8","type":"fault",
          "orientation":{"dipAngleText":"65","dipDirectionText":"120","reference":"trueNorth","usesConventionalDipSide":false},
@@ -197,7 +197,7 @@ final class P32GeologyTests: XCTestCase {
             try bytes.write(to: url)
             var reopened = try MappingWorkflow(store: FileMappingStore(url: url))
             let oldJournal = reopened.journal
-            XCTAssertEqual(oldJournal.schemaVersion, 6)
+            XCTAssertEqual(oldJournal.schemaVersion, 7)
             XCTAssertEqual(oldJournal.observations[0].geology?.tectonicStructures, [legacy])
             XCTAssertEqual(try Data(contentsOf: url), bytes) // Opening the current schema with legacy-shaped tectonic records does not rewrite it.
             reopened.draft.picket = "10"
@@ -208,7 +208,7 @@ final class P32GeologyTests: XCTestCase {
             }
             let newPoint = try reopened.save(now: date)
             let again = try FileMappingStore(url: url).load()
-            XCTAssertEqual(again.schemaVersion, 6); XCTAssertEqual(again.observations, oldJournal.observations + [newPoint])
+            XCTAssertEqual(again.schemaVersion, 7); XCTAssertEqual(again.observations, oldJournal.observations + [newPoint])
             XCTAssertEqual(again.measurements, oldJournal.measurements)
             XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: dir.path)), ["mapping.json", "mapping.json.previous"])
         }
@@ -324,7 +324,7 @@ final class P32GeologyTests: XCTestCase {
             XCTAssertEqual(try Data(contentsOf: url), external)
         }
     }
-    func testP31UpgradeIsLosslessPreservingEvidenceDXFAndBackupBytes() throws {
+    func testCurrentReopenPreservesEvidenceDXFAndPreviousSnapshot() throws {
         try directory { dir in
             let (_, initial) = try P2MappingTests().configured(); var w = initial
             let files = ManagedPlanStore(root: dir.appendingPathComponent("plans"))
@@ -333,24 +333,24 @@ final class P32GeologyTests: XCTestCase {
             try w.registerPlan(plan); files.complete(plan)
             try w.selectPlanPoint(PlanPoint(x: 123, y: 456), planID: plan.id)
             try w.draft.addMeasurement(original()); w.draft.picket = "5"; let old = try w.save(now: date)
-            var graph = w.journal; graph.schemaVersion = 3
+            let graph = w.journal
             let bytes = try JSONEncoder().encode(graph), url = dir.appendingPathComponent("mapping.json")
             try bytes.write(to: url)
             let store = FileMappingStore(url: url); var reopened = try MappingWorkflow(store: store)
-            XCTAssertEqual(reopened.journal.schemaVersion, 6); XCTAssertEqual(reopened.observations, [old])
+            XCTAssertEqual(reopened.journal.schemaVersion, 7); XCTAssertEqual(reopened.observations, [old])
             XCTAssertEqual(reopened.journal.measurements, graph.measurements); XCTAssertEqual(reopened.journal.plans, [plan])
-            XCTAssertEqual(try Data(contentsOf: url.appendingPathExtension("p3-backup")), bytes)
+            XCTAssertEqual(try Data(contentsOf: url), bytes)
             XCTAssertNoThrow(try files.read(plan))
             reopened.draft.picket = "10"; reopened.draft.jointSets = [set()]
             try reopened.selectPlanPoint(PlanPoint(x: 125, y: 460), planID: plan.id)
             XCTAssertEqual(reopened.draft.jointSets.count, 1)
             _ = try reopened.save(); let again = try FileMappingStore(url: url).load()
             XCTAssertEqual(again.observations.first, old); XCTAssertEqual(again.observations.count, 2)
-            XCTAssertEqual(try Data(contentsOf: url.appendingPathExtension("p3-backup")), bytes)
+            XCTAssertEqual(try Data(contentsOf: store.backupURL), bytes)
             XCTAssertNoThrow(try files.read(plan))
         }
     }
-    func testP31ConflictingBackupAndCorruptionFailClosedWithoutReset() throws {
+    func testOldSchemaAndCurrentGeologyCorruptionFailClosedWithoutReset() throws {
         try directory { dir in
             var graph = MappingJournal(); graph.schemaVersion = 3
             let bytes = try JSONEncoder().encode(graph), url = dir.appendingPathComponent("mapping.json")

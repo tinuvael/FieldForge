@@ -112,7 +112,7 @@ private typealias OriginalReading = FieldForge.Measurement
         XCTAssertThrowsError(try reopened.save()); XCTAssertEqual(reopened.draft, draft); XCTAssertEqual(reopened.journal, graph)
         XCTAssertEqual(try Data(contentsOf: url), external)
     }
-    func testP2UpgradePreservesPlansMarkersEvidenceAndOriginalBytes() async throws {
+    func testCurrentReopenPreservesPlansMarkersEvidenceAndOriginalBytes() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let files = ManagedPlanStore(root: directory.appendingPathComponent("plans"))
@@ -122,13 +122,12 @@ private typealias OriginalReading = FieldForge.Measurement
         try w.registerPlan(plan); files.complete(plan)
         try w.selectPlanPoint(PlanPoint(x: 123, y: 456), planID: plan.id)
         w.draft.picket = "5"; let oldPoint = try w.save()
-        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(w.journal)) as? [String: Any])
-        json["schemaVersion"] = 2; json.removeValue(forKey: "measurements")
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(w.journal)) as? [String: Any])
         let bytes = try JSONSerialization.data(withJSONObject: json, options: [.sortedKeys])
         let url = directory.appendingPathComponent("mapping.json"); try bytes.write(to: url)
         let store = FileMappingStore(url: url); var reopened = try MappingWorkflow(store: store)
-        XCTAssertEqual(reopened.journal.schemaVersion, 6); XCTAssertEqual(reopened.journal.observations, [oldPoint])
-        XCTAssertEqual(reopened.journal.plans, [plan]); XCTAssertEqual(try Data(contentsOf: url.appendingPathExtension("p2-backup")), bytes)
+        XCTAssertEqual(reopened.journal.schemaVersion, 7); XCTAssertEqual(reopened.journal.observations, [oldPoint])
+        XCTAssertEqual(reopened.journal.plans, [plan]); XCTAssertEqual(try Data(contentsOf: url), bytes)
         // Returning from a plan selection changes XY only and retains the full unsaved evidence.
         let reading = try manual(); try reopened.draft.addMeasurement(reading); reopened.draft.picket = "10"
         try reopened.selectPlanPoint(PlanPoint(x: 125, y: 460), planID: plan.id)
@@ -137,7 +136,7 @@ private typealias OriginalReading = FieldForge.Measurement
         XCTAssertEqual(again.measurements, [reading]); XCTAssertEqual(again.observations.first, oldPoint)
         XCTAssertNoThrow(try files.read(plan)); XCTAssertEqual(again.plans, [plan])
     }
-    func testCorruptedV3MissingEvidenceTableFailsWithoutReset() async throws {
+    func testCurrentMissingEvidenceTableFailsWithoutReset() async throws {
         var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(MappingJournal())) as? [String: Any])
         json.removeValue(forKey: "measurements")
         XCTAssertThrowsError(try JSONDecoder().decode(MappingJournal.self, from: JSONSerialization.data(withJSONObject: json)))

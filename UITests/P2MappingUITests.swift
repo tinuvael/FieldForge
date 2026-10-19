@@ -62,7 +62,10 @@ final class P2MappingUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["ПК 0+005"].waitForExistence(timeout: 5))
         app.staticTexts["ПК 0+005"].tap()
         XCTAssertTrue(app.staticTexts["Наблюдение · актуальная версия"].waitForExistence(timeout: 5))
-        screenshot("P2 saved point detail", app: app)
+        // A DXF marker resolves the same saved observation card and P4.1 photo actions.
+        reveal(app.buttons["photoCamera"], app: app)
+        XCTAssertTrue(app.buttons["photoLibrary"].exists); XCTAssertTrue(app.buttons["photoFiles"].exists)
+        screenshot("P2 saved point detail with shared photo section", app: app)
         app.buttons["Закрыть"].tap()
         XCTAssertTrue(app.buttons["planPoints"].waitForExistence(timeout: 5))
         // Different revision has no overlays even with identical project/horizon.

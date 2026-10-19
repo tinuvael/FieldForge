@@ -1,5 +1,9 @@
 # Import/export and spatial integration boundaries
 
+**Pre-MVP owner storage decision:** mapping uses only current experimental schema **7**. No automatic mapping migrations, new `.pN-backup`, resets or deletions; old/corrupt files fail closed and all existing files are preserved. Earlier mapping-schema descriptions below are historical, not supported compatibility. Atomic current saves/`.previous`, integrity, external-change guards and immutable evidence/history remain. The independent original-measurement journal keeps its deployed compatibility. See [current storage/recovery](p4-1-photos.md) and [AGENTS.md](../AGENTS.md).
+
+**P4.1 implementation update:** [Saved-point photographs](p4-1-photos.md) supersedes the future-only photo statements below for saved observations. Schema 7 adds photo/attachment and metadata-revision arrays to the existing journal, freezes exact P3.3 point revisions, and implements offline recoverable imports, gallery and zoom. Draft-point/point-free photos, XLSX/ZIP packages and automatic backup/restore remain future work. JSON alone is not a complete backup; include original photographs, DXF, pending operations and a verified inventory/manifest.
+
 The authoritative [product vision](product-vision.md) restricts the product to Geomechanical Mapping, Excavation Plans & Spatial Positioning, and Wedge Analysis on a shared offline project database, with future native iPad support. Prepared plans and engineering records are primary exchange needs; DWG editing, general-purpose CAD/GIS and full 3D mine modeling are outside scope. Current CSV behavior below is unchanged; the other adapters remain plans.
 
 ## Common boundary (future interfaces)

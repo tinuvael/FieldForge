@@ -9,7 +9,6 @@ protocol MappingStore {
 final class FileMappingStore: MappingStore {
     let url: URL
     var backupURL: URL { url.appendingPathExtension("previous") }
-    var migrationBackupURL: URL { url.appendingPathExtension("p1-backup") }
     private var loaded = false
     private var blocked = false
     private var loadedBytes: Data?
@@ -20,24 +19,9 @@ final class FileMappingStore: MappingStore {
     }
     func load() throws -> MappingJournal {
         do {
-            var data = try bytes()
-            var value = try data.map { try JSONDecoder().decode(MappingJournal.self, from: $0) } ?? MappingJournal()
+            let data = try bytes()
+            let value = try data.map { try JSONDecoder().decode(MappingJournal.self, from: $0) } ?? MappingJournal()
             try value.validate()
-            if value.schemaVersion < 6, let original = data {
-                let migrationBackupURL = url.appendingPathExtension("p\(value.schemaVersion)-backup")
-                value.schemaVersion = 6
-                let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
-                let migrated = try encoder.encode(value)
-                guard try JSONDecoder().decode(MappingJournal.self, from: migrated) == value else { throw StorageError.invalidRecord }
-                if FileManager.default.fileExists(atPath: migrationBackupURL.path) {
-                    guard try Data(contentsOf: migrationBackupURL) == original else { throw StorageError.invalidRecord }
-                } else {
-                    try original.write(to: migrationBackupURL, options: .withoutOverwriting)
-                }
-                guard try Data(contentsOf: migrationBackupURL) == original, try bytes() == original else { throw StorageError.changedFile }
-                try migrated.write(to: url, options: .atomic)
-                data = migrated
-            }
             loadedBytes = data; loaded = true; blocked = false
             return value
         } catch { blocked = true; throw error }
@@ -45,13 +29,15 @@ final class FileMappingStore: MappingStore {
     func save(_ journal: MappingJournal) throws {
         guard !blocked else { throw StorageError.writesBlocked }
         if !loaded { _ = try load() }
-        guard journal.schemaVersion == 6 else { throw StorageError.unsupportedVersion }
         try journal.validate()
         guard try bytes() == loadedBytes else { throw StorageError.changedFile }
         // Original observations are append-only; names/metadata can be managed separately.
         if let loadedBytes {
             let previous = try JSONDecoder().decode(MappingJournal.self, from: loadedBytes)
-            guard previous.revisions.allSatisfy({ journal.revisions.contains($0) }),
+            guard previous.photos.allSatisfy({ journal.photos.contains($0) }),
+                  previous.photoAttachments.allSatisfy({ journal.photoAttachments.contains($0) }),
+                  previous.photoRevisions.allSatisfy({ journal.photoRevisions.contains($0) }),
+                  previous.revisions.allSatisfy({ journal.revisions.contains($0) }),
                   previous.observations.allSatisfy({ old in journal.observations.contains(old) }),
                   previous.measurements.allSatisfy({ old in journal.measurements.contains(old) }),
                   previous.plans.allSatisfy({ old in journal.plans.contains(old) }) else {

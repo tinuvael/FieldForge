@@ -26,8 +26,9 @@
 
 ## Development
 
-- Preserve compatibility with existing records. Use explicit persistence schema versions and non-destructive migrations with backups and failure protection.
-- Test engineering calculations and migrations, including legacy fixtures, corrupted data, and record integrity.
+- Owner decision before MVP: the mapping database has one current experimental format, schema **7**. Do not reuse older schema numbers, add mapping migrations/upgrade chains or an automatic reset. Reject noncurrent and corrupt mapping files, block writes and preserve every existing database, image, DXF and backup. Current-schema atomic saves, `.previous`, external-change detection, relationship integrity and append-only evidence/history remain required. Test fresh current-schema journals and safe refusal, using isolated temporary directories.
+- This exception applies only to experimental mapping databases. Preserve the independent original-measurement journal and its existing deployed compatibility/migration/backup behavior. Do not change it as part of mapping work.
+- Test engineering calculations, current-format persistence, corrupted data, record integrity and recoverable attachment failures. Keep independent measurement migration tests.
 - Run available builds and tests before submission: `swift test`, deterministic `python3 scripts/generate_project.py`, and Xcode simulator build/test where available. Clearly report unavailable checks.
 - Update `README.md` for working features and `docs/` when models or architecture change.
 - Keep Xcode generation deterministic. Regenerate and commit the project after source inventory changes. Keep core tests runnable through both Swift Package Manager and Xcode.
