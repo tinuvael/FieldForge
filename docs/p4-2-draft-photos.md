@@ -29,6 +29,8 @@ Validation, intent, staging, promotion or journal failure preserves all fields a
 
 Success retains Project/Horizon/Excavation, starts a fresh draft UUID and suggests nominal horizon Z again. Picket/interval, XY, source plan/provenance, measurements, geology/interpretations, ratings, tectonics, notes, date/time-zone override and photos clear. Original observation/measurement evidence, P3.3 and photo histories remain append-only. Reconstructed correction forms use the saved observation UUID to preserve existing baseline-integrity checks.
 
+The SwiftUI Form is scoped to the draft UUID too. Save/discard replaces its local focus, disclosure and picker state along with the model draft, preventing a new point from inheriting the old Form's presentation lifetime.
+
 ## Discard and unfinished files
 
 Photos alone, or an active picker, make the draft dirty. Context changes require **Удалить черновик / Остаться**. Cancel preserves everything. Successful discard releases memory ownership, invalidates old sessions and starts a fresh draft. A failed context commit keeps the old draft intact.

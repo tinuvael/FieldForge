@@ -146,6 +146,8 @@ struct MappingView: View {
                     if w.draft.saving { ProgressView("Сохранение наблюдения и фотографий…") }
                 }
             }.scrollDismissesKeyboard(.interactively)
+                // A new draft also needs a fresh Form/focus/presentation lifetime.
+                .id(w.draft.id)
         }.disabled(w.draft.saving).frame(maxWidth: 760).frame(maxWidth: .infinity)
     }
     private func coordinate(_ name: String, _ key: WritableKeyPath<MappingDraft, String>) -> some View {

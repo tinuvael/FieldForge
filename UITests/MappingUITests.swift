@@ -368,7 +368,7 @@ final class MappingUITests: XCTestCase {
         show(app.textFields["correctionReason"], app: app, upward: false)
         fill(app.textFields["correctionReason"], "Исправлены пикет, J1, мощность и положение", app: app)
         show(disclosure("Системы трещин", app: app), app: app); disclosure("Системы трещин", app: app).tap()
-        app.buttons["editJointSet-J1"].tap()
+        show(app.buttons["editJointSet-J1"], app: app); app.buttons["editJointSet-J1"].tap()
         XCTAssertEqual(app.textFields["geologyDip"].value as? String, "46")
         fill(app.textFields["geologyDip"], "52", app: app)
         XCTAssertEqual(app.switches["jointEvidence-1"].value as? String, "1"); back(app)
