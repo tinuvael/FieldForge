@@ -100,10 +100,26 @@ for table in ['measurements', 'joint_sets', 'tectonic_structures', 'assessments'
     assert all(r['point_id'] in points for r in tables[table])
 for table in ['points', 'photo_point_contexts']:
     assert all(r['plan_id'] is None or r['plan_id'] in plans for r in tables[table])
+membership = {(r['excavation_id'], r['horizon_id']) for r in tables['excavation_horizons']}
+for table in ['points', 'photo_point_contexts', 'photos']:
+    assert all((r['excavation_id'], r['horizon_id']) in membership for r in tables[table])
+set_rows = {r['joint_set_id']: r for r in tables['joint_sets']}
+measurement_rows = {r['measurement_id']: r for r in tables['measurements']}
+context_rows = {r['revision_id']: r for r in tables['photo_point_contexts']}
+plan_rows = {r['plan_id']: r for r in tables['plans']}
+for table in ['points', 'photo_point_contexts']:
+    assert all(r['plan_id'] is None or plan_rows[r['plan_id']]['horizon_id'] == r['horizon_id'] for r in tables[table])
+assessment_keys = [(r['point_id'], r['kind']) for r in tables['assessments']]
+assert len(assessment_keys) == len(set(assessment_keys))
 for row in tables['interpretation_evidence']:
     assert row['measurement_id'] in measurements and row['joint_set_id'] in sets
+    assert row['point_id'] == set_rows[row['joint_set_id']]['point_id'] == measurement_rows[row['measurement_id']]['point_id']
+    assert row['joint_set_revision'] == set_rows[row['joint_set_id']]['revision']
 for row in tables['photos']:
     assert row['attachment_id'] in attachments and row['context_revision_id'] in contexts
+    context = context_rows[row['context_revision_id']]
+    assert all(context[key] == row[key] for key in ['point_id', 'project_id', 'horizon_id', 'excavation_id'])
+    assert context['version'] == row['context_point_version']
     assert row['captured_at_utc'] is None and row['capture_location_basis'] == 'unknownBeforeFirstSave'
     assert row['original_integrity'] == 'notChecked; originalsNotIncluded'
 assert len(points) == 1 and len(measurements) == 2 and len(sets) == 2
