@@ -368,7 +368,7 @@ final class MappingUITests: XCTestCase {
         show(app.textFields["correctionReason"], app: app, upward: false)
         fill(app.textFields["correctionReason"], "Исправлены пикет, J1, мощность и положение", app: app)
         show(disclosure("Системы трещин", app: app), app: app); disclosure("Системы трещин", app: app).tap()
-        app.buttons["editJointSet-J1"].tap()
+        show(app.buttons["editJointSet-J1"], app: app); app.buttons["editJointSet-J1"].tap()
         XCTAssertEqual(app.textFields["geologyDip"].value as? String, "46")
         fill(app.textFields["geologyDip"], "52", app: app)
         XCTAssertEqual(app.switches["jointEvidence-1"].value as? String, "1"); back(app)
@@ -413,10 +413,85 @@ final class MappingUITests: XCTestCase {
     }
     @MainActor private func show(_ element: XCUIElement, app: XCUIApplication, upward: Bool = true) {
         for _ in 0..<24 {
-            if element.exists && element.isHittable { return }
+            if element.exists && element.isHittable {
+                let centerY = element.frame.midY
+                let navigationBottom = app.navigationBars.allElementsBoundByIndex.filter(\.isHittable).map { $0.frame.maxY }.max() ?? 0
+                let tab = app.tabBars.firstMatch
+                if centerY > navigationBottom && (!tab.exists || !tab.isHittable || centerY < tab.frame.minY) { return }
+            }
             scrollForm(app, up: upward)
         }
-        XCTFail("Element not visible: \(element)\n\(app.debugDescription)")
+        XCTFail("Element not visible: \(element)")
+    }
+    @MainActor func testP42DraftPhotosCancelDiscardTwoPointsAndRelaunch() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["FIELD_FORGE_TEST_RUN_ID"] = UUID().uuidString
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 30, height: 20))
+        let images = [UIColor.red, .green, .blue].map { color in
+            renderer.pngData { context in color.setFill(); context.fill(CGRect(x: 0, y: 0, width: 30, height: 20)) }.base64EncodedString()
+        }
+        app.launchEnvironment["P41_PHOTOS"] = String(data: try JSONEncoder().encode(images), encoding: .utf8)
+        app.launchArguments = ["--ui-testing"]; app.launch()
+        let project = "P42-\(UUID().uuidString.prefix(8))"
+        create("projectPicker", name: project, app: app); select("projectPicker", value: project, app: app)
+        create("horizonPicker", name: "+393 м", app: app); select("horizonPicker", value: "+393 м", app: app)
+        create("excavationPicker", name: "E", app: app); select("excavationPicker", value: "E", app: app)
+        reveal("draftPhotoCamera", app: app); app.buttons["draftPhotoCamera"].tap()
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "в Simulator камеры нет")).firstMatch.waitForExistence(timeout: 5))
+        app.buttons["Понятно"].tap()
+        app.buttons["draftPhotoLibrary"].tap()
+        let cancel = app.buttons.matching(NSPredicate(format: "label IN %@", ["Cancel", "Отмена", "Отменить"])).firstMatch
+        XCTAssertTrue(cancel.waitForExistence(timeout: 30)); cancel.tap()
+        XCTAssertTrue(app.buttons["draftPhotoFiles"].waitForExistence(timeout: 5)); app.buttons["draftPhotoFiles"].tap()
+        XCTAssertTrue(cancel.waitForExistence(timeout: 30)); cancel.tap()
+        // Cancellation leaves no dirty draft; selecting the same context needs no discard.
+        app.buttons["projectPicker"].tap(); app.buttons[project].tap()
+        reveal("draftPhotoImportFixtures", app: app); app.buttons["draftPhotoImportFixtures"].tap()
+        let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "draftPhoto-"))
+        let imported = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 3"), object: rows)
+        XCTAssertEqual(XCTWaiter.wait(for: [imported], timeout: 20), .completed)
+        let discardedIDs = rows.allElementsBoundByIndex.map(\.identifier)
+        app.buttons["projectPicker"].tap(); app.buttons["Не выбрано"].tap()
+        XCTAssertTrue(app.buttons["Остаться"].waitForExistence(timeout: 5)); app.buttons["Остаться"].tap()
+        XCTAssertEqual(rows.count, 3)
+        app.buttons["projectPicker"].tap(); app.buttons["Не выбрано"].tap()
+        app.buttons["Удалить черновик"].tap()
+        select("projectPicker", value: project, app: app); select("horizonPicker", value: "+393 м", app: app); select("excavationPicker", value: "E", app: app)
+        for point in ["5", "10"] {
+            top(app); fill(app.textFields["mappingPicket"], point, app: app)
+            fill(app.textFields["mappingZ"], "", app: app)
+            reveal("draftPhotoImportFixtures", app: app); app.buttons["draftPhotoImportFixtures"].tap()
+            let wait = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 3"), object: rows)
+            XCTAssertEqual(XCTWaiter.wait(for: [wait], timeout: 20), .completed)
+            let ids = rows.allElementsBoundByIndex.map { $0.identifier.replacingOccurrences(of: "draftPhoto-", with: "photo-") }
+            XCTAssertTrue(Set(rows.allElementsBoundByIndex.map(\.identifier)).isDisjoint(with: Set(discardedIDs)))
+            let preview = rows.firstMatch; photoReveal(preview, app: app); preview.tap()
+            XCTAssertTrue(app.buttons["draftPhotoClosePreview"].waitForExistence(timeout: 5)); app.buttons["draftPhotoClosePreview"].tap()
+            top(app); app.buttons["selectHorizonPlan"].tap()
+            XCTAssertTrue(app.buttons["Вернуться"].waitForExistence(timeout: 5)); app.buttons["Вернуться"].tap()
+            XCTAssertEqual(rows.count, 3)
+            save(app); saved(app)
+            top(app); XCTAssertTrue(app.buttons["projectPicker"].label.contains(project))
+            XCTAssertTrue(app.buttons["horizonPicker"].label.contains("393")); XCTAssertTrue(app.buttons["excavationPicker"].label.contains("E"))
+            XCTAssertEqual(app.textFields["mappingPicket"].value as? String, "Пикет: ПК 0+005 или метры")
+            app.buttons["mappingJournal"].tap(); app.staticTexts[point].tap()
+            photoReveal(app.buttons["photoCamera"], app: app)
+            let savedRows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "photo-"))
+            XCTAssertEqual(Set(savedRows.allElementsBoundByIndex.map(\.identifier)), Set(ids))
+            savedRows.firstMatch.tap()
+            photoReveal(app.staticTexts["Место съёмки неизвестно · фото черновика"], app: app)
+            XCTAssertTrue(app.staticTexts["Место съёмки неизвестно · фото черновика"].exists)
+            app.buttons["photoCloseDetail"].tap()
+            app.terminate(); app.launch()
+            app.buttons["mappingJournal"].tap(); app.staticTexts[point].tap()
+            photoReveal(app.buttons["photoCamera"], app: app)
+            XCTAssertEqual(Set(savedRows.allElementsBoundByIndex.map(\.identifier)), Set(ids))
+            app.terminate(); app.launch()
+        }
+        let other = "Other-\(UUID().uuidString.prefix(8))"
+        create("projectPicker", name: other, app: app); select("projectPicker", value: other, app: app)
+        app.buttons["mappingJournal"].tap(); XCTAssertTrue(app.staticTexts["journalEmpty"].waitForExistence(timeout: 5))
     }
     @MainActor func testP41ThreePhotosMetadataZoomCameraUnavailableAndRelaunch() throws {
         continueAfterFailure = false
@@ -473,7 +548,7 @@ final class MappingUITests: XCTestCase {
     }
     @MainActor private func photoReveal(_ element: XCUIElement, app: XCUIApplication, upward: Bool = true) {
         for _ in 0..<24 {
-            let form = app.collectionViews.firstMatch
+            let form = activeForm(app)
             if element.exists && element.isHittable {
                 let center = CGPoint(x: element.frame.midX, y: element.frame.midY)
                 let tab = app.tabBars.firstMatch
@@ -510,10 +585,20 @@ final class MappingUITests: XCTestCase {
         }
     }
     @MainActor private func scrollForm(_ app: XCUIApplication, up: Bool) {
-        let form = app.collectionViews.firstMatch
-        let start = form.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: up ? 0.8 : 0.3))
-        let end = form.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.55))
+        let form = activeForm(app)
+        let frame = form.frame
+        let navigationBottom = app.navigationBars.allElementsBoundByIndex.filter(\.isHittable).map { $0.frame.maxY }.max() ?? 0
+        let tab = app.tabBars.firstMatch
+        let top = max(frame.minY, navigationBottom) + 12
+        let bottom = min(frame.maxY, tab.exists && tab.isHittable ? tab.frame.minY : frame.maxY) - 24
+        let height = max(40, bottom - top)
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        let start = origin.withOffset(CGVector(dx: frame.minX + frame.width * 0.05, dy: top + height * (up ? 0.75 : 0.25)))
+        let end = origin.withOffset(CGVector(dx: frame.minX + frame.width * 0.05, dy: top + height * (up ? 0.25 : 0.75)))
         start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
+    }
+    @MainActor private func activeForm(_ app: XCUIApplication) -> XCUIElement {
+        app.collectionViews.allElementsBoundByIndex.last(where: \.isHittable) ?? app.collectionViews.firstMatch
     }
     @MainActor private func create(_ picker: String, name: String, app: XCUIApplication) {
         let button = app.buttons["manage-\(picker)"]; XCTAssertTrue(button.waitForExistence(timeout: 10)); button.tap()

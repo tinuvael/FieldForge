@@ -17,6 +17,11 @@ enum PhotoCategory: String, Codable, CaseIterable {
     }
 }
 
+enum PhotoLocationBasis: String, Codable {
+    case pointRevision
+    case unknownBeforeFirstSave
+}
+
 /// Version 1 identifies the original point UUID; later versions identify the exact P3.3 revision.
 /// No copy of the point, coordinates or geological evidence is created.
 struct PhotoContext: Codable, Equatable {
@@ -26,6 +31,7 @@ struct PhotoContext: Codable, Equatable {
     let pointID: UUID
     let pointRevisionID: UUID
     let pointVersion: Int
+    var locationBasis: PhotoLocationBasis = .pointRevision
 }
 
 struct PhotoMetadata: Codable, Equatable {
@@ -114,6 +120,9 @@ extension MappingJournal {
                   photo.importedAt.timeIntervalSinceReferenceDate.isFinite,
                   photo.capturedAt?.timeIntervalSinceReferenceDate.isFinite ?? true,
                   !photo.captureTimeProvenance.isEmpty else { throw StorageError.invalidRecord }
+            if photo.context.locationBasis == .unknownBeforeFirstSave {
+                guard photo.context.pointVersion == 1, photo.context.pointRevisionID == photo.context.pointID else { throw StorageError.invalidRecord }
+            }
         }
         var latest: [UUID: PhotoMetadataRevision] = [:]
         for revision in photoRevisions {

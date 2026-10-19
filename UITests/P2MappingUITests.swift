@@ -1,8 +1,15 @@
 import XCTest
+import UIKit
 
 final class P2MappingUITests: XCTestCase {
     @MainActor func testTwoPlansPickingSavedMarkersOverlapAndDraftRetention() throws {
+        continueAfterFailure = false
         let app = XCUIApplication()
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 30, height: 20))
+        let images = [UIColor.red, .green, .blue].map { color in
+            renderer.pngData { context in color.setFill(); context.fill(CGRect(x: 0, y: 0, width: 30, height: 20)) }.base64EncodedString()
+        }
+        app.launchEnvironment["P41_PHOTOS"] = String(data: try JSONEncoder().encode(images), encoding: .utf8)
         app.launchEnvironment["FIELD_FORGE_TEST_RUN_ID"] = UUID().uuidString
         app.launchArguments = ["--ui-testing"]
         // Simulator-only import input; normal setup, managed-file import and commit run unchanged.
@@ -24,6 +31,11 @@ final class P2MappingUITests: XCTestCase {
         reveal(app.textFields["mappingZ"], app: app)
         XCTAssertEqual(app.textFields["mappingZ"].value as? String, "393")
         enter("mappingZ", value: "390.5", app: app, replacing: true)
+        reveal(app.buttons["draftPhotoImportFixtures"], app: app); app.buttons["draftPhotoImportFixtures"].tap()
+        let draftRows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "draftPhoto-"))
+        let received = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 3"), object: draftRows)
+        XCTAssertEqual(XCTWaiter.wait(for: [received], timeout: 20), .completed)
+        let photoIDs = draftRows.allElementsBoundByIndex.map { $0.identifier.replacingOccurrences(of: "draftPhoto-", with: "photo-") }
         openPlans(app)
         importFixture("P2_PLAN_A", version: "A", app: app)
         importFixture("P2_PLAN_B", version: "B", app: app)
@@ -45,6 +57,7 @@ final class P2MappingUITests: XCTestCase {
         screenshot("P2 proposed plan point", app: app)
         app.buttons["confirmPlanXY"].tap()
         XCTAssertTrue(app.buttons["selectHorizonPlan"].waitForExistence(timeout: 5))
+        reveal(app.textFields["mappingZ"], app: app, down: true)
         XCTAssertEqual(app.textFields["mappingZ"].value as? String, "390.5")
         XCTAssertEqual(Double(app.textFields["mappingX"].value as? String ?? "" ) ?? .nan, 200, accuracy: 0.5)
         XCTAssertEqual(Double(app.textFields["mappingY"].value as? String ?? "" ) ?? .nan, 300, accuracy: 0.5)
@@ -65,6 +78,7 @@ final class P2MappingUITests: XCTestCase {
         // A DXF marker resolves the same saved observation card and P4.1 photo actions.
         reveal(app.buttons["photoCamera"], app: app)
         XCTAssertTrue(app.buttons["photoLibrary"].exists); XCTAssertTrue(app.buttons["photoFiles"].exists)
+        XCTAssertEqual(Set(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "photo-")).allElementsBoundByIndex.map(\.identifier)), Set(photoIDs))
         screenshot("P2 saved point detail with shared photo section", app: app)
         app.buttons["Закрыть"].tap()
         XCTAssertTrue(app.buttons["planPoints"].waitForExistence(timeout: 5))
@@ -98,6 +112,12 @@ final class P2MappingUITests: XCTestCase {
         openPlans(app)
         XCTAssertTrue(app.staticTexts["P2_PLAN_A.dxf"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["P2_PLAN_B.dxf"].exists)
+        app.staticTexts["P2_PLAN_A.dxf"].tap()
+        XCTAssertTrue(canvas.waitForExistence(timeout: 10))
+        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(app.staticTexts["ПК 0+005"].waitForExistence(timeout: 5)); app.staticTexts["ПК 0+005"].tap()
+        reveal(app.buttons["photoCamera"], app: app)
+        XCTAssertEqual(Set(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "photo-")).allElementsBoundByIndex.map(\.identifier)), Set(photoIDs))
     }
     @MainActor func testOriginalHorizon200ImportProjectionPickingAndMarker() throws {
         try verifyOriginal(level: 200, centerX: 4828.989245694731, centerY: 10204.5, polylines: 13, vertices: 627)

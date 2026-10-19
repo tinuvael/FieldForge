@@ -75,3 +75,26 @@ struct PhotoCameraPicker: UIViewControllerRepresentable {
         }
     }
 }
+
+/// Shared Files adapter: copy coordinated provider bytes before releasing security scope.
+enum PhotoFilesLoader {
+    static func load(_ url: URL) async throws -> ReceivedPhoto {
+        try await Task.detached(priority: .userInitiated) {
+            let access = url.startAccessingSecurityScopedResource()
+            defer { if access { url.stopAccessingSecurityScopedResource() } }
+            // Coordinate File Provider downloads/read access, then copy before scope closes.
+            var readError: Error?; var data: Data?; var coordinatorError: NSError?
+            NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordinatorError) { readable in
+                do {
+                    guard let size = try readable.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+                          size <= ManagedPhotoStore.maximumBytes else { throw StorageError.invalidRecord }
+                    data = try Data(contentsOf: readable)
+                } catch { readError = error }
+            }
+            if let error = coordinatorError ?? readError as NSError? { throw error }
+            guard let data else { throw StorageError.invalidRecord }
+            return ReceivedPhoto(data: data, filename: url.lastPathComponent, source: .files,
+                representation: "Files supplied file; received bytes preserved; upstream transformations unknown")
+        }.value
+    }
+}

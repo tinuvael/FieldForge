@@ -55,7 +55,7 @@ struct MappingView: View {
             set: { if !$0 { mapping.perform { $0.cancelContextChange() } } })) {
                 Button("Удалить черновик", role: .destructive) { mapping.perform { try $0.confirmDiscard() } }
                 Button("Остаться", role: .cancel) { mapping.perform { $0.cancelContextChange() } }
-            } message: { Text("Пикет, интервал, дата, координаты, замеры, интерпретации, тектоника, рейтинги и примечания ещё не сохранены.") }
+            } message: { Text("Поля и фотографии черновика ещё не сохранены. Записанные файлы не удаляются автоматически.") }
     }
     private func draft<T>(_ key: WritableKeyPath<MappingDraft, T>, fallback: T) -> Binding<T> {
         Binding(get: { mapping.workflow?.draft[keyPath: key] ?? fallback },
@@ -64,6 +64,7 @@ struct MappingView: View {
     private func context(_ key: WritableKeyPath<MappingContext, UUID?>) -> Binding<UUID?> {
         Binding(get: { mapping.workflow?.context[keyPath: key] }, set: { value in
             mapping.perform { workflow in
+                guard workflow.context[keyPath: key] != value else { return }
                 var next = workflow.context; next[keyPath: key] = value
                 if key == \MappingContext.projectID { next.horizonID = nil; next.excavationID = nil }
                 if key == \MappingContext.horizonID { next.excavationID = nil }
@@ -118,6 +119,7 @@ struct MappingView: View {
                 } header: { Text("Замеры: \(w.draft.measurements.count)") } footer: {
                     Text("Исходные замеры сохраняются вместе с точкой. Системы J1–J5 не назначаются автоматически.")
                 }
+                DraftPhotosSection()
                 MappingGeologyForm(sets: draft(\.jointSets, fallback: []), structures: draft(\.tectonicStructures, fallback: []),
                                    measurements: w.draft.measurements, addSet: { mapping.perform { $0.draft.addJointSet() } })
                 MappingRatingsForm(q: draft(\.bartonQ, fallback: BartonQInput()),
@@ -129,13 +131,24 @@ struct MappingView: View {
                 Section {
                     Button {
                         focused = false
-                        mapping.perform { _ = try $0.save(); mapping.success = true }
+                        if w.draft.photos.isEmpty {
+                            // Preserve the existing synchronous field-only save/focus transition.
+                            mapping.perform { _ = try $0.save(); mapping.success = true }
+                        } else {
+                            let id = w.draft.id
+                            Task { await mapping.saveDraft(id: id) }
+                        }
                     } label: {
                         Text("Сохранить наблюдение").font(.headline).frame(maxWidth: .infinity, minHeight: 44)
                     }.buttonStyle(.borderedProminent).accessibilityIdentifier("saveMappingObservation")
+                        .disabled(!w.draft.photoSessions.isEmpty || mapping.photoBusy)
+                    if !w.draft.photoSessions.isEmpty { Text("Дождитесь завершения выбора и получения всех фотографий.").font(.caption) }
+                    if w.draft.saving { ProgressView("Сохранение наблюдения и фотографий…") }
                 }
             }.scrollDismissesKeyboard(.interactively)
-        }.frame(maxWidth: 760).frame(maxWidth: .infinity)
+                // A new draft also needs a fresh Form/focus/presentation lifetime.
+                .id(w.draft.id)
+        }.disabled(w.draft.saving).frame(maxWidth: 760).frame(maxWidth: .infinity)
     }
     private func coordinate(_ name: String, _ key: WritableKeyPath<MappingDraft, String>) -> some View {
         HStack {

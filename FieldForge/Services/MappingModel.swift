@@ -33,10 +33,19 @@ import Combine
             photoStore = ManagedPhotoStore(root: directory.appendingPathComponent(testing ? "ui-testing-photos\(namespace)" : "photos"))
             workflow = try MappingWorkflow(store: FileMappingStore(url: directory.appendingPathComponent(testing ? "ui-testing-mapping\(namespace).json" : "mapping-v1.json")))
         } catch { self.error = "Не удалось открыть картирование. Запись заблокирована: \(error.localizedDescription)" }
+        refreshPhotoRecovery()
     }
     func perform(_ action: (inout MappingWorkflow) throws -> Void) {
         guard workflow != nil else { return }
-        do { try action(&workflow!) } catch { self.error = error.localizedDescription }
+        let oldID = workflow!.draft.id
+        do {
+            try action(&workflow!)
+            if workflow!.draft.id != oldID {
+                // Discard only volatile ownership. Never delete files or a saved original.
+                retainedPhotos = retainedPhotos.filter { $0.value.operation.photo.context.pointID != oldID }
+                refreshPhotoRecovery()
+            }
+        } catch { self.error = error.localizedDescription }
     }
 }
 

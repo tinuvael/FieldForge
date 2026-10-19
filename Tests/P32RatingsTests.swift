@@ -244,7 +244,7 @@ final class P32RatingsTests: XCTestCase {
             let original = try JSONEncoder().encode(legacy), url = dir.appendingPathComponent("mapping-v1.json")
             try original.write(to: url)
             let store = FileMappingStore(url: url); var reopened = try MappingWorkflow(store: store)
-            XCTAssertEqual(reopened.journal.schemaVersion, 7); XCTAssertEqual(reopened.observations, [point])
+            XCTAssertEqual(reopened.journal.schemaVersion, 8); XCTAssertEqual(reopened.observations, [point])
             XCTAssertEqual(reopened.journal.measurements, [reading]); XCTAssertEqual(reopened.journal.plans, legacy.plans)
             XCTAssertNil(reopened.observations[0].ratings)
             XCTAssertEqual(try Data(contentsOf: url), original)

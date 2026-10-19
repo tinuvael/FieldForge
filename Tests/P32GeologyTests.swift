@@ -197,7 +197,7 @@ final class P32GeologyTests: XCTestCase {
             try bytes.write(to: url)
             var reopened = try MappingWorkflow(store: FileMappingStore(url: url))
             let oldJournal = reopened.journal
-            XCTAssertEqual(oldJournal.schemaVersion, 7)
+            XCTAssertEqual(oldJournal.schemaVersion, 8)
             XCTAssertEqual(oldJournal.observations[0].geology?.tectonicStructures, [legacy])
             XCTAssertEqual(try Data(contentsOf: url), bytes) // Opening the current schema with legacy-shaped tectonic records does not rewrite it.
             reopened.draft.picket = "10"
@@ -208,7 +208,7 @@ final class P32GeologyTests: XCTestCase {
             }
             let newPoint = try reopened.save(now: date)
             let again = try FileMappingStore(url: url).load()
-            XCTAssertEqual(again.schemaVersion, 7); XCTAssertEqual(again.observations, oldJournal.observations + [newPoint])
+            XCTAssertEqual(again.schemaVersion, 8); XCTAssertEqual(again.observations, oldJournal.observations + [newPoint])
             XCTAssertEqual(again.measurements, oldJournal.measurements)
             XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: dir.path)), ["mapping.json", "mapping.json.previous"])
         }
@@ -281,7 +281,8 @@ final class P32GeologyTests: XCTestCase {
         store.fail = true; XCTAssertThrowsError(try w.save()); XCTAssertEqual(w.draft, draft); XCTAssertEqual(w.journal, journal)
         XCTAssertTrue(store.value.measurements.isEmpty); XCTAssertTrue(store.value.observations.isEmpty)
         store.fail = false; let first = try w.save(now: date)
-        var empty = MappingDraft(); empty.suggestElevation(w.selectedHorizon)
+        var empty = MappingDraft(id: w.draft.id); empty.suggestElevation(w.selectedHorizon)
+        XCTAssertNotEqual(w.draft.id, draft.id)
         XCTAssertEqual(w.draft, empty); XCTAssertEqual(w.context, context); XCTAssertFalse(w.draft.hasChanges)
         w.draft.picket = "10"; let second = try w.save(now: date.addingTimeInterval(1))
         XCTAssertNil(second.geology); XCTAssertTrue(second.measurementIDs.isEmpty); XCTAssertNotEqual(first.id, second.id)
@@ -337,7 +338,7 @@ final class P32GeologyTests: XCTestCase {
             let bytes = try JSONEncoder().encode(graph), url = dir.appendingPathComponent("mapping.json")
             try bytes.write(to: url)
             let store = FileMappingStore(url: url); var reopened = try MappingWorkflow(store: store)
-            XCTAssertEqual(reopened.journal.schemaVersion, 7); XCTAssertEqual(reopened.observations, [old])
+            XCTAssertEqual(reopened.journal.schemaVersion, 8); XCTAssertEqual(reopened.observations, [old])
             XCTAssertEqual(reopened.journal.measurements, graph.measurements); XCTAssertEqual(reopened.journal.plans, [plan])
             XCTAssertEqual(try Data(contentsOf: url), bytes)
             XCTAssertNoThrow(try files.read(plan))

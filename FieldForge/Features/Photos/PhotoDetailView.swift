@@ -60,12 +60,16 @@ struct PhotoDetailView: View {
                 }
                 Section("Исходная привязка") {
                     Text("Точка: \(photo.context.pointID.uuidString)").font(.caption)
-                    Text("Версия расположения: \(photo.context.pointVersion)")
+                    Text(photo.context.locationBasis == .unknownBeforeFirstSave ? "Место съёмки неизвестно · фото черновика" : "Версия расположения: \(photo.context.pointVersion)")
                     Text(photo.context.pointRevisionID.uuidString).font(.caption)
                     if let point = mapping.workflow?.journal.photoPoint(photo.context) {
-                        Text("Пикет при импорте: \(point.picket)")
-                        Text(point.coordinates?.provenance ?? "Координаты неизвестны")
-                        NavigationLink("Исходная версия точки") {
+                        if photo.context.locationBasis == .pointRevision {
+                            Text("Пикет при импорте: \(point.picket)")
+                            Text(point.coordinates?.provenance ?? "Координаты неизвестны")
+                        } else {
+                            Text("Проект, горизонт и выработка зафиксированы до выбора фото. Расположение сохранённой точки не является местом съёмки.").font(.caption)
+                        }
+                        NavigationLink("Исходная версия точки · расположение точки") {
                             MappingObservationDetail(record: point, historical: true, historicalVersion: photo.context.pointVersion)
                         }
                         NavigationLink("Актуальная карточка точки") { MappingObservationDetail(record: point) }
