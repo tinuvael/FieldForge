@@ -16,7 +16,7 @@ P4.1 adds multiple camera/Photos/Files photographs to saved Mapping/Plan observa
 
 ## Working features
 
-- Saved-point photographs: camera capability/permission handling, multi-image Photos/Files imports, individual names/numbers/descriptions/categories, capture versus import time, immutable metadata history, thumbnails and full-screen pinch zoom. UUID paths and SHA-256 originals stay offline; pending operations resume without duplicate records. Missing/corrupt originals stay visible. See [P4.1 scope, recovery and backup composition](docs/p4-1-photos.md).
+- Saved-point photographs: camera capability/permission handling, multi-image Photos/Files imports, individual names/numbers/descriptions/categories, capture versus import time, immutable metadata history, thumbnails and full-screen pinch zoom. UUID paths and SHA-256 originals stay offline; pending operations resume without duplicate records. Received camera bytes remain in the running model through intent/staging failures, allowing normal retry without another shutter. Unwritten memory-only bytes cannot survive process termination. Missing/corrupt originals stay visible. See [P4.1 scope, recovery and backup composition](docs/p4-1-photos.md).
 
 - Main tabs «Картирование / План / Клинья»; mapping has a fixed project/horizon/excavation context panel, project journal and secondary measurement/settings navigation. The Plan tab opens imported horizon plans; wedge analysis remains unavailable.
 - Create/rename projects, create/edit numeric signed/decimal horizon elevations (preserving legacy names/UUIDs), and manage one excavation across multiple horizons. Context persists between sessions.
@@ -69,7 +69,7 @@ The active journal stays at Application Support/FieldForge/`measurements-v1.json
 
 CSV uses UTF-8 BOM, comma separators, CRLF records, UTC ISO 8601 timestamps, round-trip numeric precision and empty cells for missing data. The first 24 Phase 1 column names/order are retained; four provenance/original-input columns are appended. Manual diagnostic cells are blank. Spreadsheet-formula-like text is protected. Consumers must accept additional columns/new enums and full-precision numeric formatting. Use Excel's UTF-8/comma/decimal-dot import when regional detection differs. Excel numeric precision may still reduce values; CSV is not a complete JSON/attachment backup.
 
-The project graph uses `mapping-v1.json` (schema 7, lossless schema 1–6 upgrade with immutable `.pN-backup`, including `.p6-backup`), isolated from the protected standalone measurement journal. It is atomically rewritten as one validated aggregate; `mapping-v1.json.previous` retains the prior snapshot. No legacy assignment/migration is guessed. Managed DXF files/intents live beside it under `plans/`; photos use `photos/originals`, `photos/operations`, `photos/staging` and regenerable `photos/thumbnails`. A complete offline backup requires a consistent graph, legacy journal/backups, original photos and DXF, pending operations/staging and a verified inventory/manifest with missing-file reports. A JSON-only copy is not a complete backup. No ZIP/XLSX package or automated restore is provided yet; see [backup and recovery](docs/p4-1-photos.md). SQLite remains a future storage step for large workloads; see the [P2 storage/recovery contract](docs/p2-dxf.md).
+Before MVP, `mapping-v1.json` has one current experimental format: **schema 7**. Older mapping schemas are intentionally unsupported: no automatic migration, new `.pN-backup`, reset or deletion. Missing files start a fresh current journal; current files open without rewriting; incompatible/corrupt files block writes and preserve all existing data, images, DXF and backups. Atomic validated commits, `.previous`, external-change detection and append-only evidence/history remain. This owner decision is recorded in [AGENTS.md](AGENTS.md); the independent `measurements-v1.json` journal and its deployed compatibility are unchanged. Photos live in `photos/originals`, `photos/operations`, `photos/staging` and regenerable `photos/thumbnails`; DXF originals/intents remain under `plans/`. A complete backup needs a consistent graph/history, originals, DXF, pending operations/staging, existing backups and a verified inventory/manifest with missing-file reports. JSON alone is not a complete backup. No ZIP/XLSX package or automated restore is provided; see [recovery and backup](docs/p4-1-photos.md).
 
 ## Branding
 
@@ -108,7 +108,7 @@ UITests/                        mapping acceptance and automatic/manual save/rel
 scripts/generate_project.py     deterministic checked-in Xcode project
 ```
 
-P4.1 verification: see [photo storage, migration, recovery and Simulator checks](docs/p4-1-verification.md). Real camera verification is a separate owner manual check.
+P4.1 verification: see [photo storage, current-schema refusal, live retry and Simulator checks](docs/p4-1-verification.md). Real camera verification is a separate owner manual check.
 
 P3.3 verification: see [saved observation revisions, compatibility and test results](docs/p3-3-verification.md).
 

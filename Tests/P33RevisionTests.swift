@@ -206,29 +206,28 @@ private typealias RevisionReading = FieldForge.Measurement
             altered = reopened.journal; altered.observations = []; XCTAssertThrowsError(try store.save(altered))
         }
     }
-    func testSchema5UpgradePreservesRichRecordsAndExactBackupBytes() async throws {
+    func testCurrentRichRecordsOpenWithoutRewriteAndCorrectionKeepsExactPreviousBytes() async throws {
         let (_, initial, original) = try seed()
         try withDirectory { path in
             let url = path.appendingPathComponent("mapping.json")
-            var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(initial.journal)) as? [String: Any])
-            json["schemaVersion"] = 5; json.removeValue(forKey: "revisions")
+            let json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(initial.journal)) as? [String: Any])
             let bytes = try JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys])
             try bytes.write(to: url)
             let store = FileMappingStore(url: url); var w = try MappingWorkflow(store: store)
             XCTAssertEqual(w.journal.observations, initial.journal.observations); XCTAssertEqual(w.journal.measurements, initial.journal.measurements)
             XCTAssertEqual(w.journal.schemaVersion, 7); XCTAssertTrue(w.journal.revisions.isEmpty)
-            XCTAssertEqual(try Data(contentsOf: url.appendingPathExtension("p5-backup")), bytes)
-            var edit = try w.correction(for: original.id); edit.reason = "After upgrade"; edit.fields.picket = "10"
+            XCTAssertEqual(try Data(contentsOf: url), bytes)
+            var edit = try w.correction(for: original.id); edit.reason = "After reopen"; edit.fields.picket = "10"
             try w.saveCorrection(edit, now: correctionTime)
             XCTAssertEqual(try FileMappingStore(url: url).load(), w.journal)
-            XCTAssertEqual(try Data(contentsOf: url.appendingPathExtension("p5-backup")), bytes)
+            XCTAssertEqual(try Data(contentsOf: store.backupURL), bytes)
         }
     }
-    func testSchema5BackupConflictFailsClosedWithoutChangingOriginalBytes() async throws {
+    func testOldSchemaRefusalPreservesExistingBackupAndOriginalBytes() async throws {
         try withDirectory { path in
             let url = path.appendingPathComponent("mapping.json")
-            var json = try XCTUnwrap(JSONSerialization.jsonObject(with: P1MappingFixture.data) as? [String: Any])
-            json["schemaVersion"] = 5; json["measurements"] = []
+            var json = try XCTUnwrap(JSONSerialization.jsonObject(with: CurrentMappingFixture.data) as? [String: Any])
+            json["schemaVersion"] = 5
             let bytes = try JSONSerialization.data(withJSONObject: json)
             try bytes.write(to: url); try Data("Existing unrelated backup".utf8).write(to: url.appendingPathExtension("p5-backup"))
             let store = FileMappingStore(url: url)
@@ -295,9 +294,8 @@ private typealias RevisionReading = FieldForge.Measurement
         XCTAssertEqual(w.journal.observations[0].geology?.jointSets[0], original.geology?.jointSets[0])
         XCTAssertEqual(w.journal.measurements.count, 2)
     }
-    func testLiteralLegacyUnknownLocationAndHistoricOffsetStayExact() async throws {
-        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: P1MappingFixture.data) as? [String: Any])
-        json["schemaVersion"] = 5; json["measurements"] = []
+    func testCurrentLiteralUnknownLocationAndHistoricOffsetStayExact() async throws {
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: CurrentMappingFixture.data) as? [String: Any])
         var points = json["observations"] as! [[String: Any]]
         points[0].removeValue(forKey: "coordinates")
         points[0]["observedTimeZoneID"] = "Asia/Almaty"; points[0]["observedUTCOffsetSeconds"] = 21600
@@ -311,14 +309,14 @@ private typealias RevisionReading = FieldForge.Measurement
             XCTAssertNil(revision.snapshot.coordinates); XCTAssertNil(revision.snapshot.geology); XCTAssertNil(revision.snapshot.ratings)
             XCTAssertEqual(revision.snapshot.observedUTCOffsetSeconds, 21600)
             XCTAssertEqual(revision.snapshot.observedAt, original.observedAt)
-            XCTAssertEqual(try Data(contentsOf: url.appendingPathExtension("p5-backup")), bytes)
+            XCTAssertEqual(try Data(contentsOf: url.appendingPathExtension("previous")), bytes)
         }
     }
     func testOldSchemaHeaderCannotSilentlyDiscardExistingCorrectionHistory() async throws {
         let (_, initial, original) = try seed(); var w = initial
         var edit = try w.correction(for: original.id); edit.reason = "Retain history"; edit.fields.notes = "Effective corrected point"
         try w.saveCorrection(edit, now: correctionTime)
-        for version in 1...5 {
+        for version in 1...6 {
             try withDirectory { path in
                 var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(w.journal)) as? [String: Any])
                 json["schemaVersion"] = version

@@ -100,8 +100,7 @@ extension MappingJournal {
         photoRevisions.last { $0.photoID == photo.id }?.metadata ?? photo.metadata
     }
     func validatePhotos() throws {
-        guard schemaVersion >= 7 || (photos.isEmpty && photoAttachments.isEmpty && photoRevisions.isEmpty),
-              Set(photos.map(\.id)).count == photos.count,
+        guard Set(photos.map(\.id)).count == photos.count,
               Set(photos.map(\.attachmentID)).count == photos.count,
               Set(photoAttachments.map(\.id)).count == photoAttachments.count,
               Set(photoAttachments.map(\.id)) == Set(photos.map(\.attachmentID)),

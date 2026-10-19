@@ -75,48 +75,58 @@ final class P2MappingTests: XCTestCase {
         XCTAssertEqual(original.coordinates?.zHorizonID, w.context.horizonID)
         XCTAssertEqual(w.draft.z, "615")
     }
-    func testP1MigrationPreservesLiteralBytesIDsAndUnknownMetadata() throws {
+    func testCurrentLiteralPreservesBytesIDsUnknownLocationMetadataAndReopensWithoutRewrite() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = FileMappingStore(url: dir.appendingPathComponent("mapping-v1.json"))
-        try P1MappingFixture.data.write(to: store.url)
-        let original = try JSONDecoder().decode(MappingJournal.self, from: P1MappingFixture.data)
+        let bytes = CurrentMappingFixture.data; try bytes.write(to: store.url)
+        let original = try JSONDecoder().decode(MappingJournal.self, from: bytes)
         try original.validate()
-        let migrated = try store.load()
-        XCTAssertEqual(migrated.schemaVersion, 7)
-        XCTAssertEqual(migrated.projects, original.projects); XCTAssertEqual(migrated.horizons, original.horizons)
-        XCTAssertEqual(migrated.excavations, original.excavations); XCTAssertEqual(migrated.observations, original.observations)
-        XCTAssertEqual(migrated.selection, original.selection); XCTAssertEqual(migrated.plans, original.plans)
-        XCTAssertNil(migrated.observations[0].coordinates?.zOrigin)
-        XCTAssertEqual(try Data(contentsOf: store.migrationBackupURL), P1MappingFixture.data)
-        let migratedBytes = try Data(contentsOf: store.url)
-        let reopened = try FileMappingStore(url: store.url).load()
-        XCTAssertEqual(reopened, migrated); XCTAssertEqual(try Data(contentsOf: store.url), migratedBytes)
+        let historicalBackup = store.url.appendingPathExtension("p1-backup")
+        let historicalBytes = Data("existing unrelated experimental backup".utf8)
+        try historicalBytes.write(to: historicalBackup)
+        let opened = try store.load()
+        XCTAssertEqual(opened, original); XCTAssertEqual(opened.schemaVersion, 7)
+        XCTAssertNil(opened.observations[0].coordinates?.zOrigin)
+        XCTAssertEqual(try Data(contentsOf: store.url), bytes)
+        XCTAssertEqual(try FileMappingStore(url: store.url).load(), original)
+        XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: dir.path)), ["mapping-v1.json", "mapping-v1.json.p1-backup"])
         var w = try MappingWorkflow(store: store)
         XCTAssertEqual(w.draft.z, ""); w.draft.picket = "10"; _ = try w.save()
         XCTAssertEqual(w.observations[0], original.observations[0])
-        XCTAssertEqual(try Data(contentsOf: store.migrationBackupURL), P1MappingFixture.data)
+        XCTAssertEqual(try Data(contentsOf: store.backupURL), bytes)
+        XCTAssertEqual(try Data(contentsOf: historicalBackup), historicalBytes)
     }
-    func testMigrationBackupConflictAndFailureBlockWritesWithoutDiscardingRecords() throws {
-        for conflict in [true, false] {
+
+    func testOldExperimentalSchemasRefuseWritesWithoutChangingAnyFiles() throws {
+        for version in 1...6 {
             let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             defer { try? FileManager.default.removeItem(at: dir) }
             let store = FileMappingStore(url: dir.appendingPathComponent("mapping-v1.json"))
-            try P1MappingFixture.data.write(to: store.url)
-            if conflict { try Data("conflicting backup".utf8).write(to: store.migrationBackupURL) }
-            else { try FileManager.default.createDirectory(at: store.migrationBackupURL, withIntermediateDirectories: false) }
-            XCTAssertThrowsError(try store.load()); XCTAssertThrowsError(try store.save(MappingJournal()))
-            XCTAssertEqual(try Data(contentsOf: store.url), P1MappingFixture.data)
+            // A header alone must produce the schema message, not try old decoding defaults.
+            let bytes = Data("{\"schemaVersion\":\(version)}".utf8)
+            try bytes.write(to: store.url)
+            let protected = Data("existing backup / received image / DXF bytes".utf8)
+            let names = ["mapping-v1.json.previous", "mapping-v1.json.p1-backup", "image", "plan.dxf"]
+            for name in names { try protected.write(to: dir.appendingPathComponent(name)) }
+            XCTAssertThrowsError(try store.load()) { error in
+                XCTAssertTrue(error.localizedDescription.contains("Несовместимая экспериментальная база"))
+            }
+            XCTAssertThrowsError(try store.save(MappingJournal()))
+            XCTAssertEqual(try Data(contentsOf: store.url), bytes)
+            for name in names { XCTAssertEqual(try Data(contentsOf: dir.appendingPathComponent(name)), protected) }
+            XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: dir.path)), Set(names + ["mapping-v1.json"]))
         }
     }
+
 }
 
-/// Literal P1 schema, independently authored; no P2 encoder or elevation-label parsing.
-enum P1MappingFixture {
+/// Independently authored current wire format; unknown elevation is valid, not inferred from its label.
+enum CurrentMappingFixture {
     static let data = Data(#"""
-    {"schemaVersion":1,"projects":[{"id":"00000000-0000-0000-0000-000000000001","name":"Old project"}],
+    {"schemaVersion":7,"measurements":[],"revisions":[],"photos":[],"photoAttachments":[],"photoRevisions":[],"projects":[{"id":"00000000-0000-0000-0000-000000000001","name":"Old project"}],
     "horizons":[{"id":"00000000-0000-0000-0000-000000000002","projectID":"00000000-0000-0000-0000-000000000001","name":"+999 legacy","elevationDatum":"unknown"}],
     "excavations":[{"id":"00000000-0000-0000-0000-000000000003","projectID":"00000000-0000-0000-0000-000000000001","name":"E","horizonIDs":["00000000-0000-0000-0000-000000000002"]}],"plans":[],
     "selection":{"projectID":"00000000-0000-0000-0000-000000000001","horizonID":"00000000-0000-0000-0000-000000000002","excavationID":"00000000-0000-0000-0000-000000000003"},

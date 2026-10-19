@@ -51,8 +51,15 @@ struct ObservationPhotosSection: View {
                 ForEach(mapping.pendingPhotos.filter { $0.photo.context.pointID == pointID }) { operation in
                     VStack(alignment: .leading) {
                         Text("Незавершённая операция: \(operation.photo.metadata.name)").font(.caption)
+                        if mapping.retainedPhotos[operation.id] != nil {
+                            Text("Байты снимка удерживаются в работающем приложении. Повтор доступен без пересъёмки. Если запись на диск не удалась, завершение приложения потеряет снимок из памяти.").font(.caption).foregroundStyle(.orange)
+                        } else if operation.photo.source == .camera {
+                            Text("Повтор после перезапуска возможен только при сохранённом оригинале или staging. Снимок, оставшийся только в памяти до завершения приложения, восстановить нельзя.").font(.caption)
+                        }
                         Button("Повторить сохранение") { Task { await mapping.retryPhoto(operation) } }.disabled(busy)
-                        Button("Выбрать тот же файл для восстановления") { replacement = operation; showFiles = true }.disabled(busy)
+                        if operation.photo.source != .camera && mapping.retainedPhotos[operation.id] == nil {
+                            Button("Выбрать тот же файл для восстановления") { replacement = operation; showFiles = true }.disabled(busy)
+                        }
                     }
                 }
                 if let error = mapping.photoRecoveryError { Text(error).foregroundStyle(.red) }

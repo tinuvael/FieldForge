@@ -221,25 +221,28 @@ final class P41PhotoTests: XCTestCase {
             bad = w.journal; bad.photoAttachments = [op.attachment]; XCTAssertThrowsError(try bad.validate())
         }
     }
-    func testSchema6MigrationBacksUpExactBytesAndKeepsP33History() throws {
+    func testCurrentReopenKeepsP33HistoryAndExactPreviousSnapshot() throws {
         try directory { root in
             let (_, initial, point) = try seed(); var w = initial
             var draft = try w.correction(for: point.id); draft.fields.notes = "corrected"; draft.reason = "field log"
             _ = try w.saveCorrection(draft)
-            var legacy = w.journal; legacy.schemaVersion = 6
+            let graph = w.journal
             let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
-            var object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoder.encode(legacy)) as? [String: Any])
-            for key in ["photos", "photoAttachments", "photoRevisions"] { object.removeValue(forKey: key) }
+            let object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoder.encode(graph)) as? [String: Any])
             let bytes = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .prettyPrinted])
             let url = root.appendingPathComponent("mapping.json"); try bytes.write(to: url)
-            let migrated = try FileMappingStore(url: url).load()
-            XCTAssertEqual(migrated.schemaVersion, 7); XCTAssertEqual(migrated.revisions, w.journal.revisions)
-            XCTAssertEqual(migrated.observations, w.journal.observations); XCTAssertEqual(migrated.measurements, w.journal.measurements)
-            XCTAssertEqual(try Data(contentsOf: url.appendingPathExtension("p6-backup")), bytes)
-            XCTAssertEqual(try FileMappingStore(url: url).load(), migrated)
+            let store = FileMappingStore(url: url)
+            let opened = try store.load()
+            XCTAssertEqual(opened.schemaVersion, 7); XCTAssertEqual(opened.revisions, w.journal.revisions)
+            XCTAssertEqual(opened.observations, w.journal.observations); XCTAssertEqual(opened.measurements, w.journal.measurements)
+            XCTAssertEqual(try Data(contentsOf: url), bytes)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: url.appendingPathExtension("p6-backup").path))
+            try store.save(opened)
+            XCTAssertEqual(try Data(contentsOf: store.backupURL), bytes)
+            XCTAssertEqual(try FileMappingStore(url: url).load(), opened)
         }
     }
-    func testMigrationBackupCollisionFailsWithoutChangingSourceAndWritesAreBlocked() throws {
+    func testOldSchemaRefusalPreservesSourceAndExistingBackupAndBlocksWrites() throws {
         try directory { root in
             let (_, w, _) = try seed(); var legacy = w.journal; legacy.schemaVersion = 6
             let bytes = try JSONEncoder().encode(legacy); let url = root.appendingPathComponent("mapping.json")
@@ -254,7 +257,7 @@ final class P41PhotoTests: XCTestCase {
             let op = try begin(files, w, point); try finish(op, files, &w)
             var oldHeader = w.journal; oldHeader.schemaVersion = 6; XCTAssertThrowsError(try oldHeader.validate())
             let encoder = JSONEncoder()
-            for key in ["photos", "photoAttachments", "photoRevisions"] {
+            for key in ["projects", "horizons", "excavations", "plans", "observations", "measurements", "revisions", "photos", "photoAttachments", "photoRevisions", "selection"] {
                 var object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoder.encode(w.journal)) as? [String: Any]); object.removeValue(forKey: key)
                 let bytes = try JSONSerialization.data(withJSONObject: object); let url = root.appendingPathComponent("mapping.json"); try bytes.write(to: url)
                 let store = FileMappingStore(url: url); XCTAssertThrowsError(try store.load()); XCTAssertThrowsError(try store.save(w.journal))

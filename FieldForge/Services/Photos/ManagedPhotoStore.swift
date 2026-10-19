@@ -32,7 +32,7 @@ final class ManagedPhotoStore {
             try FileManager.default.createDirectory(at: root.appendingPathComponent(directory), withIntermediateDirectories: true)
         }
     }
-    func begin(data: Data, filename: String?, context: PhotoContext, source: PhotoSource,
+    func makeOperation(data: Data, filename: String?, context: PhotoContext, source: PhotoSource,
                representation: String, captureWallTime: String? = nil, captureUTCOffset: String? = nil, captureSubseconds: String? = nil, now: Date = Date()) throws -> PhotoImportOperation {
         guard !data.isEmpty, data.count <= Self.maximumBytes,
               let image = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
@@ -70,12 +70,33 @@ final class ManagedPhotoStore {
             captureTimeProvenance: capture != nil ? "\(timeSource) DateTimeOriginal + OffsetTimeOriginal; unverified" :
                 wallTime != nil ? "\(timeSource) wall time; UTC offset unknown; instant unknown" : "unknown",
             metadata: PhotoMetadata(name: filename ?? "Фотография")), attachment: attachment)
-        try operation.validate(); try prepareDirectories()
-        guard !FileManager.default.fileExists(atPath: operationURL(operation).path) else { throw StorageError.invalidRecord }
-        try JSONEncoder().encode(operation).write(to: operationURL(operation), options: .atomic)
-        try checkpoint?(.intent)
-        try supply(data, for: operation)
+        try operation.validate()
         return operation
+    }
+    func begin(data: Data, filename: String?, context: PhotoContext, source: PhotoSource,
+               representation: String, captureWallTime: String? = nil, captureUTCOffset: String? = nil,
+               captureSubseconds: String? = nil, now: Date = Date()) throws -> PhotoImportOperation {
+        let operation = try makeOperation(data: data, filename: filename, context: context, source: source,
+            representation: representation, captureWallTime: captureWallTime, captureUTCOffset: captureUTCOffset,
+            captureSubseconds: captureSubseconds, now: now)
+        try stage(data, for: operation)
+        return operation
+    }
+    /// Identity is allocated before I/O so a live caller can retain bytes even if intent creation fails.
+    func stage(_ data: Data, for operation: PhotoImportOperation) throws {
+        try operation.validate(); try verify(data, attachment: operation.attachment); try prepareDirectories()
+        if hasIntent(operation) {
+            guard try loadOperation(operationURL(operation)) == operation else { throw StorageError.invalidRecord }
+        } else {
+            try JSONEncoder().encode(operation).write(to: operationURL(operation), options: .atomic)
+            try checkpoint?(.intent)
+        }
+        if FileManager.default.fileExists(atPath: originalURL(operation.attachment).path) {
+            _ = try read(operation.attachment)
+        } else { try supply(data, for: operation) }
+    }
+    func hasIntent(_ operation: PhotoImportOperation) -> Bool {
+        FileManager.default.fileExists(atPath: operationURL(operation).path)
     }
     /// Recover a failed staging write with the exact same bytes and identities.
     func supply(_ data: Data, for operation: PhotoImportOperation) throws {
