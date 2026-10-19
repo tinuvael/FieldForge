@@ -5,6 +5,11 @@ import SwiftUI
     @Published var error: String?
     @Published var success = false
     private(set) var planStore: ManagedPlanStore?
+    private(set) var photoStore: ManagedPhotoStore?
+    @Published var photoBusy = false
+    @Published var photoError: String?
+    @Published var pendingPhotos: [PhotoImportOperation] = []
+    @Published var photoRecoveryError: String?
     init() {
         do {
             let directory = try FileMeasurementStore.applicationStore().url.deletingLastPathComponent()
@@ -19,6 +24,7 @@ import SwiftUI
             let namespace = ""
             #endif
             planStore = ManagedPlanStore(root: directory.appendingPathComponent(testing ? "ui-testing-plans\(namespace)" : "plans"))
+            photoStore = ManagedPhotoStore(root: directory.appendingPathComponent(testing ? "ui-testing-photos\(namespace)" : "photos"))
             workflow = try MappingWorkflow(store: FileMappingStore(url: directory.appendingPathComponent(testing ? "ui-testing-mapping\(namespace).json" : "mapping-v1.json")))
         } catch { self.error = "Не удалось открыть картирование. Запись заблокирована: \(error.localizedDescription)" }
     }

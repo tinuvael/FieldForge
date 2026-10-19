@@ -23,9 +23,9 @@ final class FileMappingStore: MappingStore {
             var data = try bytes()
             var value = try data.map { try JSONDecoder().decode(MappingJournal.self, from: $0) } ?? MappingJournal()
             try value.validate()
-            if value.schemaVersion < 6, let original = data {
+            if value.schemaVersion < 7, let original = data {
                 let migrationBackupURL = url.appendingPathExtension("p\(value.schemaVersion)-backup")
-                value.schemaVersion = 6
+                value.schemaVersion = 7
                 let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
                 let migrated = try encoder.encode(value)
                 guard try JSONDecoder().decode(MappingJournal.self, from: migrated) == value else { throw StorageError.invalidRecord }
@@ -45,13 +45,16 @@ final class FileMappingStore: MappingStore {
     func save(_ journal: MappingJournal) throws {
         guard !blocked else { throw StorageError.writesBlocked }
         if !loaded { _ = try load() }
-        guard journal.schemaVersion == 6 else { throw StorageError.unsupportedVersion }
+        guard journal.schemaVersion == 7 else { throw StorageError.unsupportedVersion }
         try journal.validate()
         guard try bytes() == loadedBytes else { throw StorageError.changedFile }
         // Original observations are append-only; names/metadata can be managed separately.
         if let loadedBytes {
             let previous = try JSONDecoder().decode(MappingJournal.self, from: loadedBytes)
-            guard previous.revisions.allSatisfy({ journal.revisions.contains($0) }),
+            guard previous.photos.allSatisfy({ journal.photos.contains($0) }),
+                  previous.photoAttachments.allSatisfy({ journal.photoAttachments.contains($0) }),
+                  previous.photoRevisions.allSatisfy({ journal.photoRevisions.contains($0) }),
+                  previous.revisions.allSatisfy({ journal.revisions.contains($0) }),
                   previous.observations.allSatisfy({ old in journal.observations.contains(old) }),
                   previous.measurements.allSatisfy({ old in journal.measurements.contains(old) }),
                   previous.plans.allSatisfy({ old in journal.plans.contains(old) }) else {

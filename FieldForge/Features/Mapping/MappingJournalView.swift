@@ -203,6 +203,7 @@ struct MappingObservationDetail: View {
                     if let level = c.zHorizonElevation { Text("Исходная отметка: \(ElevationInput.label(level)); система: \(c.zDatum ?? "unknown")") }
                 } else { Text("Координаты не заданы") }
             }
+            if !historical { ObservationPhotosSection(pointID: record.id) }
             Section("Исходные замеры: \(record.measurementIDs.count)") {
                 ForEach(mapping.workflow?.journal.measurements(for: record) ?? []) { reading in
                     NavigationLink { MeasurementDetailView(record: reading) } label: { MeasurementSummary(reading: reading) }

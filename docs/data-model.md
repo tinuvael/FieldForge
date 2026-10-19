@@ -1,5 +1,7 @@
 # Future geomechanical domain schema
 
+**P4.1 implementation update:** [Saved-point photographs](p4-1-photos.md) supersedes the future-only photo statements below for saved observations. Schema 7 adds photo/attachment and metadata-revision arrays to the existing journal, freezes exact P3.3 point revisions, and implements offline recoverable imports, gallery and zoom. Draft-point/point-free photos, XLSX/ZIP packages and automatic backup/restore remain future work. JSON alone is not a complete backup; include original photographs, DXF, pending operations and a verified inventory/manifest.
+
 **P2 update:** [P2 mapping and DXF contract](p2-dxf.md) supersedes historical P1 statements about optional horizon elevations, mandatory per-point coordinate strings, absent plans and schema 1. P2 adds nominal Z provenance and immutable managed DXF revisions on the same graph; orientation/measurement conventions are unchanged.
 
 **P1 implementation update:** [Mapping workflow and persistence](p1-mapping.md) describes the implemented project/horizon/multi-horizon-excavation/point graph, context/draft state machine, atomic JSON decision, immutable observations and protected legacy inbox. The Phase 2 descriptions and larger future schema below are historical/design context; they do not override P1's implemented scope.

@@ -1,5 +1,7 @@
 # FieldForge product vision
 
+**P4.1 implementation update:** [Saved-point photographs](p4-1-photos.md) supersedes the future-only photo statements below for saved observations. Schema 7 adds photo/attachment and metadata-revision arrays to the existing journal, freezes exact P3.3 point revisions, and implements offline recoverable imports, gallery and zoom. Draft-point/point-free photos, XLSX/ZIP packages and automatic backup/restore remain future work. JSON alone is not a complete backup; include original photographs, DXF, pending operations and a verified inventory/manifest.
+
 This is the authoritative source for intended product requirements and scope. Technical documents describe how to realize this vision; the [README](../README.md) and [verification report](phase2-verification.md) describe implemented and verified behavior. Future requirements below are not claims of available features or engineering validation.
 
 ## Purpose and boundaries

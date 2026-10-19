@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 
 final class MappingUITests: XCTestCase {
     @MainActor func testSuccessiveObservationsContextGuardJournalAndRelaunch() throws {
@@ -416,6 +417,73 @@ final class MappingUITests: XCTestCase {
             scrollForm(app, up: upward)
         }
         XCTFail("Element not visible: \(element)\n\(app.debugDescription)")
+    }
+    @MainActor func testP41ThreePhotosMetadataZoomCameraUnavailableAndRelaunch() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["FIELD_FORGE_TEST_RUN_ID"] = UUID().uuidString
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 30, height: 20))
+        let images = [UIColor.red, .green, .blue].map { color in
+            renderer.pngData { context in color.setFill(); context.fill(CGRect(x: 0, y: 0, width: 30, height: 20)) }.base64EncodedString()
+        }
+        app.launchEnvironment["P41_PHOTOS"] = String(data: try JSONEncoder().encode(images), encoding: .utf8)
+        app.launchArguments = ["--ui-testing"]; app.launch()
+        let project = "P41-\(UUID().uuidString.prefix(8))"
+        create("projectPicker", name: project, app: app); select("projectPicker", value: project, app: app)
+        create("horizonPicker", name: "+393 м", app: app); select("horizonPicker", value: "+393 м", app: app)
+        create("excavationPicker", name: "E", app: app); select("excavationPicker", value: "E", app: app)
+        fill(app.textFields["mappingPicket"], "5", app: app)
+        fill(app.textFields["mappingZ"], "", app: app); save(app); saved(app)
+        app.buttons["mappingJournal"].tap(); app.staticTexts["5"].tap()
+        photoReveal(app.buttons["photoCamera"], app: app); app.buttons["photoCamera"].tap()
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "в Simulator камеры нет")).firstMatch.waitForExistence(timeout: 5))
+        app.buttons["Понятно"].tap()
+        app.buttons["photoLibrary"].tap()
+        // Exercise actual system Photos picker cancellation; no broad library permission requested.
+        let cancel = app.buttons.matching(NSPredicate(format: "label IN %@", ["Cancel", "Отмена"])).firstMatch
+        XCTAssertTrue(cancel.waitForExistence(timeout: 30)); cancel.tap()
+        XCTAssertTrue(app.buttons["photoImportFixtures"].waitForExistence(timeout: 5)); photoReveal(app.buttons["photoImportFixtures"], app: app); app.buttons["photoImportFixtures"].tap()
+        let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "photo-"))
+        let imported = XCTNSPredicateExpectation(predicate: NSPredicate(format: "count == 3"), object: rows)
+        XCTAssertEqual(XCTWaiter.wait(for: [imported], timeout: 20), .completed)
+        var ids: [String] = []
+        for index in 0..<3 {
+            let row = rows.element(boundBy: index); ids.append(row.identifier); photoReveal(row, app: app); row.tap()
+            XCTAssertTrue(app.textFields["photoName"].waitForExistence(timeout: 5))
+            fill(app.textFields["photoName"], "Фото \(index + 1)", app: app)
+            fill(app.textFields["photoNumber"], String(index + 1), app: app)
+            fill(app.textFields["photoCorrectionReason"], "Уточнение названия", app: app)
+            photoReveal(app.buttons["photoSaveMetadata"], app: app); app.buttons["photoSaveMetadata"].tap()
+            XCTAssertTrue(app.staticTexts["photoCaptureTime"].label.contains("неизвестно"))
+            photoReveal(app.buttons["photoOpenFullScreen"], app: app, upward: false); app.buttons["photoOpenFullScreen"].tap()
+            XCTAssertTrue(app.scrollViews["photoZoomView"].waitForExistence(timeout: 10))
+            app.scrollViews["photoZoomView"].pinch(withScale: 2, velocity: 1)
+            let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            screenshot.name = "P41 photo \(index + 1) zoom"; screenshot.lifetime = .keepAlways; add(screenshot)
+            app.buttons["photoCloseFullScreen"].tap(); app.buttons["photoCloseDetail"].tap()
+        }
+        XCTAssertEqual(Set(ids).count, 3)
+        app.terminate(); app.launch(); app.buttons["mappingJournal"].tap(); app.staticTexts["5"].tap()
+        photoReveal(app.buttons["photoCamera"], app: app)
+        XCTAssertEqual(rows.count, 3)
+        for index in 0..<3 { XCTAssertTrue(rows.element(boundBy: index).label.contains("Фото \(index + 1)")) }
+        // Adding/correcting photos does not create a geological revision.
+        photoReveal(app.buttons["editMappingObservation"], app: app, upward: false)
+        XCTAssertTrue(app.staticTexts["Версия 1 · исходное наблюдение"].exists)
+    }
+    @MainActor private func photoReveal(_ element: XCUIElement, app: XCUIApplication, upward: Bool = true) {
+        for _ in 0..<24 {
+            let form = app.collectionViews.firstMatch
+            if element.exists && element.isHittable {
+                let center = CGPoint(x: element.frame.midX, y: element.frame.midY)
+                let tab = app.tabBars.firstMatch
+                let navigationBottom = app.navigationBars.allElementsBoundByIndex.filter(\.isHittable).map { $0.frame.maxY }.max() ?? 0
+                if form.frame.contains(center), center.y > navigationBottom,
+                   !tab.exists || !tab.isHittable || center.y < tab.frame.minY { return }
+            }
+            scrollForm(app, up: upward)
+        }
+        XCTAssertTrue(element.isHittable)
     }
     @MainActor private func back(_ app: XCUIApplication) { app.navigationBars.buttons.element(boundBy: 0).tap() }
     @MainActor private func revealMeasurements(_ rows: XCUIElementQuery, app: XCUIApplication) {

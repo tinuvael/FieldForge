@@ -108,19 +108,22 @@ struct MappingObservation: Codable, Equatable, Identifiable {
 }
 
 struct MappingJournal: Codable, Equatable {
-    var schemaVersion = 6
+    var schemaVersion = 7
     var projects: [MappingProject] = []
     var horizons: [MappingHorizon] = []
     var excavations: [MappingExcavation] = []
     var plans: [MappingPlanReference] = []
     var observations: [MappingObservation] = []
     var revisions: [MappingObservationRevision] = []
+    var photos: [PhotoObservation] = []
+    var photoAttachments: [PhotoAttachment] = []
+    var photoRevisions: [PhotoMetadataRevision] = []
     var selection = MappingContext()
     var measurements: [Measurement] = []
 
     init() {}
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, projects, horizons, excavations, plans, observations, selection, measurements, revisions
+        case schemaVersion, projects, horizons, excavations, plans, observations, selection, measurements, revisions, photos, photoAttachments, photoRevisions
     }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -135,6 +138,9 @@ struct MappingJournal: Codable, Equatable {
         revisions = schemaVersion < 6
             ? (try c.decodeIfPresent([MappingObservationRevision].self, forKey: .revisions) ?? [])
             : try c.decode([MappingObservationRevision].self, forKey: .revisions)
+        photos = schemaVersion < 7 ? (try c.decodeIfPresent([PhotoObservation].self, forKey: .photos) ?? []) : try c.decode([PhotoObservation].self, forKey: .photos)
+        photoAttachments = schemaVersion < 7 ? (try c.decodeIfPresent([PhotoAttachment].self, forKey: .photoAttachments) ?? []) : try c.decode([PhotoAttachment].self, forKey: .photoAttachments)
+        photoRevisions = schemaVersion < 7 ? (try c.decodeIfPresent([PhotoMetadataRevision].self, forKey: .photoRevisions) ?? []) : try c.decode([PhotoMetadataRevision].self, forKey: .photoRevisions)
         selection = try c.decode(MappingContext.self, forKey: .selection)
         // Only old schemas may omit the new evidence table. A damaged v3 file fails closed.
         measurements = schemaVersion < 3 ? (try c.decodeIfPresent([Measurement].self, forKey: .measurements) ?? []) : try c.decode([Measurement].self, forKey: .measurements)
@@ -148,7 +154,7 @@ struct MappingJournal: Codable, Equatable {
     func validate() throws { try validateGraph(includingRevisions: true) }
 
     func validateGraph(includingRevisions: Bool) throws {
-        guard [1, 2, 3, 4, 5, 6].contains(schemaVersion) else { throw StorageError.unsupportedVersion }
+        guard [1, 2, 3, 4, 5, 6, 7].contains(schemaVersion) else { throw StorageError.unsupportedVersion }
         func unique(_ ids: [UUID]) -> Bool { Set(ids).count == ids.count }
         guard unique(projects.map(\.id)), unique(horizons.map(\.id)),
               unique(excavations.map(\.id)), unique(plans.map(\.id)), unique(observations.map(\.id)),
@@ -206,7 +212,7 @@ struct MappingJournal: Codable, Equatable {
                 } else if c.zHorizonID != nil || c.zHorizonElevation != nil || c.zDatum != nil { throw StorageError.invalidRecord }
             }
         }
-        if includingRevisions { try validateRevisions() }
+        if includingRevisions { try validateRevisions(); try validatePhotos() }
     }
 
     func validContext(_ c: MappingContext) -> Bool {
