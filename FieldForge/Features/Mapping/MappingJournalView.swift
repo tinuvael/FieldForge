@@ -68,6 +68,13 @@ struct MappingJournalView: View {
             }
         }.accessibilityIdentifier("journalObservations")
             .navigationTitle("Журнал проекта")
+            .toolbar {
+                if let journal = mapping.workflow?.journal {
+                    NavigationLink { MappingExportView(journal: journal, projectID: projectID) } label: {
+                        Label("Выгрузка", systemImage: "square.and.arrow.up")
+                    }.accessibilityIdentifier("mappingExportAction")
+                }
+            }
             .background(JournalSearchAccessibility(identifier: "journalPicketSearch"))
             .searchable(text: $query.picket, placement: .navigationBarDrawer(displayMode: .always), prompt: "Пикет или метры")
             .onChange(of: query.horizonID) { _, _ in query.excavationID = nil }
