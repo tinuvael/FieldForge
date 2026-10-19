@@ -586,8 +586,15 @@ final class MappingUITests: XCTestCase {
     }
     @MainActor private func scrollForm(_ app: XCUIApplication, up: Bool) {
         let form = activeForm(app)
-        let start = form.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: up ? 0.8 : 0.3))
-        let end = form.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.55))
+        let frame = form.frame
+        let navigationBottom = app.navigationBars.allElementsBoundByIndex.filter(\.isHittable).map { $0.frame.maxY }.max() ?? 0
+        let tab = app.tabBars.firstMatch
+        let top = max(frame.minY, navigationBottom) + 12
+        let bottom = min(frame.maxY, tab.exists && tab.isHittable ? tab.frame.minY : frame.maxY) - 24
+        let height = max(40, bottom - top)
+        let origin = app.coordinate(withNormalizedOffset: .zero)
+        let start = origin.withOffset(CGVector(dx: frame.minX + frame.width * 0.05, dy: top + height * (up ? 0.75 : 0.25)))
+        let end = origin.withOffset(CGVector(dx: frame.minX + frame.width * 0.05, dy: top + height * (up ? 0.25 : 0.75)))
         start.press(forDuration: 0.1, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
     }
     @MainActor private func activeForm(_ app: XCUIApplication) -> XCUIElement {

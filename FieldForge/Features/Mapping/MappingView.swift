@@ -131,8 +131,13 @@ struct MappingView: View {
                 Section {
                     Button {
                         focused = false
-                        let id = w.draft.id
-                        Task { await mapping.saveDraft(id: id) }
+                        if w.draft.photos.isEmpty {
+                            // Preserve the existing synchronous field-only save/focus transition.
+                            mapping.perform { _ = try $0.save(); mapping.success = true }
+                        } else {
+                            let id = w.draft.id
+                            Task { await mapping.saveDraft(id: id) }
+                        }
                     } label: {
                         Text("Сохранить наблюдение").font(.headline).frame(maxWidth: .infinity, minHeight: 44)
                     }.buttonStyle(.borderedProminent).accessibilityIdentifier("saveMappingObservation")

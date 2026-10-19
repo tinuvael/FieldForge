@@ -23,6 +23,8 @@ The bottom **Сохранить наблюдение** action is disabled while 
 
 Save validates point fields, locks the draft, and for each accepted operation writes the same UUID intent before staging bytes, promotes and independently verifies the original by size/SHA-256, and only then releases the volatile fallback. It publishes point, original measurements, photos and attachment relationships in **one validated atomic mapping-journal commit**. The model checks the frozen draft across disk awaits. Context and plan-point changes are refused while saving.
 
+Forms without photos retain the existing synchronous field-only Save/focus transition. Both entry paths call `MappingWorkflow.save` for the single validated journal commit; active photo sessions still block either path.
+
 Validation, intent, staging, promotion or journal failure preserves all fields and operation UUIDs. Ordinary bottom Save retries with retained camera bytes or the verified original; no second shutter or nonexistent file selection is needed. A queued Save for an already committed draft UUID cannot save a second point. After commit, thumbnail/intent-finalization failure is a warning on an already saved observation, retryable through the saved card without duplication.
 
 Success retains Project/Horizon/Excavation, starts a fresh draft UUID and suggests nominal horizon Z again. Picket/interval, XY, source plan/provenance, measurements, geology/interpretations, ratings, tectonics, notes, date/time-zone override and photos clear. Original observation/measurement evidence, P3.3 and photo histories remain append-only. Reconstructed correction forms use the saved observation UUID to preserve existing baseline-integrity checks.
