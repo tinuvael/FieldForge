@@ -30,8 +30,10 @@ Simulator UI coverage adds three generated images to the draft through the real 
 - Completed six-scenario UI repeat (`/tmp/FieldForge-P42-UI-Final.xcresult`, `/tmp/fieldforge-p42-ui-final.log`): **4 passed / 2 failed**. Manual measurement/export passed (117.483 s), P4.1 three photos/metadata/zoom/relaunch passed (292.928 s), new P4.2 draft/cancel/discard/two points/project isolation/relaunch passed (538.427 s), and two-plan/marker/photos including post-relaunch UUID checks passed (342.008 s). The geology scenario exceeded XCTest's default 10-minute allowance; maximum allowance alone did not change that default. History again terminated before the saved alert (255.801 s). This is not a clean full UI regression.
 - Geology/history follow-up (`/tmp/FieldForge-P42-History-Final.xcresult`, `/tmp/fieldforge-p42-history-final.log`): **205 unit tests passed; geology UI passed** (1075.118 s), including five sets, original evidence links, partial tectonics, validation, reset and offline reopen. History still aborted at its first Save (188.769 s). Its exported crash report confirmed `SIGABRT` in UIKit `_UIFocusContainerGuideFallbackItemsContainer`, so restoring synchronous field-only Save alone was insufficient.
 - The Form is now keyed to the stable draft UUID, replacing stale focus/presentation state when Save/discard starts the next draft. A targeted history run (`/tmp/FieldForge-P42-Focus-Final.xcresult`, `/tmp/fieldforge-p42-focus-final.log`) passed the formerly crashing first Save and reached correction editing, then failed at an offscreen J1 row (378.977 s); that row is now explicitly revealed before tapping.
-- Delivery run (`/tmp/FieldForge-P42-Delivery.xcresult`, `/tmp/fieldforge-p42-delivery.log`): **all 205 unit tests passed** (3.160 s); **history UI passed** (548.488 s), including versions 1–3, original readings, revision comparison, plan movement and relaunch. P4.2 and the marker/photo scenario are repeating in the same run to verify the final Form lifetime. Final outcomes will replace this pending statement before delivery.
+- Completed delivery run (`/tmp/FieldForge-P42-Delivery.xcresult`, `/tmp/fieldforge-p42-delivery.log`): **all 205 unit tests and all three selected UI scenarios passed**, zero failures. History passed (548.488 s), including versions 1–3, original readings, revision comparison, plan movement and relaunch; P4.2 passed (408.308 s); the two-plan/marker/photo scenario passed (270.776 s). These runs verify the final Form lifetime. Unit execution took 3.160 s.
 - An earlier Simulator build stopped on test-source compile errors; the first full attempt was interrupted after the SPM regression was found and is not a passing execution. Its partial bundle is `/tmp/FieldForge-P42-Full.xcresult`. The completed full run uses `/tmp/FieldForge-P42-Final.xcresult` and `/tmp/fieldforge-p42-final.log`.
+
+All 13 UI scenarios have successful executions across the completed full run and targeted repeats. There was **no single clean full UI regression run**; the final delivery run covered the three scenarios affected by the last Form-lifetime change. The complete SPM and Simulator unit suites each passed all 205 tests.
 
 ## Reproduction
 
@@ -46,6 +48,8 @@ python3 scripts/generate_project.py
 ```
 
 Use a new result-bundle path when repeating. Build products, isolated Simulator journals, generated test images, logs and xcresults remain outside Git. `caffeinate` applies only for the command duration; no system power setting changes.
+
+Long geology/history scenarios used `-test-timeouts-enabled NO` in their follow-up runs; the geology execution exceeded the default 600-second allowance. Delivery selected history, P4.2 and the two-plan/marker scenario with `-only-testing` and the same timeout setting.
 
 ## Physical camera and provider limits
 
