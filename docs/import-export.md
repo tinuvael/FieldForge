@@ -54,45 +54,37 @@ Add `InterpretationEvidence` (representative/structure ID ↔ measurement ID, ro
 
 Future exports/backups also retain plan assets/control-point and georeferencing revisions, location provenance and exact input references for wedge analyses. Add related tables/sheets or a versioned manifest as these records are implemented, without replacing the established mapping worksheets. Label geometric/kinematic candidates separately from mechanical assessments and retain unavailable/missing states; geometry-only output must not acquire fabricated stability, safety-factor or risk columns. Mechanical export fields depend on the owner's verified method. Shared exporters work on domain snapshots on both devices, independent of phone/tablet layouts.
 
-## Offline geological photo package (future)
+## Offline photo export package (P5.3)
 
-Photo export serves Mapping and Plan using `SpatialObservationPoint`, `PhotoObservation` and `Attachment` UUIDs from the shared database. It does not create a fourth module or require georeferencing/GPS. Produce a ZIP for workstation use from a consistent record/location-revision snapshot:
+Open **Картирование → Журнал → Выгрузка**, select **Фотографии + Excel (.zip)**, keep the existing project / optional horizon / optional excavation / inclusive field-date range / explicit timezone selection, then preview and share through iOS (Save to Files, AirDrop and other destinations).
 
 ```text
-FieldForge-Photos-<export-id>.zip
-  manifest.json
-  PhotoRegister.xlsx
-  PhotoRegister.csv                optional
-  images/<attachment-uuid>/original.<actual-format-extension>
-  thumbnails/<attachment-uuid>/preview.<format>   optional
-  derivatives/<attachment-uuid>/sanitized.<format>   optional, explicitly labeled
+FieldForge-Photos.zip
+  FieldForge-Photos/
+    FieldForge-Mapping.xlsx
+    manifest.json
+    originals/photo-<photo-uuid>.<actual-format-extension>
 ```
 
-Original filenames and editable photo names/numbers are metadata, not identity or archive paths. Use stable relative UUID-based image paths, deduplicate by attachment ID when several records reference one image, and prohibit absolute/traversal paths. No workstation path or device sandbox absolute path should be required to resolve a package. Derivatives have their own IDs/hashes and source lineage; no silent crop, recompression or metadata-stripping of a file labeled original.
+The same frozen P5.1/P5.2 typed snapshot selects the latest effective observation by its field date. All linked photos remain included in the register, including historical point associations, unknown capture time/location and photos imported outside the period. No new filtering engine, database schema, migration or metadata write is involved. Current main uses schema 8 from P4.2; this exporter preserves it.
 
-The XLSX register includes one row per selected photo, including photos with unknown coordinates, absent interval/point or missing image bytes:
+The workbook contains the existing Russian summary and 14 relational sheets plus a joined **photo_register**. It combines project/horizon/excavation names, current point/picket and field date/zone with every photo/attachment field: stable UUIDs, historical context revision/version, name/number/category/description/source, separate capture/import timestamps, original filename/format/representation, expected and actual size/SHA-256, relative path, integrity/error and archive status. `photos` and `photo_attachments` also receive package-only integrity/path columns; standalone CSV/XLSX contracts remain unchanged. Paths resolve relative to the workbook/manifest directory. A listed path with `archive_included=false` is an expected path, not a file in the archive. UUIDs, not filenames, identify images; duplicate original filenames remain independent.
 
-| Columns | Meaning |
-| --- | --- |
-| Photo ID, name, number | Stable UUID plus editable presentation metadata |
-| Project, excavation | IDs and human-readable names from the export snapshot |
-| Mapping interval, observation point | Optional IDs/names, interval chainage and point/location revision; missing links stay blank |
-| Chainage, X, Y, Z | Numerical meters/declared coordinate units where available; null is blank, never zero |
-| CRS, coordinate source/reliability | Explicit CRS/units/axes and surveyed/plan-derived/manual/unknown provenance with quality/uncertainty |
-| Capture timestamp/source | UTC instant when established, preserved source/timezone or missing/uncertain state; import time is a separate field |
-| Description, category | Original register text/category, spreadsheet-formula protection applied to text |
-| Relative image path | Managed package path and original filename metadata; unavailable image state is explicit |
-| Attachment integrity | Original attachment ID, actual MIME/format, dimensions, expected byte size, hash algorithm/digest and verification/availability status |
+Unknown capture instants stay blank with **UNKNOWN** in `capture_time_status`, never replaced by import time. `unknownBeforeFirstSave` remains unknown capture location, even when the linked point has coordinates. `photo_point_contexts` retains historical associations; `points` contains the latest selected mapping observations. Existing formula-safe inline text cells, Unicode, nulls, exact date companion seconds and numeric precision rules are reused.
 
-The machine-readable manifest is versioned and preserves exact IDs/relationships, input location revisions, null reasons, north/provenance for optional viewing direction, original numerical values/timestamps, metadata profile, archive-entry hashes/sizes and any omissions. Keep exact numeric strings alongside Excel numeric cells where Excel's precision would lose information. Optional CSV uses the same logical register fields with documented encoding/escaping. XLSX/CSV alone are not complete backups and this phase adds no XLSX generator.
+The managed original is opened by attachment UUID. Only regular files at the expected managed path are accepted; symbolic links and unfinished operation intents are refused. Original bytes are read in 256 KiB chunks, counted and hashed with SHA-256 against stored metadata. Export rechecks into private staging and archives those exact chunks without image decoding/recompression, EXIF stripping or thumbnail substitution. At most one original is staged at a time. The existing dependency-free ZIP32 store writer now accepts binary chunks; it rejects unsafe/duplicate entry paths and fails clearly before exceeding 4 GB. ZIP64 and compression are not implemented. Allow temporary disk space for the growing archive plus one original and the workbook.
 
-### Privacy, missing files and recovery
+Preview shows observations, linked photos, verified originals, unavailable/corrupt/unfinished originals and available-original bytes. Every unavailable original retains its UUID and reason in Excel/manifest. A normal export refuses missing/size-mismatched/SHA-mismatched/unreadable/unsafe/unfinished originals. **Only explicit confirmation** permits a partial package: its workbook states **INCOMPLETE**, its manifest has `archive_status: incomplete`, and each omitted file has `included: false` plus its error. If files change after preview, confirmation is requested at generation too. Retry preview after repairing originals/import operations. No automatic source repair occurs.
 
-Original imported images may contain personal EXIF GPS or photographer information. Preserve the best available original privately for evidence, but do not read EXIF GPS into mine coordinates or expose private metadata in ordinary registers/thumbnails. The export profile must make original-byte inclusion and its embedded metadata explicit. A privacy-reviewed original-image package includes originals under that profile; when removing personal EXIF is chosen, create and identify sanitized derivatives, record omitted originals/fields and their lineage, and never call that privacy-reduced package a complete original backup. Preserve relevant capture/orientation metadata without inventing a viewing azimuth or silently converting its north reference.
+`manifest.json` uses **FieldForge-Photo-Export/1** and records export UUID, creation/snapshot timestamps, selection/timezone/bounds, counts, overall completeness and each photo/attachment/point/context relationship with expected/actual integrity metadata and included status. No device absolute paths are required. Metadata remains frozen; originals are revalidated at export time.
 
-Verify each available original's size/hash before packaging. Missing/unreadable/hash-mismatched files retain their register/manifest rows, expected IDs/paths/hashes and clear error status. Offer repair/retry or an explicitly incomplete package with an omission report; never declare a package complete or drop a record because coordinates/image bytes are unavailable. Write into staging, support cancellation/progress with bounded memory, close and verify the archive before promotion, and preserve recoverable state on failure. Source images and records are not changed by export.
+Hashing and ZIP writing run off the main thread with an activity indicator, single-operation guard and cancellation between chunks. Each operation owns a fresh UUID temporary directory; failure/cancellation removes only that directory. The successful ZIP remains owned through native sharing and is removed after sharing dismisses. Managed originals, intents, databases, DXF and backups are never deleted or changed.
 
-A complete offline backup contains all referenced original images, database/record snapshot, point/location revisions, metadata and attachment manifest/hash information. Thumbnails may be included or regenerated; missing originals make a backup explicitly incomplete. Restore into staging, validate file hashes, path safety and relationships, report unavailable assets, and promote only a validated/reviewed state. Attachment import, promotion, thumbnail generation, archive cleanup and restore must be recoverable after interruption; see [architecture](architecture.md). These are future requirements, not an implemented photo workflow.
+**Privacy:** this explicitly selected original-byte profile includes all embedded private EXIF/GPS, timestamps, orientation and photographer metadata unchanged. The export screen discloses this before sharing. No sanitized derivative profile is provided; the app does not interpret EXIF GPS as underground capture coordinates. Received-byte representation limitations (including Photos provider conversion or camera JPEG fallback at import) remain recorded; export cannot reconstruct an unavailable camera/library master.
+
+This is a **workstation photo export**, not a complete database backup or restore package. DXF originals, pending imports/staging, the independent measurement journal, backups and complete audit history are excluded. Complete verified backup/restore, sanitized derivatives, point-free photos and ZIP64 remain deferred (Issue #23 / later work).
+
+P5.3 verification (2026-10-20): `swift test --filter PhotoPackageExportTests` executed **6 new tests, 0 failures**; one Debug iOS Simulator build succeeded; `git diff --check` passed. Tests use temporary current-schema synthetic records and two distinct generated PNG originals, independently reading ZIP central directories/CRC and XLSX bytes. Existing tests, regression suites, UI tests, Simulator test runs and physical-device/share-destination checks were deliberately not run under the owner's minimal-verification override. Excel application interoperability and physical sharing remain unverified in this change.
 
 ## Prepared excavation plans (primary future spatial workflow)
 
