@@ -1,6 +1,6 @@
 # P5.2 verification
 
-The initial runs below are retained as historical evidence. The controlled `main`/PR comparison, individual failure classifications and UI-test corrections are documented in [PR #27 finalization](p5-2-finalization.md). The PR description records the final complete Simulator run against the published head.
+The initial runs below are retained as historical evidence. The controlled `main`/PR comparison, individual failure classifications and UI-test corrections are documented in [PR #27 finalization](p5-2-finalization.md). The PR description records completed checks and the incomplete final Simulator gate.
 
 Base: fetched `origin/main` at `abc9f2a` (merged PR #26 / P5.1). One new feature branch `codex/p5-2-xlsx` in an isolated managed worktree. The owner's dirty original checkout is preserved. Current main already uses mapping schema 8; this PR changes no schema, migration, journal, measurement, sensor, geometry, DXF, signing, icon or bundle identifier. No physical iPhone installation or data reset.
 
@@ -47,3 +47,7 @@ Numbers imports data into its own tables and may add empty rows (the one-point s
 ## Limitations
 
 Analysis workbook only: no originals, DXF bytes, complete history, backup/restore or original-file integrity scan. The frozen dataset remains in memory, while ZIP content streams to disk without a full-workbook buffer. ZIP32/Excel row/column/text limits fail clearly without truncating source data. Large JSON/notes may require CSV instead. High-precision cells intentionally remain text and need deliberate high-precision parsing downstream. No physical-device accuracy test, native iPad acceptance, external share-extension completion, actual Files destination write/reopen, full Dynamic Type/VoiceOver matrix, or actual Excel compatibility check is claimed.
+
+### Finalization wrap-up (2026-10-20)
+
+See [the controlled investigation](p5-2-finalization.md#owner-requested-wrap-up). Swift: 228 passed, 0 failed, 0 skipped. The later Xcode full run passed all 228 unit tests; 7 UI cases completed (6 passed, 1 failed) before owner-requested cancellation. The last text-input helper correction has not received a complete UI rerun. PR #27 remains Draft; full final-head verification is incomplete.

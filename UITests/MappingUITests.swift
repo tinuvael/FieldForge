@@ -465,13 +465,9 @@ final class MappingUITests: XCTestCase {
         if !old.isEmpty && old != placeholder {
             for _ in old { field.typeText(XCUIKeyboardKey.delete.rawValue) }
         }
-        if Double(text.replacingOccurrences(of: ",", with: ".")) != nil {
-            // Inline validation relayouts a Form row for transient numeric prefixes (e.g. "0,").
-            // Separate XCTest actions wait for quiescence before dispatching the next character.
-            for character in text { field.typeText(String(character)) }
-        } else if !text.isEmpty {
-            field.typeText(text)
-        }
+        // Keyboard batches can lose characters while validation or multiline rows update.
+        // Separate native XCTest actions wait for quiescence after every character.
+        for character in text { field.typeText(String(character)) }
         let actual = field.value as? String ?? ""
         XCTAssertEqual(actual == placeholder ? "" : actual, text, "Native keyboard input must reach the field intact")
         dismissKeyboard(app)
