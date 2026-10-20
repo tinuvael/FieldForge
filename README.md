@@ -18,6 +18,8 @@ P4.1 adds multiple camera/Photos/Files photographs to saved Mapping/Plan observa
 
 ## Working features
 
+- P6.1: «Картирование → Замерить расстояние», directly below «Замеры», opens a transient two-point camera utility. LiDAR scene depth with high confidence on supported hardware; otherwise explicitly labelled detected-plane AR estimates. Tracking/surface failures block capture, retake/exit preserve the mapping draft, and no result is saved or used by ratings. This approximate tool has no validated accuracy and is not for millimetre fracture apertures. See [APIs, lifecycle, hardware and physical qualification](docs/p6-1-ar-distance.md).
+
 - New-observation draft photos: camera/Photos/Files, thumbnails and preview before first Save; point, measurements and photo relationships commit together. Save waits for active selection/import. Failures retain the live form and same image UUIDs; success retains context and resets point fields. No unsaved-form recovery after termination. See [P4.2 contract](docs/p4-2-draft-photos.md) and [verification](docs/p4-2-verification.md).
 
 - Saved-point photographs: camera capability/permission handling, multi-image Photos/Files imports, individual names/numbers/descriptions/categories, capture versus import time, immutable metadata history, thumbnails and full-screen pinch zoom. UUID paths and SHA-256 originals stay offline; pending operations resume without duplicate records. Received camera bytes remain in the running model through intent/staging failures, allowing normal retry without another shutter. Unwritten memory-only bytes cannot survive process termination. Missing/corrupt originals stay visible. See [P4.1 scope, recovery and backup composition](docs/p4-1-photos.md).

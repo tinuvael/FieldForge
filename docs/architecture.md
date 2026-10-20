@@ -121,3 +121,7 @@ See [current safe migration](persistence-migration.md), [coordinate systems](coo
 ## P3.2a implementation update
 
 The shared mapping aggregate now uses schema 4 with optional `MappingGeology` on immutable points: interval bounds/position, interpreted J1–J5 revision-1 records with point-local original-evidence UUID links, and arbitrary tectonic structures. Original measurements remain separate immutable evidence. The existing atomic aggregate and backup mechanism is extended without a new storage layer; legacy observations retain absent geology. See [P3.2a domain, units and persistence](p3-2a-geology.md). Planned relational entities elsewhere in this document remain future architecture.
+
+## P6.1 transient AR distance boundary
+
+Mapping presents `DistanceMeasurementSheet` without passing its draft/model. `DistanceSession` isolates ARKit from the Foundation-only `DistanceMeasurementController` and `DistanceMath`; `ARDistanceSession` adapts live scene depth or detected-plane raycasts and SceneKit visualization. Points exist only in one AR session's local metre coordinates. Lifecycle/tracking invalidation clears them; no mapping persistence or geological calculation consumes them. See [P6.1 API and validation contract](p6-1-ar-distance.md).
