@@ -13,6 +13,8 @@ struct WedgesView: View {
     @State private var selected: Set<UUID> = []
     @State private var headingPresented = false
     @State private var distanceTarget: DimensionTarget?
+    @FocusState private var focusedField: InputField?
+    private enum InputField: Hashable { case axis, width, height, length }
     private enum DimensionTarget: String, Identifiable { case width, height; var id: String { rawValue } }
     private var sources: [WedgeMappingSource] { mapping.workflow.map(WedgeMappingSource.available) ?? [] }
     private var source: WedgeMappingSource? { sources.first { $0.id == sourceID } }
@@ -41,7 +43,15 @@ struct WedgesView: View {
                 jointsSection
                 sceneSection
             }
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Клинья")
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Готово") { focusedField = nil }.accessibilityIdentifier("wedgesKeyboardDone")
+                }
+            }
+            .onDisappear { focusedField = nil }
             .sheet(isPresented: $headingPresented) {
                 WedgeHeadingSheet { capture in
                     axisText = String(capture.azimuth); axisNorth = .magneticNorth
@@ -61,7 +71,8 @@ struct WedgesView: View {
             HStack {
                 TextField("Азимут оси, °", text: Binding(get: { axisText }, set: { axisText = $0; axisEdited = true }))
                     .keyboardType(.decimalPad)
-                Button("Замерить ось") { headingPresented = true }.buttonStyle(.bordered)
+                    .focused($focusedField, equals: .axis)
+                Button("Замерить ось") { focusedField = nil; headingPresented = true }.buttonStyle(.bordered)
             }
             Picker("Север оси", selection: Binding(get: { axisNorth }, set: { axisNorth = $0; axisEdited = true })) {
                 ForEach(GeographicReference.manualChoices, id: \.self) { Text($0.title).tag($0) }
@@ -81,6 +92,7 @@ struct WedgesView: View {
             dimensionRow("Ширина B, м", input: $width, target: .width)
             dimensionRow("Полная высота H, м", input: $height, target: .height)
             TextField("Длина L, м · вручную", text: $length).keyboardType(.decimalPad)
+                .focused($focusedField, equals: .length)
             Text("H — от почвы до вершины свода. Временно: f ≤ 12, подъём B/3. f — коэффициент Протодъяконова, не UCS и не RMR.")
                 .font(.caption).foregroundStyle(.secondary)
             switch dimensions {
@@ -95,7 +107,8 @@ struct WedgesView: View {
             HStack {
                 TextField(title, text: Binding(get: { input.wrappedValue.text }, set: { input.wrappedValue.edit($0) }))
                     .keyboardType(.decimalPad)
-                Button("LiDAR") { distanceTarget = target }.buttonStyle(.bordered)
+                    .focused($focusedField, equals: target == .width ? .width : .height)
+                Button("LiDAR") { focusedField = nil; distanceTarget = target }.buttonStyle(.bordered)
             }
             if let result = input.wrappedValue.measurement {
                 Text("\(result.text)\(input.wrappedValue.manuallyEdited ? " · исправлено вручную" : " · измерено"). Приблизительно, точность не проверена.")
