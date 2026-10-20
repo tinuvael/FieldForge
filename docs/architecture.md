@@ -125,3 +125,7 @@ The shared mapping aggregate now uses schema 4 with optional `MappingGeology` on
 ## P6.1 transient AR distance boundary
 
 Mapping presents `DistanceMeasurementSheet` without passing its draft/model. `DistanceSession` isolates ARKit from the Foundation-only `DistanceMeasurementController` and `DistanceMath`; `ARDistanceSession` adapts live scene depth or detected-plane raycasts and SceneKit visualization. Points exist only in one AR session's local metre coordinates. Lifecycle/tracking invalidation clears them; no mapping persistence or geological calculation consumes them. See [P6.1 API and validation contract](p6-1-ar-distance.md).
+
+## W1 transient visualization boundary
+
+`Core/Wedges/WedgeGeometry.swift` owns renderer-independent geometry, validation and orientation transforms. `Services/WedgeMappingSource.swift` reads shared draft/effective Mapping snapshots, retaining identity/provenance without write access. `Features/Wedges` adapts the existing magnetic sensor provider, P6.1 distance sheet and native SceneKit; all parameters remain view memory. No persisted analyses or mechanics. See [W1 geometry v1](w1-geometry.md).
