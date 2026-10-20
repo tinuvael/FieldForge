@@ -4,6 +4,8 @@ import SwiftUI
 struct MappingMeasurementSheet: View {
     let automatic: Bool
     var addTitle = "Добавить замер"
+    var representativeIssue: ((Measurement) -> String?)? = nil
+    var onKeepOriginal: ((Measurement) throws -> Void)? = nil
     let onAdd: (Measurement) throws -> Void
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
@@ -11,8 +13,11 @@ struct MappingMeasurementSheet: View {
     @State private var notes = ""
     @State private var error: String?
     @State private var added = false
+    @FocusState private var notesFocused: Bool
+    private var issue: String? { model.displayed.flatMap { representativeIssue?($0) } }
+    private var canRecord: Bool { !added && (automatic ? model.session.canSave : (try? input.validated()) != nil) }
     private var canAdd: Bool {
-        !added && (automatic ? model.session.canSave : (try? input.validated()) != nil)
+        canRecord && (!automatic || issue == nil)
     }
     var body: some View {
         NavigationStack {
@@ -24,19 +29,31 @@ struct MappingMeasurementSheet: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }.padding().frame(maxWidth: 640).frame(maxWidth: .infinity)
             }
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle(automatic ? "Измерить iPhone" : "Ручной ввод")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Закрыть") { dismiss() }.accessibilityIdentifier("closeMappingMeasurement") } }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Закрыть") { notesFocused = false; dismiss() }.accessibilityIdentifier("closeMappingMeasurement") }
+                if automatic {
+                    ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Готово") { notesFocused = false } }
+                }
+            }
             .safeAreaInset(edge: .bottom) {
-                HStack {
-                    if automatic {
-                        Button(model.isHeld ? "Повторить" : "Зафиксировать") { model.toggleHold() }
-                            .buttonStyle(.bordered).disabled(!model.isHeld && !model.canHold)
-                            .accessibilityIdentifier("mappingHold")
+                VStack(spacing: 12) {
+                    HStack {
+                        if automatic {
+                            Button(model.isHeld ? "Повторить" : "Зафиксировать") { notesFocused = false; model.toggleHold() }
+                                .buttonStyle(.bordered).disabled(!model.isHeld && !model.canHold)
+                                .accessibilityIdentifier("mappingHold")
+                        }
+                        Button(addTitle) { add(using: onAdd) }
+                            .buttonStyle(.borderedProminent).disabled(!canAdd)
+                            .accessibilityIdentifier("addMappingMeasurement")
                     }
-                    Button(addTitle, action: add)
-                        .buttonStyle(.borderedProminent).disabled(!canAdd)
-                        .accessibilityIdentifier("addMappingMeasurement")
+                    if automatic, issue != nil, let onKeepOriginal {
+                        Button("Оставить только исходный замер") { add(using: onKeepOriginal) }
+                            .disabled(!canRecord).accessibilityIdentifier("keepMappingOriginal")
+                    }
                 }.frame(maxWidth: .infinity).controlSize(.large).padding().background(.bar)
             }
         }
@@ -66,6 +83,10 @@ struct MappingMeasurementSheet: View {
                 Text(reading.explanation).font(.footnote)
                 Text("Калибровка: \(reading.sample?.magneticAccuracy.title ?? "—"); точность не подтверждена.").font(.caption)
                 Text(MeasurementDateText.format(reading.timestamp, detailed: true)).font(.caption).monospacedDigit()
+                if let issue {
+                    Label(issue, systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.orange)
+                        .accessibilityIdentifier("jointRepresentativeIssue")
+                }
             } else {
                 Label("Измерение недоступно", systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
             }
@@ -73,6 +94,7 @@ struct MappingMeasurementSheet: View {
             Text("Плоскость измерения — экран iPhone. Выступ камеры и чехол не гарантируют плоский контакт. Требуется проверка геологическим компасом.").font(.footnote).foregroundStyle(.secondary)
             if model.isHeld {
                 TextField("Примечание к измерению", text: $model.notes, axis: .vertical).textFieldStyle(.roundedBorder)
+                    .focused($notesFocused)
             }
             #if DEBUG
             if model.mock != nil {
@@ -92,15 +114,16 @@ struct MappingMeasurementSheet: View {
                 .font(.system(size: 40, weight: .semibold)).monospacedDigit().lineLimit(1).minimumScaleFactor(0.6)
         }.frame(maxWidth: .infinity, alignment: .leading).accessibilityElement(children: .combine)
     }
-    private func add() {
-        guard canAdd else { return }
+    private func add(using accept: (Measurement) throws -> Void) {
+        guard canRecord else { return }
+        notesFocused = false
         do {
             let reading: Measurement
             if automatic {
                 guard let frozen = model.session.record(notes: model.notes) else { return }
                 reading = frozen
             } else { reading = try input.observation(notes: notes) }
-            try onAdd(reading)
+            try accept(reading)
             added = true
             if automatic { model.session.markSaved() }
             dismiss()
