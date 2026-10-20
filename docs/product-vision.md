@@ -1,5 +1,7 @@
 # FieldForge product vision
 
+**W1 implementation update:** the existing «Клинья» tab now provides transient straight-excavation and schematic interpreted-joint visualization. Finite wedges, mechanics and saved scenarios remain deferred. See [W1 geometry and limits](w1-geometry.md).
+
 **Pre-MVP owner storage decision:** mapping uses only current experimental schema **8**. No automatic mapping migrations, new `.pN-backup`, resets or deletions; old/corrupt files fail closed and all existing files are preserved. Earlier mapping-schema descriptions below are historical, not supported compatibility. Atomic current saves/`.previous`, integrity, external-change guards and immutable evidence/history remain. The independent original-measurement journal keeps its deployed compatibility. See [current storage/recovery](p4-1-photos.md) and [AGENTS.md](../AGENTS.md).
 
 **P4 implementation update:** [Saved-point photographs](p4-1-photos.md) and [new-observation draft photos](p4-2-draft-photos.md) supersede future-only photo statements below. Draft photos commit atomically with their first point and retain unknown capture-location provenance. Saved-point imports retain exact P3.3 point revisions. Point-free photos, XLSX/ZIP packages and automatic backup/restore remain future work. JSON alone is not a complete backup; include original photographs, DXF, pending operations and a verified inventory/manifest.

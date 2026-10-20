@@ -17,7 +17,7 @@ struct RootView: View {
             MappingView().tabItem { Label("Картирование", systemImage: "square.and.pencil") }.tag(0)
             NavigationStack { HorizonPlansView() }
                 .tabItem { Label("План", systemImage: "map") }.tag(1)
-            ContentUnavailableView("Клинья", systemImage: "triangle", description: Text("Анализ будет доступен после проверки методики и инженерных тестов."))
+            WedgesView()
                 .tabItem { Label("Клинья", systemImage: "triangle") }.tag(2)
         }
         .tint(Color("AccentColor"))

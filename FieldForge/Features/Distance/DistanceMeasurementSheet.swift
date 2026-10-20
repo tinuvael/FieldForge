@@ -98,6 +98,7 @@ import ARKit
 }
 
 struct DistanceMeasurementSheet: View {
+    var closeReturnsResult = true
     let onFinish: (DistanceResult?) -> Void
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
@@ -125,7 +126,7 @@ struct DistanceMeasurementSheet: View {
                         .font(.subheadline)
                 }
                 Spacer()
-                Button("Закрыть", systemImage: "xmark") { finish() }
+                Button("Закрыть", systemImage: "xmark") { finish(acceptResult: closeReturnsResult) }
                     .labelStyle(.iconOnly).frame(minWidth: 52, minHeight: 52)
                     .accessibilityIdentifier("distanceClose")
             }.padding().background(.ultraThinMaterial)
@@ -175,8 +176,8 @@ struct DistanceMeasurementSheet: View {
             }.padding().frame(maxWidth: 600).frame(maxWidth: .infinity)
         }.accessibilityIdentifier("distanceControls")
     }
-    private func finish() {
-        let result = model.finishResult()
+    private func finish(acceptResult: Bool = true) {
+        let result = acceptResult ? model.finishResult() : nil
         model.close()
         onFinish(result)
         dismiss()
