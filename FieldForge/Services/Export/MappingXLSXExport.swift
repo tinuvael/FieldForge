@@ -1,7 +1,7 @@
 import Foundation
 
 enum MappingExportFormat: String, CaseIterable {
-    case csv = "CSV", xlsx = "Excel (.xlsx)"
+    case csv = "CSV", xlsx = "Excel (.xlsx)", photoPackage = "Фотографии + Excel (.zip)"
 }
 
 /// OOXML Transitional workbook over the SAME typed P5.1 value snapshot. No CSV parsing,
@@ -13,9 +13,10 @@ enum MappingXLSXExport {
     private static let declaration = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>"
 
     static func write(_ snapshot: MappingCSVExport, to url: URL,
+                      photoPackageStatus: String? = nil,
                       append: @escaping (Data, FileHandle) throws -> Void = { try $1.write(contentsOf: $0) }) throws {
         try Task.checkCancellation()
-        let summary = try summary(snapshot)
+        let summary = try summary(snapshot, photoPackageStatus: photoPackageStatus)
         let sheets = [summary] + snapshot.tables
         let archive = try XLSXArchive(url: url, append: append)
         defer { archive.close() }
@@ -161,7 +162,7 @@ enum MappingXLSXExport {
         return min(36, max(18, name.count + 3))
     }
 
-    static func summary(_ snapshot: MappingCSVExport) throws -> MappingCSVExport.Table {
+    static func summary(_ snapshot: MappingCSVExport, photoPackageStatus: String? = nil) throws -> MappingCSVExport.Table {
         let manifest = try JSONSerialization.jsonObject(with: snapshot.manifest) as? [String: Any] ?? [:]
         func rows(_ name: String) -> [[String: MappingCSVExport.Cell]] {
             guard let table = snapshot.tables.first(where: { $0.name == name }) else { return [] }
@@ -202,8 +203,14 @@ enum MappingXLSXExport {
         count("Q без сохранённого результата", rows("assessments").filter { string($0["kind"]) == "Q" && missing($0["stored_q"]) }.count)
         count("Фото без времени съёмки", photos.filter { missing($0["captured_at_utc"]) }.count)
         count("Фото с неизвестным местом съёмки", photos.filter { string($0["capture_location_basis"]) == "unknownBeforeFirstSave" }.count)
+        if let photoPackageStatus {
+            note("Статус фотоархива", photoPackageStatus)
+            note("Полнота", "Каждое фото перечислено в photo_register. В ZIP включены только оригиналы со статусом verified; остальные имеют причину отсутствия. INCOMPLETE означает неполный пакет.")
+            note("Назначение", "Рабочая выгрузка фотографий и картирования, НЕ полная резервная копия: нет DXF, незавершённых импортов и полной истории.")
+        } else {
         note("Полнота", "Неполные записи сохранены. Наличие и целостность оригиналов фотографий не проверялись. original_integrity — notChecked; originalsNotIncluded.")
         note("Назначение", "Выгрузка для анализа, НЕ полная резервная копия. Нет оригиналов фото, миниатюр, файлов DXF и полной истории исправлений.")
+        }
         note("Точность Excel", "Числа до 15 значащих цифр — числовые ячейки. Более точные Double и большие целые — текст с точным исходным представлением. Очень малые subnormal Double — текст. Приблизительных столбцов нет.")
         note("Исходный текст", "Десятичные строки, UUID, JSON, времена ISO UTC и строки с =, +, -, @ сохранены как текст без защитного CSV-апострофа. Пустые ячейки означают отсутствие значения, не ноль. Формул, макросов и внешних связей нет.")
         note("Единицы", "XY — xy_units (m, mm, drawing), CRS и axes сохранены. Z, высоты, пикетаж, интервалы, spacing, persistence, thickness — м. aperture — мм. Углы падения и направления — градусы.")
@@ -212,7 +219,7 @@ enum MappingXLSXExport {
         note("Время", "Отбор только по observedAt актуальной точки в выбранном поясе, включая последний календарный день. ISO UTC — миллисекунды. *_reference_seconds и даты JSON — точные секунды от 2001-01-01T00:00:00Z.")
         note("Версии и связи", "Одна актуальная точка на UUID. revision_id/version идентифицируют версию. photo_point_contexts — историческая связь, не дополнительные точки; unknownBeforeFirstSave не задаёт координаты съёмки. Связанные измерения/фото могут быть вне периода.")
         note("Оценки", "Barton Q, метод, входы, результат и пропуски — как сохранено, без пересчёта. RMR89 — только входы, без рейтинга и класса.")
-        note("Приватность", "EXIF GPS и оригиналы не читаются. Имена файлов, заметки и другие пользовательские строки могут содержать личные сведения.")
+        note("Приватность", photoPackageStatus == nil ? "EXIF GPS и оригиналы не читаются. Имена файлов, заметки и другие пользовательские строки могут содержать личные сведения." : "Оригиналы переданы без изменения байтов, включая личные EXIF/GPS и сведения об авторе. Координаты EXIF не трактуются как место съёмки в шахте. Санитизированные копии не создаются.")
         note("Столбцы и отношения", "Имена листов и столбцов совпадают с контрактом FieldForge-Mapping-CSV/1, включая *_reference_seconds. Связи по UUID, не по имени файла. JSON содержит полный сохранённый ввод и диагностику.")
         return table
     }

@@ -24,11 +24,26 @@ final class XLSXArchive {
     private func emit(_ data: Data) throws {
         try Task.checkCancellation()
         guard offset + UInt64(data.count) < UInt64(UInt32.max) else {
-            throw MappingError.invalid("Книга превышает ограничение ZIP32 (4 ГБ). Выберите меньший период.")
+            throw MappingError.invalid("Архив превышает ограничение ZIP32 (4 ГБ). Выберите меньший период.")
         }
         try append(data, handle); offset += UInt64(data.count)
     }
     func part(_ name: String, content: (_ emit: (String) throws -> Void) throws -> Void) throws {
+        try bytes(name) { emit in
+            try withoutActuallyEscaping(emit) { output in
+                try content { try output(Data($0.utf8)) }
+            }
+        }
+    }
+    /// Binary entries share the existing bounded ZIP32 writer and never re-encode images.
+    func bytes(_ name: String, content: (_ emit: (Data) throws -> Void) throws -> Void) throws {
+        let components = name.split(separator: "/", omittingEmptySubsequences: false)
+        guard !name.isEmpty, !name.contains("\\"), !name.contains(":"),
+              name.unicodeScalars.allSatisfy({ $0.value >= 32 && $0.value != 127 }),
+              components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }),
+              !entries.contains(where: { $0.name == Data(name.utf8) }) else {
+            throw MappingError.invalid("Недопустимый или повторный путь ZIP.")
+        }
         let encoded = Data(name.utf8), start = UInt32(offset)
         guard encoded.count <= Int(UInt16.max), entries.count < Int(UInt16.max) else { throw StorageError.invalidRecord }
         var header = Data()
@@ -38,8 +53,7 @@ final class XLSXArchive {
         try emit(header)
         var crc: UInt32 = 0xFFFFFFFF
         let dataStart = offset
-        try content { text in
-            let bytes = Data(text.utf8)
+        try content { bytes in
             for byte in bytes { crc = Self.crcTable[Int((crc ^ UInt32(byte)) & 0xFF)] ^ (crc >> 8) }
             try self.emit(bytes)
         }
