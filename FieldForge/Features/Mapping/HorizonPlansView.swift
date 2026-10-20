@@ -378,9 +378,9 @@ struct HorizonPlanView: View {
                                 } }
                         } label: {
                             VStack(alignment: .leading) {
-                                Text(record.picket)
-                                Text(MappingDateText.format(record)).font(.caption)
-                                Text(record.id.uuidString).font(.caption2)
+                                Text(mapping.workflow?.journal.excavations.first { $0.id == record.excavationID }?.name ?? "Выработка").font(.headline)
+                                Text(record.picket).font(.subheadline)
+                                Text(MappingDateText.compact(record)).font(.caption)
                             }
                         }.accessibilityIdentifier("planPoint-\(record.id.uuidString)")
                     }.navigationTitle("Наблюдения: \(records.count)")

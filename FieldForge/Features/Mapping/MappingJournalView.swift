@@ -39,13 +39,8 @@ struct MappingJournalView: View {
                     DatePicker("По включительно", selection: $throughDate, in: fromDate..., displayedComponents: .date)
                     Text("Даты: \(TimeZone.current.identifier)").font(.caption)
                 }
-                DisclosureGroup("Сортировка") {
-                    Picker("Порядок", selection: $query.byPicket) {
-                        Text("По дате").tag(false); Text("По пикету").tag(true)
-                    }.pickerStyle(.segmented).accessibilityIdentifier("journalSort")
-                }
                 Button("Сбросить фильтры") {
-                    let sort = query.byPicket; query = MappingJournalQuery(); query.byPicket = sort; datesEnabled = false
+                    query = MappingJournalQuery(); datesEnabled = false
                 }.accessibilityIdentifier("journalClearFilters")
             }
             Section("Наблюдения: \(observations.count) из \(mapping.workflow?.observations.count ?? 0)") {
@@ -53,18 +48,15 @@ struct MappingJournalView: View {
                 ForEach(observations) { record in
                     NavigationLink { MappingObservationDetail(record: record) } label: {
                         VStack(alignment: .leading, spacing: 6) {
-                            Text(record.picket).font(.headline)
+                            Text(name(excavation: record.excavationID)).font(.headline)
+                            Text(record.picket).font(.subheadline)
                             if let revision = mapping.workflow?.journal.history(for: record.id).last {
                                 Text("Версия \(revision.version) · исправлено \(MappingCorrectionDateText.format(revision.correctedAt))").font(.caption)
                             }
-                            Text(MappingDateText.format(record)).font(.subheadline)
-                            Text("\(name(horizon: record.horizonID)) · \(name(excavation: record.excavationID))").font(.caption)
+                            Text("\(MappingDateText.compact(record)) · \(name(horizon: record.horizonID))").font(.caption).foregroundStyle(.secondary)
                         }.padding(.vertical, 4)
                     }.accessibilityIdentifier("journalRecord-\(record.id.uuidString)")
                 }
-            }
-            Section("Независимые измерения") {
-                NavigationLink("Неназначенный журнал Phase 1/2", destination: JournalView())
             }
         }.accessibilityIdentifier("journalObservations")
             .navigationTitle("Журнал проекта")
@@ -152,6 +144,12 @@ private struct JournalSearchAccessibility: UIViewControllerRepresentable {
 }
 
 enum MappingDateText {
+    static func compact(_ record: MappingObservation) -> String {
+        let formatter = DateFormatter(); formatter.locale = Locale(identifier: "ru_RU")
+        formatter.timeZone = TimeZone(secondsFromGMT: record.observedUTCOffsetSeconds)
+        formatter.dateFormat = "dd.MM.yyyy HH:mm"
+        return formatter.string(from: record.observedAt)
+    }
     static func format(_ record: MappingObservation) -> String {
         let formatter = DateFormatter(); formatter.locale = Locale(identifier: "ru_RU")
         formatter.timeZone = TimeZone(secondsFromGMT: record.observedUTCOffsetSeconds)
@@ -170,9 +168,15 @@ struct MappingObservationDetail: View {
     init(record: MappingObservation, historical: Bool = false, historicalVersion: Int? = nil) {
         snapshot = record; self.historical = historical; self.historicalVersion = historicalVersion
     }
+    private var excavationName: String { mapping.workflow?.journal.excavations.first { $0.id == record.excavationID }?.name ?? "Выработка" }
     private var record: MappingObservation { historical ? snapshot : (mapping.workflow?.journal.effectiveObservation(id: snapshot.id) ?? snapshot) }
     var body: some View {
         List {
+            Section {
+                Text(excavationName).font(.title2.bold())
+                Text(record.picket).font(.subheadline)
+                Text(MappingDateText.compact(record)).font(.caption).foregroundStyle(.secondary)
+            }
             if historical, let historicalVersion { Text("Версия \(historicalVersion) · исторический снимок").font(.caption) }
             if !historical {
                 Section {
@@ -228,7 +232,7 @@ struct MappingObservationDetail: View {
                 Text(record.id.uuidString).textSelection(.enabled)
                 Text("UUID точки постоянный. Дата полевого наблюдения и время исправления хранятся отдельно. Исходные замеры неизменяемы.")
             }.font(.caption)
-        }.navigationTitle(record.picket).navigationBarTitleDisplayMode(.inline)
+        }.navigationTitle(excavationName).navigationBarTitleDisplayMode(.inline)
             .sheet(item: $correction) { draft in MappingCorrectionEditor(draft: draft) }
             .alert("Исправление", isPresented: Binding(get: { correctionError != nil }, set: { if !$0 { correctionError = nil } })) {
                 Button("Понятно", role: .cancel) { correctionError = nil }
