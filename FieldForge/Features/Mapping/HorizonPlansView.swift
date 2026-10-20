@@ -24,6 +24,10 @@ struct HorizonPlansView: View {
                     .disabled(effectiveHorizonID == nil || busy || mapping.planStore == nil)
                     .accessibilityIdentifier("importDXF")
                 if busy { ProgressView("Проверка DXF…") }
+                if let effectiveHorizonID, mapping.hasUnavailablePlanSelection(for: effectiveHorizonID) {
+                    Label("Прежний выбор недоступен. Выберите ревизию для просмотра.", systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(.orange)
+                }
             }
             #if DEBUG && targetEnvironment(simulator)
             if ProcessInfo.processInfo.arguments.contains("--ui-testing") {
@@ -46,7 +50,7 @@ struct HorizonPlansView: View {
                             Text(plan.file?.originalFilename ?? "Старая ссылка без файла")
                             Text("Версия: \(plan.version)").font(.subheadline)
                             if mapping.activePlan(for: plan.horizonID)?.id == plan.id {
-                                Text(mapping.hasExplicitPlan(for: plan.horizonID) ? "Активная для просмотра" : "По умолчанию · последний импорт").font(.caption).foregroundStyle(.secondary)
+                                Text(mapping.hasExplicitPlan(for: plan.horizonID) ? "Активная для просмотра" : "Последний импорт · для просмотра").font(.caption).foregroundStyle(.secondary)
                             }
                             if selecting, mapping.workflow?.draft.planID == plan.id {
                                 Text("Источник координат черновика").font(.caption)
@@ -99,6 +103,7 @@ struct HorizonPlansView: View {
                 Button("Понятно", role: .cancel) { error = nil }
             } message: { Text(error ?? "") }
             .onAppear { refreshPending() }
+            .onChange(of: effectiveHorizonID) { _, _ in refreshPending() }
     }
     private func refreshPending() {
         do {

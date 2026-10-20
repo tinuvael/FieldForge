@@ -18,14 +18,20 @@ import Combine
     }
     func activePlan(for horizonID: UUID) -> MappingPlanReference? {
         let available = plans(for: horizonID)
-        if let key = planKey(horizonID), let id = activePlanIDs[key] {
-            return available.first { $0.id.uuidString == id }
+        if let key = planKey(horizonID), let id = activePlanIDs[key],
+           let selected = available.first(where: { $0.id.uuidString == id }) {
+            return selected
         }
         // Import order is journal append order; no geometric compatibility is implied.
         return available.last
     }
     func hasExplicitPlan(for horizonID: UUID) -> Bool {
-        planKey(horizonID).map { activePlanIDs[$0] != nil } ?? false
+        guard let key = planKey(horizonID), let id = activePlanIDs[key] else { return false }
+        return plans(for: horizonID).contains { $0.id.uuidString == id }
+    }
+    func hasUnavailablePlanSelection(for horizonID: UUID) -> Bool {
+        guard let key = planKey(horizonID), activePlanIDs[key] != nil else { return false }
+        return !hasExplicitPlan(for: horizonID)
     }
     func selectActivePlan(_ plan: MappingPlanReference) {
         guard plans(for: plan.horizonID).contains(plan), let key = planKey(plan.horizonID) else { return }
