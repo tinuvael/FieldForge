@@ -1,5 +1,7 @@
 # P5.2 verification
 
+The initial runs below are retained as historical evidence. The controlled `main`/PR comparison, individual failure classifications and UI-test corrections are documented in [PR #27 finalization](p5-2-finalization.md). The PR description records the final complete Simulator run against the published head.
+
 Base: fetched `origin/main` at `abc9f2a` (merged PR #26 / P5.1). One new feature branch `codex/p5-2-xlsx` in an isolated managed worktree. The owner's dirty original checkout is preserved. Current main already uses mapping schema 8; this PR changes no schema, migration, journal, measurement, sensor, geometry, DXF, signing, icon or bundle identifier. No physical iPhone installation or data reset.
 
 ## Automated runs
@@ -24,7 +26,7 @@ Base: fetched `origin/main` at `abc9f2a` (merged PR #26 / P5.1). One new feature
 - `MappingUITests/testSuccessiveObservationsContextGuardJournalAndRelaunch()`: XCTAssertTrue failed
 - `P2MappingUITests/testTwoPlansPickingSavedMarkersOverlapAndDraftRetention()`: XCTAssertTrue failed
 
-The three disclosure failures occur in existing ratings/sets/correction scenarios. Other mapping failures are existing UI assertions for the measurement-count text and journal row; all four plan scenarios fail the static-text assertion for the saved observation-card title. These scenarios do not exercise XLSX. Their detailed root causes remain unresolved. No full baseline comparison on `main` was completed, so this report does **not** categorically claim that all failures predate P5.2. **The PR remains a draft; the complete UI suite is not green.**
+The three disclosure failures occur in existing ratings/sets/correction scenarios. Other mapping failures are existing UI assertions for the measurement-count text and observation-card section heading (the successive-observations test had already found both journal rows); all four plan scenarios fail the static-text assertion for the saved observation-card title. These scenarios do not exercise XLSX. At the time of this initial run their detailed root causes were unresolved, and no baseline comparison on `main` had been completed. The PR was kept in Draft. See the subsequent controlled comparison linked above; this historical result is not replaced by a later passing run.
 
 An earlier diagnostic full attempt was interrupted after repeated picket scroll-selector failures. The restart overlapped shutdown of its predecessor, and the subsequent full result recorded one unit test terminated with TERM. The isolated confirmation above resolves unit verification without rewriting that history. A small test-only helper change returns picket searches to the top of the form after context selection; it changes no app behavior or assertions.
 
