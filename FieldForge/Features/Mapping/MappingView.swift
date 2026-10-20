@@ -4,6 +4,8 @@ import SwiftUI
 struct MappingView: View {
     @EnvironmentObject private var mapping: MappingModel
     @State private var editor: ContextEditorKind?
+    @State private var showDistance = false
+    @State private var lastDistance: DistanceResult?
     @State private var showPlans = false
     @State private var measurement: MappingCaptureKind?
     @FocusState private var focused: Bool
@@ -32,6 +34,9 @@ struct MappingView: View {
                 }
                 ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Готово") { focused = false } }
             }
+        }
+        .fullScreenCover(isPresented: $showDistance) {
+            DistanceMeasurementSheet { lastDistance = $0 }
         }
         .sheet(isPresented: $showPlans) {
             NavigationStack {
@@ -118,6 +123,17 @@ struct MappingView: View {
                     }
                 } header: { Text("Замеры: \(w.draft.measurements.count)") } footer: {
                     Text("Исходные замеры сохраняются вместе с точкой. Системы J1–J5 не назначаются автоматически.")
+                }
+                Section {
+                    Button("Замерить расстояние", systemImage: "ruler") {
+                        focused = false; lastDistance = nil; showDistance = true
+                    }.frame(minHeight: 44).accessibilityIdentifier("mappingDistance")
+                    if let lastDistance {
+                        Text("Последний замер: \(lastDistance.text)").font(.title3.monospacedDigit())
+                            .accessibilityIdentifier("mappingLastDistance")
+                    }
+                } footer: {
+                    Text("Приблизительный AR/LiDAR замер · без записи в журнал")
                 }
                 DraftPhotosSection()
                 MappingGeologyForm(sets: draft(\.jointSets, fallback: []), structures: draft(\.tectonicStructures, fallback: []),

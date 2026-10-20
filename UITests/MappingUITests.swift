@@ -2,6 +2,38 @@ import XCTest
 import UIKit
 
 final class MappingUITests: XCTestCase {
+    @MainActor func testP61DistanceUnsupportedClosePreservesMappingDraft() throws {
+        continueAfterFailure = false
+        defer { XCUIDevice.shared.orientation = .portrait }
+        let app = XCUIApplication()
+        app.launchEnvironment["FIELD_FORGE_TEST_RUN_ID"] = UUID().uuidString
+        app.launchArguments = ["--ui-testing"]; app.launch()
+        fill(app.textFields["mappingPicket"], "17", app: app)
+        fill(app.textFields["mappingX"], "123.25", app: app)
+        for close in ["distanceClose", "distanceDone"] {
+            reveal("mappingDistance", app: app); app.buttons["mappingDistance"].tap()
+            let status = app.staticTexts["distanceStatus"]
+            XCTAssertTrue(status.waitForExistence(timeout: 10))
+            XCTAssertTrue(status.label.contains("недоступно"))
+            XCTAssertFalse(app.buttons["distanceSelectPoint"].isEnabled)
+            XCTAssertFalse(app.staticTexts["distanceResult"].exists)
+            app.buttons["distanceRetake"].tap()
+            XCTAssertTrue(status.label.contains("недоступно"))
+            if close == "distanceDone" {
+                XCUIDevice.shared.orientation = .landscapeLeft
+                XCTAssertTrue(app.buttons["distanceClose"].isHittable)
+                app.scrollViews["distanceControls"].swipeUp()
+            }
+            let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+            screenshot.name = "P61 unsupported AR utility"; screenshot.lifetime = .keepAlways; add(screenshot)
+            app.buttons[close].tap()
+            XCUIDevice.shared.orientation = .portrait
+            top(app); XCTAssertEqual(app.textFields["mappingPicket"].value as? String, "17")
+            XCTAssertEqual(app.textFields["mappingX"].value as? String, "123.25")
+            XCTAssertFalse(app.staticTexts["mappingLastDistance"].exists)
+        }
+    }
+
     @MainActor func testP51MappingCSVPreviewShareCancelAndDraftRetention() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -246,11 +278,15 @@ final class MappingUITests: XCTestCase {
             fill(app.textFields["tectonicThickness"], "0,5", app: app)
             fill(app.textFields["tectonicPicket"], "\(6 + index)", app: app)
             if index == 5 {
-                fill(app.textViews["tectonicPosition"], "У кровли", app: app)
-                fill(app.textViews["tectonicDescription"], "След разлома без замера", app: app)
+                fill(multilineInput("tectonicPosition", app: app), "У кровли", app: app)
+                fill(multilineInput("tectonicDescription", app: app), "След разлома без замера", app: app)
             }
             back(app)
         }
+        // The distance utility must also preserve J1–J5, tectonics and original readings.
+        reveal("mappingDistance", app: app); app.buttons["mappingDistance"].tap()
+        XCTAssertTrue(app.buttons["distanceDone"].waitForExistence(timeout: 10))
+        app.buttons["distanceDone"].tap()
         // Returning from the plan and temporary backgrounding retain geological drafts.
         top(app); app.buttons["selectHorizonPlan"].tap()
         XCTAssertTrue(app.buttons["Вернуться"].waitForExistence(timeout: 5)); app.buttons["Вернуться"].tap()
@@ -451,6 +487,12 @@ final class MappingUITests: XCTestCase {
     @MainActor private func heading(_ title: String, app: XCUIApplication) -> XCUIElement {
         app.staticTexts.matching(NSPredicate(format: "label ==[c] %@", title)).firstMatch
     }
+    // SwiftUI vertical TextField uses TextView on iOS 17 and TextField on iOS 26.
+    @MainActor private func multilineInput(_ identifier: String, app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier == %@ AND elementType IN %@", identifier,
+            [XCUIElement.ElementType.textField.rawValue, XCUIElement.ElementType.textView.rawValue])).firstMatch
+    }
     @MainActor private func fill(_ field: XCUIElement, _ text: String, app: XCUIApplication) {
         show(field, app: app)
         let old = field.value as? String ?? ""
@@ -518,6 +560,10 @@ final class MappingUITests: XCTestCase {
         app.buttons["projectPicker"].tap(); app.buttons["Не выбрано"].tap()
         XCTAssertTrue(app.buttons["Остаться"].waitForExistence(timeout: 5)); app.buttons["Остаться"].tap()
         XCTAssertEqual(rows.count, 3)
+        reveal("mappingDistance", app: app); app.buttons["mappingDistance"].tap()
+        XCTAssertTrue(app.buttons["distanceDone"].waitForExistence(timeout: 10))
+        app.buttons["distanceDone"].tap()
+        XCTAssertEqual(rows.count, 3)
         app.buttons["projectPicker"].tap(); app.buttons["Не выбрано"].tap()
         app.buttons["Удалить черновик"].tap()
         select("projectPicker", value: project, app: app); select("horizonPicker", value: "+393 м", app: app); select("excavationPicker", value: "E", app: app)
@@ -533,6 +579,8 @@ final class MappingUITests: XCTestCase {
             XCTAssertTrue(app.buttons["draftPhotoClosePreview"].waitForExistence(timeout: 5)); app.buttons["draftPhotoClosePreview"].tap()
             top(app); app.buttons["selectHorizonPlan"].tap()
             XCTAssertTrue(app.buttons["Вернуться"].waitForExistence(timeout: 5)); app.buttons["Вернуться"].tap()
+            // Form exposes offscreen rows lazily after returning at the top.
+            photoReveal(rows.firstMatch, app: app)
             XCTAssertEqual(rows.count, 3)
             save(app); saved(app)
             top(app); XCTAssertTrue(app.buttons["projectPicker"].label.contains(project))
