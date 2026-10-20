@@ -3,6 +3,7 @@ import SwiftUI
 /// Original evidence remains local until the mapping workflow commits the whole point.
 struct MappingMeasurementSheet: View {
     let automatic: Bool
+    var addTitle = "Добавить замер"
     let onAdd: (Measurement) throws -> Void
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
@@ -33,7 +34,7 @@ struct MappingMeasurementSheet: View {
                             .buttonStyle(.bordered).disabled(!model.isHeld && !model.canHold)
                             .accessibilityIdentifier("mappingHold")
                     }
-                    Button("Добавить замер", action: add)
+                    Button(addTitle, action: add)
                         .buttonStyle(.borderedProminent).disabled(!canAdd)
                         .accessibilityIdentifier("addMappingMeasurement")
                 }.frame(maxWidth: .infinity).controlSize(.large).padding().background(.bar)

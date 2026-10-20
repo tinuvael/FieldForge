@@ -67,6 +67,13 @@ struct MappingGeologyForm: View {
                     .disabled(sets.count >= 5).accessibilityIdentifier("addJointSet")
             }
         }
+        MappingTectonicsForm(structures: $structures)
+    }
+}
+
+struct MappingTectonicsForm: View {
+    @Binding var structures: [TectonicStructureDraft]
+    var body: some View {
         Section {
             DisclosureGroup("Тектоника: \(structures.count)") {
                 ForEach($structures) { $structure in

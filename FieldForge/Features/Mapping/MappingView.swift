@@ -7,6 +7,7 @@ struct MappingView: View {
     @State private var showDistance = false
     @State private var lastDistance: DistanceResult?
     @State private var showPlans = false
+    @State private var choosingExcavation = false
     @State private var measurement: MappingCaptureKind?
     @FocusState private var focused: Bool
     var body: some View {
@@ -26,9 +27,14 @@ struct MappingView: View {
                         .accessibilityIdentifier("mappingJournal")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
+                    Button("Замерить расстояние", systemImage: "ruler") {
+                        focused = false; lastDistance = nil; showDistance = true
+                    }.accessibilityIdentifier("mappingDistance")
+                }
+                ToolbarItem(placement: .topBarTrailing) {
                     Menu {
-                        NavigationLink("Измерение", destination: MeasurementView())
-                        NavigationLink("Неназначенные измерения", destination: JournalView())
+                        if let lastDistance { Text("Приблизительно: \(lastDistance.text) · не сохранено") }
+
                         NavigationLink("Настройки", destination: SettingsView())
                     } label: { Label("Сервисы", systemImage: "ellipsis.circle") }.accessibilityIdentifier("mappingServices")
                 }
@@ -51,6 +57,9 @@ struct MappingView: View {
             }
         }
         .sheet(item: $editor) { kind in ContextEditor(kind: kind) }
+        .sheet(isPresented: $choosingExcavation) {
+            ExcavationSelectionView(selection: context(\.excavationID))
+        }
         .alert("Картирование", isPresented: Binding(get: { mapping.error != nil }, set: { if !$0 { mapping.error = nil } })) {
             Button("Понятно", role: .cancel) { mapping.error = nil }
         } message: { Text(mapping.error ?? "") }
@@ -83,7 +92,17 @@ struct MappingView: View {
             VStack(spacing: 4) {
                 selector("Проект", id: "projectPicker", values: w.journal.projects.map { ($0.id, $0.name) }, selection: context(\.projectID), kind: .project)
                 selector("Горизонт", id: "horizonPicker", values: w.horizons.map { ($0.id, $0.displayName) }, selection: context(\.horizonID), kind: .horizon)
-                selector("Выработка", id: "excavationPicker", values: w.excavations.map { ($0.id, $0.name) }, selection: context(\.excavationID), kind: .excavation)
+                HStack {
+                    Button { focused = false; choosingExcavation = true } label: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Выработка").font(.caption).foregroundStyle(.secondary)
+                            Label(w.excavations.first { $0.id == w.context.excavationID }?.name ?? "Выбрать выработку", systemImage: "chevron.up.chevron.down")
+                                .font(.headline).lineLimit(2)
+                        }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    }.accessibilityIdentifier("excavationPicker")
+                    Button("Создать выработку", systemImage: "plus") { focused = false; editor = .excavation }
+                        .disabled(w.context.projectID == nil).font(.subheadline)
+                }
             }.padding(.horizontal).padding(.vertical, 6).background(.bar)
             Form {
                 Section("Пикет и дата") {
@@ -94,17 +113,21 @@ struct MappingView: View {
                         .accessibilityIdentifier("mappingDate")
                 }
                 Section {
-                    MappingIntervalForm(start: draft(\.startPicket, fallback: ""), end: draft(\.endPicket, fallback: ""),
-                                        position: draft(\.observationPosition, fallback: nil), focus: $focused)
-                }
-                Section {
                     coordinate("X", \.x); coordinate("Y", \.y); coordinate("Z", \.z)
                     Button("Выбрать на плане", systemImage: "map") { focused = false; showPlans = true }
                         .disabled(w.context.horizonID == nil).accessibilityIdentifier("selectHorizonPlan")
                 } header: { Text(MappingCoordinateText.header(xyUnits: w.draft.xyUnits)) } footer: {
                     Text(w.draft.zOrigin == .horizonDefault ? "Z: по горизонту · номинальная отметка, не съёмка" : "Z: ручной ввод или неизвестно · метры")
                 }
+                MappingJointSetsSection()
                 Section {
+                    NavigationLink("Дополнительно") {
+                        Form {
+                            Section {
+                                MappingIntervalForm(start: draft(\.startPicket, fallback: ""), end: draft(\.endPicket, fallback: ""),
+                                                    position: draft(\.observationPosition, fallback: nil), focus: $focused)
+                            }
+                            Section("Исходные замеры") {
                     Button("Измерить iPhone", systemImage: "iphone.radiowaves.left.and.right") {
                         focused = false; measurement = .automatic
                     }.accessibilityIdentifier("captureMappingAutomatic")
@@ -121,29 +144,19 @@ struct MappingView: View {
                                 .buttonStyle(.borderless).accessibilityLabel("Удалить замер из черновика")
                         }.accessibilityIdentifier("draftMeasurement-\(reading.id.uuidString)")
                     }
-                } header: { Text("Замеры: \(w.draft.measurements.count)") } footer: {
-                    Text("Исходные замеры сохраняются вместе с точкой. Системы J1–J5 не назначаются автоматически.")
-                }
-                Section {
-                    Button("Замерить расстояние", systemImage: "ruler") {
-                        focused = false; lastDistance = nil; showDistance = true
-                    }.frame(minHeight: 44).accessibilityIdentifier("mappingDistance")
-                    if let lastDistance {
-                        Text("Последний замер: \(lastDistance.text)").font(.title3.monospacedDigit())
-                            .accessibilityIdentifier("mappingLastDistance")
+                            }
+                            MappingTectonicsForm(structures: draft(\.tectonicStructures, fallback: []))
+                        }.navigationTitle("Дополнительно").navigationBarTitleDisplayMode(.inline)
+                            .scrollDismissesKeyboard(.interactively)
                     }
-                } footer: {
-                    Text("Приблизительный AR/LiDAR замер · без записи в журнал")
                 }
-                DraftPhotosSection()
-                MappingGeologyForm(sets: draft(\.jointSets, fallback: []), structures: draft(\.tectonicStructures, fallback: []),
-                                   measurements: w.draft.measurements, addSet: { mapping.perform { $0.draft.addJointSet() } })
                 MappingRatingsForm(q: draft(\.bartonQ, fallback: BartonQInput()),
                                    rmr: draft(\.rmr89, fallback: RMR89Input()), focus: $focused)
                 Section("Примечания") {
                     TextField("Полевые примечания", text: draft(\.notes, fallback: ""), axis: .vertical)
                         .lineLimit(3...8).focused($focused).accessibilityIdentifier("mappingNotes")
                 }
+                DraftPhotosSection()
                 Section {
                     Button {
                         focused = false
@@ -293,4 +306,30 @@ struct ContextEditor: View {
 private enum MappingCaptureKind: String, Identifiable {
     case automatic, manual
     var id: String { rawValue }
+}
+
+private struct ExcavationSelectionView: View {
+    @EnvironmentObject private var mapping: MappingModel
+    @Environment(\.dismiss) private var dismiss
+    @Binding var selection: UUID?
+    @State private var search = ""
+    var body: some View {
+        NavigationStack {
+            List {
+                Button("Не выбрано") { selection = nil; dismiss() }
+                ForEach((mapping.workflow?.excavations ?? []).filter { search.isEmpty || $0.name.localizedCaseInsensitiveContains(search) }) { excavation in
+                    Button { selection = excavation.id; dismiss() } label: {
+                        HStack {
+                            Text(excavation.name)
+                            Spacer()
+                            if selection == excavation.id { Image(systemName: "checkmark") }
+                        }.frame(minHeight: 44)
+                    }
+                }
+                NavigationLink("Управление выработками") { ContextEditor(kind: .excavation) }
+            }.navigationTitle("Выработки")
+                .searchable(text: $search, prompt: "Название выработки")
+                .toolbar { Button("Закрыть") { dismiss() } }
+        }
+    }
 }
