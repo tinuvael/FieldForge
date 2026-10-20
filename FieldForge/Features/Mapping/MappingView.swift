@@ -127,24 +127,7 @@ struct MappingView: View {
                                 MappingIntervalForm(start: draft(\.startPicket, fallback: ""), end: draft(\.endPicket, fallback: ""),
                                                     position: draft(\.observationPosition, fallback: nil), focus: $focused)
                             }
-                            Section("Исходные замеры") {
-                    Button("Измерить iPhone", systemImage: "iphone.radiowaves.left.and.right") {
-                        focused = false; measurement = .automatic
-                    }.accessibilityIdentifier("captureMappingAutomatic")
-                    Button("Ручной ввод", systemImage: "pencil.and.list.clipboard") {
-                        focused = false; measurement = .manual
-                    }.accessibilityIdentifier("captureMappingManual")
-                    ForEach(w.draft.measurements) { reading in
-                        HStack {
-                            MeasurementSummary(reading: reading)
-                            Spacer()
-                            Button(role: .destructive) {
-                                mapping.perform { $0.draft.removeMeasurement(id: reading.id) }
-                            } label: { Image(systemName: "trash").frame(minWidth: 44, minHeight: 44) }
-                                .buttonStyle(.borderless).accessibilityLabel("Удалить замер из черновика")
-                        }.accessibilityIdentifier("draftMeasurement-\(reading.id.uuidString)")
-                    }
-                            }
+                            originalMeasurements(w)
                             MappingTectonicsForm(structures: draft(\.tectonicStructures, fallback: []))
                         }.navigationTitle("Дополнительно").navigationBarTitleDisplayMode(.inline)
                             .scrollDismissesKeyboard(.interactively)
@@ -178,6 +161,26 @@ struct MappingView: View {
                 // A new draft also needs a fresh Form/focus/presentation lifetime.
                 .id(w.draft.id)
         }.disabled(w.draft.saving).frame(maxWidth: 760).frame(maxWidth: .infinity)
+    }
+    private func originalMeasurements(_ w: MappingWorkflow) -> some View {
+        Section("Исходные замеры") {
+            Button("Измерить iPhone", systemImage: "iphone.radiowaves.left.and.right") {
+                focused = false; measurement = .automatic
+            }.accessibilityIdentifier("captureMappingAutomatic")
+            Button("Ручной ввод", systemImage: "pencil.and.list.clipboard") {
+                focused = false; measurement = .manual
+            }.accessibilityIdentifier("captureMappingManual")
+            ForEach(w.draft.measurements) { reading in
+                HStack {
+                    MeasurementSummary(reading: reading)
+                    Spacer()
+                    Button(role: .destructive) {
+                        mapping.perform { $0.draft.removeMeasurement(id: reading.id) }
+                    } label: { Image(systemName: "trash").frame(minWidth: 44, minHeight: 44) }
+                        .buttonStyle(.borderless).accessibilityLabel("Удалить замер из черновика")
+                }.accessibilityIdentifier("draftMeasurement-\(reading.id.uuidString)")
+            }
+        }
     }
     private func coordinate(_ name: String, _ key: WritableKeyPath<MappingDraft, String>) -> some View {
         HStack {
@@ -293,7 +296,10 @@ struct ContextEditor: View {
                 else { try mapping.workflow!.createProject(name: name) }
             case .horizon:
                 if let editingID { try mapping.workflow!.updateHorizon(id: editingID, elevation: elevation, datum: datum) }
-                else { editingID = try mapping.workflow!.createHorizon(elevation: elevation, datum: datum) }
+                else {
+                    let id = try mapping.workflow!.createHorizon(elevation: elevation, datum: datum)
+                    load(id)
+                }
             case .excavation:
                 if let editingID { try mapping.workflow!.updateExcavation(id: editingID, name: name, horizonIDs: horizonIDs) }
                 else { try mapping.workflow!.createExcavation(name: name, horizonIDs: horizonIDs) }

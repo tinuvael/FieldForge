@@ -69,7 +69,12 @@ struct WedgesView: View {
     private var geometrySection: some View {
         Section("Геометрия выработки") {
             HStack {
-                TextField("Азимут оси, °", text: Binding(get: { axisText }, set: { axisText = $0; axisEdited = true }))
+                TextField("Азимут оси, °", text: Binding(get: {
+                    if !axisEdited, focusedField != .axis, let value = WedgeInput.number(axisText) {
+                        return EngineeringDisplay.number(value, decimals: 1)
+                    }
+                    return axisText
+                }, set: { axisText = $0; axisEdited = true }))
                     .keyboardType(.decimalPad)
                     .focused($focusedField, equals: .axis)
                 Button("Замерить ось") { focusedField = nil; headingPresented = true }.buttonStyle(.bordered)
@@ -105,7 +110,13 @@ struct WedgesView: View {
     private func dimensionRow(_ title: String, input: Binding<WedgeDimensionInput>, target: DimensionTarget) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                TextField(title, text: Binding(get: { input.wrappedValue.text }, set: { input.wrappedValue.edit($0) }))
+                TextField(title, text: Binding(get: {
+                    let field: InputField = target == .width ? .width : .height
+                    if !input.wrappedValue.manuallyEdited, focusedField != field, let result = input.wrappedValue.measurement {
+                        return EngineeringDisplay.number(result.metres, decimals: 2)
+                    }
+                    return input.wrappedValue.text
+                }, set: { input.wrappedValue.edit($0) }))
                     .keyboardType(.decimalPad)
                     .focused($focusedField, equals: target == .width ? .width : .height)
                 Button("LiDAR") { focusedField = nil; distanceTarget = target }.buttonStyle(.bordered)

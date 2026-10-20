@@ -212,6 +212,11 @@ struct MappingObservationDetail: View {
                     Text(c.provenance)
                     LabeledContent("Источник Z", value: c.zOrigin == .horizonDefault ? "По горизонту · не съёмка" : c.zOrigin == .manualOverride ? "Ручное значение" : "Не указан в исходной записи")
                     if let level = c.zHorizonElevation { Text("Исходная отметка: \(ElevationInput.label(level)); система: \(c.zDatum ?? "unknown")") }
+                    DisclosureGroup("Полная точность координат") {
+                        LabeledContent("X", value: c.x.map { CSVExporter.engineeringNumber($0) } ?? "Неизвестно")
+                        LabeledContent("Y", value: c.y.map { CSVExporter.engineeringNumber($0) } ?? "Неизвестно")
+                        LabeledContent("Z", value: c.z.map { CSVExporter.engineeringNumber($0) } ?? "Неизвестно")
+                    }.font(.caption).textSelection(.enabled)
                 } else { Text("Координаты не заданы") }
             }
             if !historical { ObservationPhotosSection(pointID: record.id) }

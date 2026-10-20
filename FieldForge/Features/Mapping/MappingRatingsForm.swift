@@ -99,13 +99,6 @@ private struct QCoefficientForm: View {
                 RatingField("\(parameter.rawValue): выберите значение \(row.rangeText)", text: $input.value, id: "qValue-\(parameter.rawValue)", focus: focus, numeric: true)
                 RatingField("Обоснование значения диапазона", text: $input.evidence, id: "qEvidence-\(parameter.rawValue)", focus: focus)
             }
-            DisclosureGroup("Описание \(parameter.rawValue) · \(row.id)") {
-                Text(row.description).font(.caption)
-                if row.minimum == row.maximum {
-                    RatingField("\(parameter.rawValue): \(row.rangeText)", text: $input.value, id: "qValue-\(parameter.rawValue)", focus: focus, numeric: true)
-                    RatingField("Источник / обоснование", text: $input.evidence, id: "qEvidence-\(parameter.rawValue)", focus: focus)
-                }
-            }
         }
     }
 }
@@ -114,6 +107,7 @@ private struct QCoefficientSelection: View {
     let parameter: QParameter
     @Binding var input: QCoefficientInput
     @Environment(\.dismiss) private var dismiss
+    @FocusState private var focused: Bool
     var body: some View {
         List {
             Button("Не выбрано") { input.select(nil, parameter: parameter); dismiss() }
@@ -129,7 +123,16 @@ private struct QCoefficientSelection: View {
                     }.padding(.vertical, 4)
                 }
             }
+            if let row = QMethod.rows(parameter).first(where: { $0.id == input.category }), row.minimum == row.maximum {
+                DisclosureGroup("Дополнительно · выбранная категория") {
+                    Text(row.description).font(.caption)
+                    RatingField("\(parameter.rawValue): \(row.rangeText)", text: $input.value, id: "qValue-\(parameter.rawValue)", focus: $focused, numeric: true)
+                    RatingField("Источник / обоснование", text: $input.evidence, id: "qEvidence-\(parameter.rawValue)", focus: $focused)
+                }
+            }
         }.navigationTitle(parameter.title).navigationBarTitleDisplayMode(.inline)
+            .scrollDismissesKeyboard(.interactively)
+            .toolbar { ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Готово") { focused = false } } }
     }
 }
 
@@ -154,8 +157,8 @@ struct QCalculationText: View {
             Text("Q ≈ \(EngineeringDisplay.significant(result.value))").font(.headline).accessibilityIdentifier("qResult")
             Text(result.rockClass?.title ?? "Значение вне опубликованной шкалы классов 0,001…1000")
             if !compact {
-            Text("RQD исходное: \(EngineeringDisplay.significant(result.measuredRQD))%; в расчёте: \(EngineeringDisplay.significant(result.calculationRQD))%")
-            Text("Q = (\(EngineeringDisplay.significant(result.calculationRQD)) / \(EngineeringDisplay.significant(result.jn))) × (\(EngineeringDisplay.significant(result.jr)) / \(EngineeringDisplay.significant(result.ja))) × (\(EngineeringDisplay.significant(result.jw)) / \(EngineeringDisplay.significant(result.srf)))")
+                Text("RQD исходное: \(EngineeringDisplay.significant(result.measuredRQD))%; в расчёте: \(EngineeringDisplay.significant(result.calculationRQD))%")
+                Text("Q = (\(EngineeringDisplay.significant(result.calculationRQD)) / \(EngineeringDisplay.significant(result.jn))) × (\(EngineeringDisplay.significant(result.jr)) / \(EngineeringDisplay.significant(result.ja))) × (\(EngineeringDisplay.significant(result.jw)) / \(EngineeringDisplay.significant(result.srf)))")
                 .font(.caption).textSelection(.enabled)
             }
         } else {
