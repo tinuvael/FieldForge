@@ -84,8 +84,8 @@ struct WedgesView: View {
                 .font(.caption).foregroundStyle(.secondary)
             if let capture = axisCapture {
                 DisclosureGroup(axisEdited ? "Исходный замер оси · изменён вручную" : "Сведения о замере оси") {
-                    Text("\(capture.sample.timestamp.formatted()) · \(capture.azimuth.formatted())° · калибровка высокая")
-                    Text("Поле \(capture.sample.magneticField.length.formatted()) мкТл. Магнитные помехи не исключены.")
+                    Text("\(capture.sample.timestamp.formatted()) · \(EngineeringDisplay.number(capture.azimuth, decimals: 1))° · калибровка высокая")
+                    Text("Поле \(EngineeringDisplay.number(capture.sample.magneticField.length, decimals: 1)) мкТл. Магнитные помехи не исключены.")
                 }.font(.caption)
             }
             if WedgeInput.azimuth(axisText) == nil { Text("Укажите азимут оси от 0 до 360°.").font(.caption).foregroundStyle(.orange) }

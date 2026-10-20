@@ -108,10 +108,10 @@ struct QCalculationText: View {
     let evaluation: QEvaluation
     var body: some View {
         if let result = evaluation.result {
-            Text("Q ≈ \(String(format: "%.6g", locale: Locale(identifier: "ru_RU"), result.value))").font(.headline).accessibilityIdentifier("qResult")
+            Text("Q ≈ \(EngineeringDisplay.significant(result.value))").font(.headline).accessibilityIdentifier("qResult")
             Text(result.rockClass?.title ?? "Значение вне опубликованной шкалы классов 0,001…1000")
-            Text("RQD исходное: \(CSVExporter.engineeringNumber(result.measuredRQD))%; в расчёте: \(CSVExporter.engineeringNumber(result.calculationRQD))%")
-            Text("Q = (\(CSVExporter.engineeringNumber(result.calculationRQD)) / \(CSVExporter.engineeringNumber(result.jn))) × (\(CSVExporter.engineeringNumber(result.jr)) / \(CSVExporter.engineeringNumber(result.ja))) × (\(CSVExporter.engineeringNumber(result.jw)) / \(CSVExporter.engineeringNumber(result.srf)))")
+            Text("RQD исходное: \(EngineeringDisplay.significant(result.measuredRQD))%; в расчёте: \(EngineeringDisplay.significant(result.calculationRQD))%")
+            Text("Q = (\(EngineeringDisplay.significant(result.calculationRQD)) / \(EngineeringDisplay.significant(result.jn))) × (\(EngineeringDisplay.significant(result.jr)) / \(EngineeringDisplay.significant(result.ja))) × (\(EngineeringDisplay.significant(result.jw)) / \(EngineeringDisplay.significant(result.srf)))")
                 .font(.caption).textSelection(.enabled)
         } else {
             Text("Недостаточно данных для расчёта").accessibilityIdentifier("qMissingStatus")

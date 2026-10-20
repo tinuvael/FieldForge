@@ -87,7 +87,7 @@ struct WedgeSceneView: UIViewRepresentable {
             }
         }
         line(point(.init(x: 0, y: 0, z: 0)), point(.init(x: 0, y: dimensions.length, z: 0)), color: .systemOrange)
-        let axisLabel = axisAzimuth.map { "Y → \($0.formatted(.number.precision(.fractionLength(1))))°" } ?? "Y → ось; азимут не задан"
+        let axisLabel = axisAzimuth.map { "Y → \(EngineeringDisplay.number($0, decimals: 1))°" } ?? "Y → ось; азимут не задан"
         label(axisLabel, at: point(.init(x: 0, y: dimensions.length, z: 0)), color: .systemOrange)
         let cue = min(dimensions.width, dimensions.height) * 0.35
         line(point(.init(x: 0, y: 0, z: 0)), point(.init(x: cue, y: 0, z: 0)), color: .systemRed)

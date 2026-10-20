@@ -193,7 +193,7 @@ struct MappingObservationDetail: View {
                 LabeledContent("Горизонт", value: mapping.workflow?.journal.horizons.first { $0.id == record.horizonID }?.displayName ?? record.horizonID.uuidString)
                 LabeledContent("Выработка", value: mapping.workflow?.journal.excavations.first { $0.id == record.excavationID }?.name ?? record.excavationID.uuidString)
                 LabeledContent("Пикет", value: record.picket)
-                LabeledContent("Метры", value: CSVExporter.number(record.chainageMeters))
+                LabeledContent("Метры", value: EngineeringDisplay.number(record.chainageMeters))
                 LabeledContent("Начало / направление", value: record.chainageOriginAndDirection == "unknown" ? "Неизвестно" : record.chainageOriginAndDirection)
                 LabeledContent("Дата наблюдения", value: MappingDateText.format(record))
                 Text(record.observedTimeZoneID)
@@ -201,9 +201,9 @@ struct MappingObservationDetail: View {
             Section(record.coordinates.map { MappingCoordinateText.header(xyUnits: $0.units) } ?? "Координаты") {
                 if let c = record.coordinates {
                     let xyUnit = MappingCoordinateText.xyUnit(c.units)
-                    LabeledContent(c.units == "m" ? "X" : "X, \(xyUnit)", value: c.x.map { CSVExporter.number($0) } ?? "Неизвестно")
-                    LabeledContent(c.units == "m" ? "Y" : "Y, \(xyUnit)", value: c.y.map { CSVExporter.number($0) } ?? "Неизвестно")
-                    LabeledContent(c.units == "m" ? "Z" : "Z, м", value: c.z.map { CSVExporter.number($0) } ?? "Неизвестно")
+                    LabeledContent(c.units == "m" ? "X" : "X, \(xyUnit)", value: c.x.map { EngineeringDisplay.number($0) } ?? "Неизвестно")
+                    LabeledContent(c.units == "m" ? "Y" : "Y, \(xyUnit)", value: c.y.map { EngineeringDisplay.number($0) } ?? "Неизвестно")
+                    LabeledContent(c.units == "m" ? "Z" : "Z, м", value: c.z.map { EngineeringDisplay.number($0) } ?? "Неизвестно")
                     LabeledContent("СК", value: c.crs); LabeledContent("Оси / высоты", value: c.axes)
                     Text(c.provenance)
                     LabeledContent("Источник Z", value: c.zOrigin == .horizonDefault ? "По горизонту · не съёмка" : c.zOrigin == .manualOverride ? "Ручное значение" : "Не указан в исходной записи")

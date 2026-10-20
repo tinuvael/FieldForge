@@ -337,7 +337,7 @@ struct HorizonPlanView: View {
             }.buttonStyle(.bordered).padding(.horizontal)
             if let proposed {
                 VStack {
-                    Text("Новая: X \(CSVExporter.number(proposed.x)), Y \(CSVExporter.number(proposed.y))")
+                    Text("Новая: X \(EngineeringDisplay.number(proposed.x)), Y \(EngineeringDisplay.number(proposed.y))")
                         .font(.caption).accessibilityIdentifier("planProposedXY")
                     Button("Подтвердить X/Y") {
                         do {

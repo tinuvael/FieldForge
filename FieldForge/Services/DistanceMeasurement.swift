@@ -37,7 +37,7 @@ enum DistanceMath {
     }
 
     static func text(_ metres: Double) -> String {
-        metres.formatted(.number.locale(Locale(identifier: "ru_RU")).precision(.fractionLength(3))) + " м"
+        EngineeringDisplay.number(metres) + " м"
     }
 }
 
