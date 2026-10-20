@@ -5,6 +5,33 @@ import Combine
     @Published var workflow: MappingWorkflow?
     @Published var error: String?
     @Published var success = false
+    // Disposable UI preferences, outside the append-only mapping journal.
+    @Published private var activePlanIDs = UserDefaults.standard.dictionary(forKey: "FieldForge.activePlans.v1") as? [String: String] ?? [:]
+    func plans(for horizonID: UUID) -> [MappingPlanReference] {
+        guard let workflow, workflow.journal.horizons.contains(where: {
+            $0.id == horizonID && $0.projectID == workflow.context.projectID
+        }) else { return [] }
+        return workflow.journal.plans.filter { $0.horizonID == horizonID }
+    }
+    private func planKey(_ horizonID: UUID) -> String? {
+        workflow?.context.projectID.map { "\($0.uuidString)/\(horizonID.uuidString)" }
+    }
+    func activePlan(for horizonID: UUID) -> MappingPlanReference? {
+        let available = plans(for: horizonID)
+        if let key = planKey(horizonID), let id = activePlanIDs[key] {
+            return available.first { $0.id.uuidString == id }
+        }
+        // Import order is journal append order; no geometric compatibility is implied.
+        return available.last
+    }
+    func hasExplicitPlan(for horizonID: UUID) -> Bool {
+        planKey(horizonID).map { activePlanIDs[$0] != nil } ?? false
+    }
+    func selectActivePlan(_ plan: MappingPlanReference) {
+        guard plans(for: plan.horizonID).contains(plan), let key = planKey(plan.horizonID) else { return }
+        activePlanIDs[key] = plan.id.uuidString
+        UserDefaults.standard.set(activePlanIDs, forKey: "FieldForge.activePlans.v1")
+    }
     private(set) var planStore: ManagedPlanStore?
     private(set) var photoStore: ManagedPhotoStore?
     @Published var photoBusy = false

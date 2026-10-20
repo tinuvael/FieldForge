@@ -236,6 +236,9 @@ struct ContextEditor: View {
                 }
                 if kind == .horizon, editingID != nil {
                     Section {
+                        if let editingID {
+                            NavigationLink("DXF: план и версии") { HorizonPlansView(horizonID: editingID) }
+                        }
                         NavigationLink("Высотная система · необязательно") {
                             Form {
                                 TextField("Высотная система", text: $datum)
@@ -277,12 +280,12 @@ struct ContextEditor: View {
                 else { try mapping.workflow!.createProject(name: name) }
             case .horizon:
                 if let editingID { try mapping.workflow!.updateHorizon(id: editingID, elevation: elevation, datum: datum) }
-                else { try mapping.workflow!.createHorizon(elevation: elevation, datum: datum) }
+                else { editingID = try mapping.workflow!.createHorizon(elevation: elevation, datum: datum) }
             case .excavation:
                 if let editingID { try mapping.workflow!.updateExcavation(id: editingID, name: name, horizonIDs: horizonIDs) }
                 else { try mapping.workflow!.createExcavation(name: name, horizonIDs: horizonIDs) }
             }
-            dismiss()
+            if kind != .horizon { dismiss() }
         } catch { self.error = error.localizedDescription }
     }
 }
