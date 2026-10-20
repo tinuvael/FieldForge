@@ -1,6 +1,6 @@
 # Import/export and spatial integration boundaries
 
-**P5.1 implemented:** [Project mapping CSV contract](p5-1-mapping-csv.md) defines project/optional horizon/excavation selection, inclusive field dates in an explicit time zone, a frozen effective-version snapshot, 14 related CSV tables and manifest, native sharing, photo metadata only and precision/formula handling. This is separate from the standalone measurement CSV below. XLSX and original-photo packages remain planned.
+**P5.1 implemented:** [Project mapping CSV contract](p5-1-mapping-csv.md) defines project/optional horizon/excavation selection, inclusive field dates in an explicit time zone, a frozen effective-version snapshot, 14 related CSV tables and manifest, native sharing, photo metadata only and precision/formula handling. This is separate from the standalone measurement CSV below. **P5.2 implemented:** [Native offline XLSX](p5-2-mapping-xlsx.md) uses that same typed snapshot, adding a Russian summary, 14 relational sheets, styles, filters and exact-text precision protection. Original-photo packages remain planned.
 
 **Pre-MVP owner storage decision:** mapping uses only current experimental schema **8**. No automatic mapping migrations, new `.pN-backup`, resets or deletions; old/corrupt files fail closed and all existing files are preserved. Earlier mapping-schema descriptions below are historical, not supported compatibility. Atomic current saves/`.previous`, integrity, external-change guards and immutable evidence/history remain. The independent original-measurement journal keeps its deployed compatibility. See [current storage/recovery](p4-1-photos.md) and [AGENTS.md](../AGENTS.md).
 
@@ -31,7 +31,7 @@ The first 24 Phase 1 column names/order remain; four columns are appended:
 
 ## Planned workbook
 
-No XLSX library/generation is included now. Later evaluate OOXML implementation or a maintained offline Swift library for license, memory use, precision, escaping and interoperability. Stream rows where possible. Use explicitly typed text UUIDs/metadata, numeric engineering cells, no executable formulas/macros from user strings, documented null/status columns and an export-manifest/schema-version sheet. Keep high-precision original decimal strings alongside Excel numeric cells when Excel's numeric precision would lose information.
+P5.2 now implements dependency-free streaming OOXML/ZIP generation; the [XLSX contract](p5-2-mapping-xlsx.md) supersedes the future design below for current mapping records. Stream rows where possible. Use explicitly typed text UUIDs/metadata, numeric engineering cells, no executable formulas/macros from user strings, documented null/status columns and an export-manifest/schema-version sheet. Keep high-precision original decimal strings alongside Excel numeric cells when Excel's numeric precision would lose information.
 
 | Worksheet | Primary key / relationships / content |
 | --- | --- |

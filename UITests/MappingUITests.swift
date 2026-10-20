@@ -32,6 +32,15 @@ final class MappingUITests: XCTestCase {
         XCTAssertTrue(share.waitForExistence(timeout: 5))
         // A second share uses the same preview after the previous temporary files were cleaned.
         photoReveal(share, app: app); share.tap(); XCTAssertTrue(cancel.waitForExistence(timeout: 10)); cancel.tap()
+        let format = app.buttons["mappingExportFormat"]
+        photoReveal(format, app: app, upward: false); format.tap()
+        app.buttons["Excel (.xlsx)"].tap()
+        XCTAssertEqual(count.label, "Точек: 1") // format switches keep the frozen preview
+        photoReveal(share, app: app); XCTAssertTrue(share.label.contains("Excel")); share.tap()
+        XCTAssertTrue(cancel.waitForExistence(timeout: 10))
+        let excelShot = XCTAttachment(screenshot: XCUIScreen.main.screenshot()); excelShot.name = "P5.2 XLSX native share"; excelShot.lifetime = .keepAlways; add(excelShot)
+        cancel.tap(); photoReveal(share, app: app); share.tap()
+        XCTAssertTrue(cancel.waitForExistence(timeout: 10)); cancel.tap()
         back(app); back(app); top(app)
         XCTAssertEqual(picket.value as? String, "10")
     }
@@ -72,7 +81,7 @@ final class MappingUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["ПК 0+005"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["ПК 0+010"].exists)
         app.staticTexts["ПК 0+005"].tap()
-        XCTAssertTrue(app.staticTexts["Наблюдение · актуальная версия"].waitForExistence(timeout: 5))
+        XCTAssertTrue(heading("Наблюдение · актуальная версия", app: app).waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Дата наблюдения"].exists)
         let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot()); screenshot.name = "Mapping observation"; screenshot.lifetime = .keepAlways; add(screenshot)
         app.terminate(); app.launch()
@@ -109,7 +118,7 @@ final class MappingUITests: XCTestCase {
         app.textFields["manualDip"].tap(); app.textFields["manualDip"].typeText("45,125")
         app.textFields["manualDirection"].tap(); app.textFields["manualDirection"].typeText("270"); dismissKeyboard(app)
         XCTAssertTrue(add.isEnabled); add.tap()
-        XCTAssertTrue(app.staticTexts["Замеры: 1"].waitForExistence(timeout: 5))
+        XCTAssertTrue(heading("Замеры: 1", app: app).waitForExistence(timeout: 5))
         app.buttons["captureMappingAutomatic"].tap()
         let hold = app.buttons["mappingHold"]
         XCTAssertTrue(hold.waitForExistence(timeout: 5))
@@ -121,31 +130,31 @@ final class MappingUITests: XCTestCase {
         // A frozen complete reading remains addable after temporary backgrounding.
         XCUIDevice.shared.press(.home); app.activate()
         XCTAssertEqual(hold.label, "Повторить"); XCTAssertTrue(add.isEnabled)
-        add.tap(); XCTAssertTrue(app.staticTexts["Замеры: 2"].waitForExistence(timeout: 5))
+        add.tap(); XCTAssertTrue(heading("Замеры: 2", app: app).waitForExistence(timeout: 5))
         app.buttons["captureMappingAutomatic"].tap()
         XCTAssertTrue(app.buttons["closeMappingMeasurement"].waitForExistence(timeout: 5))
         app.buttons["closeMappingMeasurement"].tap()
-        XCTAssertTrue(app.staticTexts["Замеры: 2"].waitForExistence(timeout: 5))
+        XCTAssertTrue(heading("Замеры: 2", app: app).waitForExistence(timeout: 5))
         top(app); app.buttons["selectHorizonPlan"].tap()
         XCTAssertTrue(app.buttons["Вернуться"].waitForExistence(timeout: 5)); app.buttons["Вернуться"].tap()
         app.tabBars.buttons["План"].tap(); app.tabBars.buttons["Картирование"].tap()
-        reveal("captureMappingAutomatic", app: app); XCTAssertTrue(app.staticTexts["Замеры: 2"].exists)
+        reveal("captureMappingAutomatic", app: app); XCTAssertTrue(heading("Замеры: 2", app: app).exists)
         app.buttons["projectPicker"].tap(); app.buttons["Не выбрано"].tap()
         XCTAssertTrue(app.buttons["Остаться"].waitForExistence(timeout: 5)); app.buttons["Остаться"].tap()
-        XCTAssertTrue(app.staticTexts["Замеры: 2"].exists)
+        XCTAssertTrue(heading("Замеры: 2", app: app).exists)
         // An isolated standalone journal stays empty even after adding draft originals.
         app.buttons["mappingServices"].tap(); app.buttons["Неназначенные измерения"].tap()
         XCTAssertTrue(app.staticTexts["Неназначенных измерений нет"].waitForExistence(timeout: 5))
         app.navigationBars.buttons.element(boundBy: 0).tap()
         save(app); saved(app); top(app)
         XCTAssertEqual(app.textFields["mappingZ"].value as? String, "393")
-        reveal("captureMappingAutomatic", app: app); XCTAssertTrue(app.staticTexts["Замеры: 0"].exists)
+        reveal("captureMappingAutomatic", app: app); XCTAssertTrue(heading("Замеры: 0", app: app).exists)
         app.buttons["mappingJournal"].tap(); app.staticTexts["ПК 0+005"].tap()
         let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "pointMeasurement-"))
         revealMeasurements(rows, app: app)
         XCTAssertEqual(rows.count, 2)
         rows.firstMatch.tap()
-        XCTAssertTrue(app.staticTexts["Исходный ручной ввод"].waitForExistence(timeout: 5))
+        XCTAssertTrue(heading("Исходный ручной ввод", app: app).waitForExistence(timeout: 5))
         let originalDip = app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "45,125")).firstMatch
         for _ in 0..<8 { if originalDip.exists { break }; scrollForm(app, up: true) }
         XCTAssertTrue(originalDip.exists)
@@ -161,7 +170,7 @@ final class MappingUITests: XCTestCase {
         create("projectPicker", name: project, app: app); select("projectPicker", value: project, app: app)
         create("horizonPicker", name: "+393 м", app: app); select("horizonPicker", value: "+393 м", app: app)
         create("excavationPicker", name: "E", app: app); select("excavationPicker", value: "E", app: app)
-        fill(app.textFields["mappingPicket"], "ПК 0+005", app: app)
+        top(app); fill(app.textFields["mappingPicket"], "ПК 0+005", app: app)
         show(disclosure("Интервал и положение", app: app), app: app); disclosure("Интервал и положение", app: app).tap()
         fill(app.textFields["mappingStartPicket"], "5", app: app)
         fill(app.textFields["mappingEndPicket"], "10,5", app: app)
@@ -237,8 +246,8 @@ final class MappingUITests: XCTestCase {
             fill(app.textFields["tectonicThickness"], "0,5", app: app)
             fill(app.textFields["tectonicPicket"], "\(6 + index)", app: app)
             if index == 5 {
-                fill(app.textFields["tectonicPosition"], "У кровли", app: app)
-                fill(app.textFields["tectonicDescription"], "След разлома без замера", app: app)
+                fill(app.textViews["tectonicPosition"], "У кровли", app: app)
+                fill(app.textViews["tectonicDescription"], "След разлома без замера", app: app)
             }
             back(app)
         }
@@ -270,7 +279,7 @@ final class MappingUITests: XCTestCase {
         let links = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "jointSource-J1-"))
         show(links.element(boundBy: 1), app: app); XCTAssertEqual(links.count, 2)
         links.firstMatch.tap()
-        XCTAssertTrue(app.staticTexts["Исходный ручной ввод"].waitForExistence(timeout: 5))
+        XCTAssertTrue(heading("Исходный ручной ввод", app: app).waitForExistence(timeout: 5))
         back(app)
         for index in 1...5 {
             let row = disclosure("№\(index) · Разлом", app: app)
@@ -310,9 +319,9 @@ final class MappingUITests: XCTestCase {
         create("projectPicker", name: project, app: app); select("projectPicker", value: project, app: app)
         create("horizonPicker", name: "+393 м", app: app); select("horizonPicker", value: "+393 м", app: app)
         create("excavationPicker", name: excavation, app: app); select("excavationPicker", value: excavation, app: app)
-        fill(app.textFields["mappingPicket"], "5", app: app)
+        top(app); fill(app.textFields["mappingPicket"], "5", app: app)
         let qSection = disclosure("Barton Q", app: app); show(qSection, app: app); qSection.tap()
-        fill(app.textFields["qRQD"], "0,125", app: app)
+        fill(app.textViews["qRQD"], "0,125", app: app)
         show(app.buttons["qRQDSource"], app: app); app.buttons["qRQDSource"].tap()
         app.buttons["Измерено по керну"].tap()
         show(app.buttons["qLocation"], app: app); app.buttons["qLocation"].tap(); app.buttons["Обычный участок · Jn ×1"].tap()
@@ -326,26 +335,26 @@ final class MappingUITests: XCTestCase {
             XCTAssertTrue(row.waitForExistence(timeout: 5), app.debugDescription); row.tap()
             show(group, app: app, upward: false); group.tap()
         }
-        fill(app.textFields["qAssessmentSource"], "UI field notebook", app: app)
+        fill(app.textViews["qAssessmentSource"], "UI field notebook", app: app)
         show(app.staticTexts["qResult"], app: app); XCTAssertTrue(app.staticTexts["qResult"].label.contains("1,66667"))
         let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot()); screenshot.name = "NGI 2025 Q result and RQD minimum convention"; screenshot.lifetime = .keepAlways; add(screenshot)
         show(qSection, app: app, upward: false); qSection.tap()
         let rmrSection = disclosure("RMR", app: app); show(rmrSection, app: app); rmrSection.tap()
         XCTAssertTrue(app.staticTexts["rmrUnavailable"].exists)
-        fill(app.textFields["rmrStrength"], "-1", app: app)
+        fill(app.textViews["rmrStrength"], "-1", app: app)
         save(app)
         XCTAssertTrue(app.buttons["Понятно"].waitForExistence(timeout: 5)); app.buttons["Понятно"].tap()
-        show(app.textFields["rmrStrength"], app: app, upward: false)
-        XCTAssertEqual(app.textFields["rmrStrength"].value as? String, "-1")
-        fill(app.textFields["rmrStrength"], "120", app: app)
+        show(app.textViews["rmrStrength"], app: app, upward: false)
+        XCTAssertEqual(app.textViews["rmrStrength"].value as? String, "-1")
+        fill(app.textViews["rmrStrength"], "120", app: app)
         show(rmrSection, app: app, upward: false); rmrSection.tap()
         save(app); saved(app); top(app)
         XCTAssertTrue(app.buttons["projectPicker"].label.contains(project)); XCTAssertTrue(app.buttons["excavationPicker"].label.contains(excavation))
         XCTAssertEqual(app.textFields["mappingPicket"].value as? String, "Пикет: ПК 0+005 или метры")
         XCTAssertEqual(app.textFields["mappingZ"].value as? String, "393")
         show(qSection, app: app); qSection.tap()
-        show(app.textFields["qRQD"], app: app)
-        XCTAssertEqual(app.textFields["qRQD"].value as? String, "Не указано")
+        show(app.textViews["qRQD"], app: app)
+        XCTAssertEqual(app.textViews["qRQD"].value as? String, "Не указано")
         show(qSection, app: app, upward: false); qSection.tap()
         top(app); fill(app.textFields["mappingPicket"], "10", app: app); save(app); saved(app)
         app.terminate(); app.launch()
@@ -366,7 +375,7 @@ final class MappingUITests: XCTestCase {
         create("projectPicker", name: project, app: app); select("projectPicker", value: project, app: app)
         create("horizonPicker", name: "+393 м", app: app); select("horizonPicker", value: "+393 м", app: app)
         create("excavationPicker", name: "E", app: app); select("excavationPicker", value: "E", app: app)
-        fill(app.textFields["mappingPicket"], "5", app: app)
+        top(app); fill(app.textFields["mappingPicket"], "5", app: app)
         reveal("captureMappingManual", app: app); app.buttons["captureMappingManual"].tap()
         fill(app.textFields["manualDip"], "45,125", app: app); fill(app.textFields["manualDirection"], "270", app: app)
         app.buttons["addMappingMeasurement"].tap()
@@ -398,8 +407,8 @@ final class MappingUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Продолжить редактирование"].waitForExistence(timeout: 5)); app.buttons["Продолжить редактирование"].tap()
         show(app.buttons["saveMappingCorrection"], app: app); app.buttons["saveMappingCorrection"].tap()
         XCTAssertTrue(app.staticTexts["correctionError"].waitForExistence(timeout: 5))
-        show(app.textFields["correctionReason"], app: app, upward: false)
-        fill(app.textFields["correctionReason"], "Исправлены пикет, J1, мощность и положение", app: app)
+        show(app.textViews["correctionReason"], app: app, upward: false)
+        fill(app.textViews["correctionReason"], "Исправлены пикет, J1, мощность и положение", app: app)
         show(disclosure("Системы трещин", app: app), app: app); disclosure("Системы трещин", app: app).tap()
         show(app.buttons["editJointSet-J1"], app: app); app.buttons["editJointSet-J1"].tap()
         XCTAssertEqual(app.textFields["geologyDip"].value as? String, "46")
@@ -418,10 +427,10 @@ final class MappingUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["J1 · ориентация и север"].waitForExistence(timeout: 5)); back(app)
         app.buttons["mappingOriginalVersion"].tap()
         XCTAssertFalse(app.buttons["editMappingObservation"].exists)
-        XCTAssertTrue(app.staticTexts["Исторический снимок · только просмотр"].exists)
+        XCTAssertTrue(heading("Исторический снимок · только просмотр", app: app).exists)
         back(app); back(app)
         app.buttons["editMappingObservation"].tap()
-        fill(app.textFields["correctionReason"], "Проверка повторного исправления", app: app)
+        fill(app.textViews["correctionReason"], "Проверка повторного исправления", app: app)
         fill(app.textFields["correctionPicket"], "25", app: app)
         show(app.buttons["saveMappingCorrection"], app: app); app.buttons["saveMappingCorrection"].tap()
         XCTAssertTrue(app.buttons["editMappingObservation"].waitForExistence(timeout: 10))
@@ -436,13 +445,32 @@ final class MappingUITests: XCTestCase {
         XCTAssertTrue(app.buttons["planPoints"].waitForExistence(timeout: 10)); XCTAssertTrue(app.buttons["planPoints"].label.contains("1"))
     }
     @MainActor private func disclosure(_ title: String, app: XCUIApplication) -> XCUIElement {
-        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch
+        app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", title)).firstMatch
+    }
+    // SwiftUI uppercases Section headers on this runtime; retain the full expected text/count.
+    @MainActor private func heading(_ title: String, app: XCUIApplication) -> XCUIElement {
+        app.staticTexts.matching(NSPredicate(format: "label ==[c] %@", title)).firstMatch
     }
     @MainActor private func fill(_ field: XCUIElement, _ text: String, app: XCUIApplication) {
-        show(field, app: app); field.tap()
+        show(field, app: app)
         let old = field.value as? String ?? ""
-        if old != field.placeholderValue { field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: old.count)) }
-        field.typeText(text); dismissKeyboard(app)
+        let placeholder = field.placeholderValue ?? ""
+        field.tap()
+        // Wait for actual keyboard readiness before sending events.
+        let keyboard = app.keyboards.firstMatch
+        if !keyboard.waitForExistence(timeout: 2) {
+            field.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.5)).tap()
+        }
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 5), app.debugDescription)
+        if !old.isEmpty && old != placeholder {
+            for _ in old { field.typeText(XCUIKeyboardKey.delete.rawValue) }
+        }
+        // Keyboard batches can lose characters while validation or multiline rows update.
+        // Separate native XCTest actions wait for quiescence after every character.
+        for character in text { field.typeText(String(character)) }
+        let actual = field.value as? String ?? ""
+        XCTAssertEqual(actual == placeholder ? "" : actual, text, "Native keyboard input must reach the field intact")
+        dismissKeyboard(app)
     }
     @MainActor private func show(_ element: XCUIElement, app: XCUIApplication, upward: Bool = true) {
         for _ in 0..<24 {
@@ -454,6 +482,8 @@ final class MappingUITests: XCTestCase {
             }
             scrollForm(app, up: upward)
         }
+        let tree = XCTAttachment(string: app.debugDescription)
+        tree.name = "Unreachable form element"; tree.lifetime = .keepAlways; add(tree)
         XCTFail("Element not visible: \(element)")
     }
     @MainActor func testP42DraftPhotosCancelDiscardTwoPointsAndRelaunch() throws {
@@ -540,7 +570,7 @@ final class MappingUITests: XCTestCase {
         create("projectPicker", name: project, app: app); select("projectPicker", value: project, app: app)
         create("horizonPicker", name: "+393 м", app: app); select("horizonPicker", value: "+393 м", app: app)
         create("excavationPicker", name: "E", app: app); select("excavationPicker", value: "E", app: app)
-        fill(app.textFields["mappingPicket"], "5", app: app)
+        top(app); fill(app.textFields["mappingPicket"], "5", app: app)
         fill(app.textFields["mappingZ"], "", app: app); save(app); saved(app)
         app.buttons["mappingJournal"].tap(); app.staticTexts["5"].tap()
         photoReveal(app.buttons["photoCamera"], app: app); app.buttons["photoCamera"].tap()
@@ -660,6 +690,6 @@ final class MappingUITests: XCTestCase {
         button.tap()
     }
     @MainActor private func saved(_ app: XCUIApplication) {
-        XCTAssertTrue(app.alerts["Наблюдение сохранено"].waitForExistence(timeout: 5)); app.buttons["Продолжить"].tap()
+        XCTAssertTrue(app.alerts["Наблюдение сохранено"].waitForExistence(timeout: 5), app.debugDescription); app.buttons["Продолжить"].tap()
     }
 }

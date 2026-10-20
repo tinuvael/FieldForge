@@ -2,6 +2,9 @@ import XCTest
 import UIKit
 
 final class P2MappingUITests: XCTestCase {
+    @MainActor private func heading(_ title: String, app: XCUIApplication) -> XCUIElement {
+        app.staticTexts.matching(NSPredicate(format: "label ==[c] %@", title)).firstMatch
+    }
     @MainActor func testTwoPlansPickingSavedMarkersOverlapAndDraftRetention() throws {
         continueAfterFailure = false
         let app = XCUIApplication()
@@ -74,7 +77,7 @@ final class P2MappingUITests: XCTestCase {
         canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         XCTAssertTrue(app.staticTexts["ПК 0+005"].waitForExistence(timeout: 5))
         app.staticTexts["ПК 0+005"].tap()
-        XCTAssertTrue(app.staticTexts["Наблюдение · актуальная версия"].waitForExistence(timeout: 5))
+        XCTAssertTrue(heading("Наблюдение · актуальная версия", app: app).waitForExistence(timeout: 5))
         // A DXF marker resolves the same saved observation card and P4.1 photo actions.
         reveal(app.buttons["photoCamera"], app: app)
         XCTAssertTrue(app.buttons["photoLibrary"].exists); XCTAssertTrue(app.buttons["photoFiles"].exists)
@@ -173,7 +176,7 @@ final class P2MappingUITests: XCTestCase {
         canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         XCTAssertTrue(app.staticTexts["ПК 0+005"].waitForExistence(timeout: 5))
         app.staticTexts["ПК 0+005"].tap()
-        XCTAssertTrue(app.staticTexts["Наблюдение · актуальная версия"].waitForExistence(timeout: 5))
+        XCTAssertTrue(heading("Наблюдение · актуальная версия", app: app).waitForExistence(timeout: 5))
         app.buttons["Закрыть"].tap()
         app.terminate(); app.launch()
         openPlans(app)
