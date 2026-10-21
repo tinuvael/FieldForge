@@ -29,6 +29,9 @@ struct MappingRatingsDetail: View {
                     value("Обоснование поправок", q.input.correctionEvidence)
                     value("Причина отсутствия данных", q.input.missingReason)
                     QCalculationText(evaluation: q.evaluation)
+                    if q.method == QMethod.fieldVersion && q.input.isFieldPreliminary {
+                        Text("Предварительная полевая оценка · документация неполная").font(.caption)
+                    }
                     Link("Методика NGI 2025", destination: URL(string: QMethod.url)!)
                 }
             } else { Text("Barton Q: исходные данные не вводились. Недостаточно данных для расчёта.") }

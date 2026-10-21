@@ -24,6 +24,42 @@ final class P32RatingsTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: dir) }
         try body(dir)
     }
+    func testQuickQNumericCoreWithoutAdministrativeMetadataAndLegacySnapshots() throws {
+        var input = q(); input.rqdSource = nil; input.rqdEvidence = ""; input.assessmentSource = ""; input.contact = nil
+        XCTAssertEqual(try XCTUnwrap(input.fieldEvaluation().result).value, 40.0 / 3, accuracy: 1e-14)
+        XCTAssertTrue(input.isFieldPreliminary); XCTAssertNil(try input.evaluate().result)
+        let field = try BartonQAssessment(input: input, now: now)
+        XCTAssertEqual(field.method, QMethod.fieldVersion); try field.validate()
+        var encoded = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(field)) as? [String: Any])
+        encoded["method"] = QMethod.version
+        encoded["evaluation"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(input.evaluate()))
+        let legacy = try JSONDecoder().decode(BartonQAssessment.self, from: JSONSerialization.data(withJSONObject: encoded))
+        try legacy.validate(); XCTAssertNil(legacy.evaluation.result)
+        encoded["evaluation"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(input.fieldEvaluation()))
+        XCTAssertThrowsError(try JSONDecoder().decode(BartonQAssessment.self, from: JSONSerialization.data(withJSONObject: encoded)).validate())
+        input.location = nil
+        XCTAssertEqual(try input.fieldEvaluation().missing, ["Положение выработки для Jn"])
+        input.location = .ordinary; input.jw.select(nil, parameter: .jw)
+        XCTAssertEqual(try input.fieldEvaluation().missing, ["Jw"])
+    }
+    func testQuickQContactAndExplicitPublishedRangeChoices() throws {
+        var input = q("5"); input.contact = nil; input.rqdSource = nil; input.assessmentSource = ""
+        input.location = .intersection; input.jn.select("J", parameter: .jn)
+        input.jr.select("H", parameter: .jr); input.ja.select("P", parameter: .ja)
+        input.jw.select("F", parameter: .jw); input.srf.select("L", parameter: .srf)
+        XCTAssertNil(try input.fieldEvaluation().result)
+        input.ja.value = "20"; input.jw.value = "0.05"; input.srf.value = "400"
+        XCTAssertEqual(try XCTUnwrap(input.fieldEvaluation().result).value, 1.0 / 960_000, accuracy: 1e-20)
+        XCTAssertTrue(input.isFieldPreliminary)
+        input.ja.value = "12"; XCTAssertThrowsError(try input.fieldEvaluation()) // P is 13...20, never 12.
+        input.ja.value = "20"; input.jr.select("B", parameter: .jr)
+        XCTAssertThrowsError(try input.fieldEvaluation()) // No wall contact requires Jr H.
+        input.jr.select("H", parameter: .jr); input.ja.select("M", parameter: .ja)
+        for value in ["8", "12"] { input.ja.value = value; XCTAssertNotNil(try input.fieldEvaluation().result) }
+        input.jw.select("E", parameter: .jw)
+        for value in ["0.1", "0.2"] { input.jw.value = value; XCTAssertNotNil(try input.fieldEvaluation().result) }
+        input.jw.value = "0.5"; XCTAssertThrowsError(try input.fieldEvaluation())
+    }
     func testIndependentHandCalculatedReferenceExamples() throws {
         // Independent rational arithmetic, documented in docs/p3-2b-ratings.md.
         // (80/9)*(3/2)*(1/1) = 40/3.

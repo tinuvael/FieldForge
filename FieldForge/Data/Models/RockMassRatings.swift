@@ -25,6 +25,7 @@ enum RQDSource: String, Codable, CaseIterable { case coreMeasured, fieldEstimate
 
 enum QMethod {
     static let version = "NGI-Q-2025-04/FieldForge-1"
+    static let fieldVersion = "NGI-Q-2025-04/FieldForge-field-2"
     static let reference = "NGI (April 2025), Using the Q-system: Rock mass classification and support design; §§2–3, Tables 3-1…3-7, Appendix 1–6, Figure 4-1."
     static let url = "https://www.ngi.no/globalassets/bilder/forskning-og-radgivning/bygg-og-anlegg/q-handbook_2025_english_final.pdf"
     static func rows(_ parameter: QParameter) -> [QTableRow] {
@@ -145,7 +146,17 @@ struct BartonQInput: Codable, Equatable {
         get { switch parameter { case .jn: return jn; case .jr: return jr; case .ja: return ja; case .jw: return jw; case .srf: return srf } }
         set { switch parameter { case .jn: jn = newValue; case .jr: jr = newValue; case .ja: ja = newValue; case .jw: jw = newValue; case .srf: srf = newValue } }
     }
-    func evaluate() throws -> QEvaluation {
+    // Legacy assessment validation remains byte-for-byte equivalent in its decisions.
+    func evaluate() throws -> QEvaluation { try evaluate(requireDocumentation: true) }
+    var derivedContact: QContact? { QMethod.rows(.ja).first { $0.id == ja.category }?.contact }
+    func fieldEvaluation() throws -> QEvaluation { try evaluate(requireDocumentation: false) }
+    var isFieldPreliminary: Bool {
+        var documented = self
+        if documented.contact == nil { documented.contact = derivedContact }
+        return (try? documented.evaluate().result) == nil
+    }
+    private func evaluate(requireDocumentation: Bool) throws -> QEvaluation {
+        let contact = self.contact ?? (requireDocumentation ? nil : derivedContact)
         let measured = try RatingNumber.optional(rqd, name: "RQD, %", range: 0...100)
         let n = try jn.validated(.jn), r = try jr.validated(.jr), a = try ja.validated(.ja)
         let w = try jw.validated(.jw), stress = try srf.validated(.srf)
@@ -173,20 +184,20 @@ struct BartonQInput: Codable, Equatable {
         var missing: [String] = []
         for parameter in QParameter.allCases {
             let coefficient = self[parameter]
-            if let row = QMethod.rows(parameter).first(where: { $0.id == coefficient.category }), row.minimum != row.maximum,
+            if requireDocumentation, let row = QMethod.rows(parameter).first(where: { $0.id == coefficient.category }), row.minimum != row.maximum,
                coefficient.evidence.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 missing.append("Обоснование значения диапазона \(parameter.rawValue)")
             }
         }
         if measured == nil { missing.append("RQD") }
-        if rqdSource == nil { missing.append("Источник RQD") }
+        if requireDocumentation && rqdSource == nil { missing.append("Источник RQD") }
         for (label, value) in [("Jn", n), ("Jr", r), ("Ja", a), ("Jw", w), ("SRF", stress)] { if value == nil { missing.append(label) } }
         if location == nil { missing.append("Положение выработки для Jn") }
         if contact == nil { missing.append("Контакт стенок для Jr/Ja") }
-        if assessmentSource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { missing.append("Источник оценки") }
+        if requireDocumentation && assessmentSource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { missing.append("Источник оценки") }
         if jrAdjustment == .spacingOver3m && spacing == nil { missing.append("Среднее расстояние для Jr +1") }
         if srfAdjustment == .adjacentZone && reduction == nil { missing.append("Процент снижения SRF") }
-        if (jrAdjustment != .none || srfAdjustment != .none) && correctionEvidence.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if requireDocumentation && (jrAdjustment != .none || srfAdjustment != .none) && correctionEvidence.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             missing.append("Обоснование поправок и геометрии выработки")
         }
         guard missing.isEmpty, let measured, let n, let r, let a, let w, let stress, let location else {
@@ -242,11 +253,11 @@ struct BartonQAssessment: Codable, Equatable {
     let input: BartonQInput
     let evaluation: QEvaluation
     init(input: BartonQInput, now: Date) throws {
-        method = QMethod.version; revision = 1; assessedAt = now; self.input = input; evaluation = try input.evaluate()
+        method = QMethod.fieldVersion; revision = 1; assessedAt = now; self.input = input; evaluation = try input.fieldEvaluation()
     }
     func validate() throws {
-        guard method == QMethod.version, revision == 1, assessedAt.timeIntervalSinceReferenceDate.isFinite,
-              evaluation == (try input.evaluate()) else { throw StorageError.invalidRecord }
+        guard [QMethod.version, QMethod.fieldVersion].contains(method), revision == 1, assessedAt.timeIntervalSinceReferenceDate.isFinite,
+              evaluation == (try method == QMethod.version ? input.evaluate() : input.fieldEvaluation()) else { throw StorageError.invalidRecord }
     }
 }
 
