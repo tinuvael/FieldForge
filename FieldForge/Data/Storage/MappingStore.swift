@@ -60,6 +60,9 @@ struct MappingWorkflow {
     private(set) var journal: MappingJournal
     var draft = MappingDraft()
     private(set) var pendingContext: MappingContext?
+    // Volatile drafts retain their original spatial frame until explicitly revisited.
+    private(set) var suspendedDrafts: [(context: MappingContext, draft: MappingDraft)] = []
+    var retainedDraftIDs: Set<UUID> { Set(suspendedDrafts.map { $0.draft.id } + [draft.id]) }
     private let store: any MappingStore
     init(store: any MappingStore) throws {
         self.store = store; journal = try store.load()
@@ -80,13 +83,35 @@ struct MappingWorkflow {
         guard !draft.saving else { throw MappingError.invalid("Дождитесь сохранения наблюдения.") }
         guard journal.validContext(next) else { throw StorageError.invalidRecord }
         guard next != context else { return }
-        if draft.hasChanges { pendingContext = next } else { try applyContext(next) }
+        if next.projectID == context.projectID && next.horizonID == context.horizonID {
+            var updated = journal; updated.selection = next
+            try commit(updated)
+            pendingContext = nil
+        } else if draft.hasChanges { pendingContext = next } else { try switchPreservingDraft(to: next) }
     }
     private mutating func applyContext(_ next: MappingContext) throws {
         guard !draft.saving else { throw MappingError.invalid("Дождитесь сохранения наблюдения.") }
         var updated = journal; updated.selection = next
         try commit(updated)
         resetDraft(); pendingContext = nil
+    }
+    mutating func preserveAndSwitch() throws {
+        if let pendingContext { try switchPreservingDraft(to: pendingContext) }
+    }
+    private mutating func switchPreservingDraft(to next: MappingContext) throws {
+        guard draft.photoSessions.isEmpty else {
+            throw MappingError.invalid("Дождитесь завершения получения фотографий перед сменой проекта или горизонта.")
+        }
+        let returning = suspendedDrafts.firstIndex { $0.context.projectID == next.projectID && $0.context.horizonID == next.horizonID }
+        let restored = returning.map { suspendedDrafts[$0] }
+        var updated = journal; updated.selection = restored?.context ?? next
+        guard journal.validContext(updated.selection) else { throw StorageError.invalidRecord }
+        let oldContext = context, oldDraft = draft
+        try commit(updated)
+        if let returning { suspendedDrafts.remove(at: returning) }
+        if oldDraft.hasChanges { suspendedDrafts.append((oldContext, oldDraft)) }
+        if let restored { draft = restored.draft } else { resetDraft() }
+        pendingContext = nil
     }
     mutating func confirmDiscard() throws { if let pendingContext { try applyContext(pendingContext) } }
     mutating func cancelContextChange() { pendingContext = nil }
@@ -179,7 +204,7 @@ struct MappingWorkflow {
             try operation.validate()
             let c = operation.photo.context
             guard c.pointID == draft.id, c.pointRevisionID == draft.id, c.pointVersion == 1,
-                  c.projectID == record.projectID, c.horizonID == record.horizonID, c.excavationID == record.excavationID,
+                  c.projectID == record.projectID, c.horizonID == record.horizonID,
                   c.locationBasis == .unknownBeforeFirstSave else { throw StorageError.invalidRecord }
             next.photos.append(operation.photo); next.photoAttachments.append(operation.attachment)
         }

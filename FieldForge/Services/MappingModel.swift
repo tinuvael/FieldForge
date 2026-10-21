@@ -75,7 +75,7 @@ import Combine
             try action(&workflow!)
             if workflow!.draft.id != oldID {
                 // Discard only volatile ownership. Never delete files or a saved original.
-                retainedPhotos = retainedPhotos.filter { $0.value.operation.photo.context.pointID != oldID }
+                retainedPhotos = retainedPhotos.filter { workflow!.retainedDraftIDs.contains($0.value.operation.photo.context.pointID) }
                 refreshPhotoRecovery()
             }
         } catch { self.error = error.localizedDescription }

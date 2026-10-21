@@ -23,8 +23,7 @@ extension MappingModel {
     private func accepts(_ session: DraftPhotoSession) -> Bool {
         guard let w = workflow else { return false }
         return !w.draft.saving && w.draft.id == session.context.pointID && w.draft.photoSessions.contains(session.id) &&
-            w.context.projectID == session.context.projectID && w.context.horizonID == session.context.horizonID &&
-            w.context.excavationID == session.context.excavationID
+            w.context.projectID == session.context.projectID && w.context.horizonID == session.context.horizonID
     }
     func receiveDraftPhoto(_ received: ReceivedPhoto, session: DraftPhotoSession) async {
         guard accepts(session), let files = photoStore else { return }

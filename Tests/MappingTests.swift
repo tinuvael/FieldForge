@@ -25,6 +25,40 @@ final class MappingTests: XCTestCase {
         try w.requestContext(MappingContext(projectID: p, horizonID: h, excavationID: e))
         return w
     }
+    func testCompatibleExcavationPreservesWholeDraftAndSuspendedReturn() throws {
+        let store = MemoryStore(); var w = try configured(store)
+        let originalContext = w.context
+        let nextExcavation = try w.createExcavation(name: "Next", horizonIDs: [originalContext.horizonID!])
+        w.draft.picket = "1+7"; w.draft.x = "482615.312345"; w.draft.notes = "Evidence"
+        w.draft.observedAtOverride = Date(timeIntervalSince1970: 1_800_000_000)
+        w.draft.bartonQ.rqd = "78.25"
+        var input = ManualOrientationInput(); input.dipAngleText = "45"; input.dipDirectionText = "120"
+        let reading = try input.observation(); try w.draft.addMeasurement(reading)
+        var set = JointSetDraft(identifier: .J1); set.representative = input; set.measurementIDs = [reading.id]
+        w.draft.jointSets = [set]
+        let expected = w.draft
+        try w.requestContext(MappingContext(projectID: originalContext.projectID, horizonID: originalContext.horizonID))
+        XCTAssertNil(w.pendingContext); XCTAssertEqual(w.draft, expected)
+        let selected = MappingContext(projectID: originalContext.projectID, horizonID: originalContext.horizonID, excavationID: nextExcavation)
+        try w.requestContext(selected)
+        XCTAssertEqual(w.context, selected); XCTAssertEqual(w.draft, expected); XCTAssertNil(w.pendingContext)
+        let otherProject = try w.createProject(name: "Other")
+        try w.requestContext(MappingContext(projectID: otherProject))
+        try w.preserveAndSwitch()
+        XCTAssertNotEqual(w.draft.id, expected.id)
+        try w.requestContext(MappingContext(projectID: originalContext.projectID, horizonID: originalContext.horizonID))
+        XCTAssertEqual(w.context, selected); XCTAssertEqual(w.draft, expected)
+        XCTAssertTrue(w.journal.observations.isEmpty)
+    }
+    func testCompatibleExcavationWriteFailureAndInvalidDestinationPreserveDraft() throws {
+        let store = MemoryStore(); var w = try configured(store)
+        w.draft.notes = "Retain"; let original = w.context, expected = w.draft
+        var next = original; next.excavationID = UUID()
+        XCTAssertThrowsError(try w.requestContext(next)); XCTAssertEqual(w.draft, expected)
+        next.excavationID = nil; store.fail = true
+        XCTAssertThrowsError(try w.requestContext(next))
+        XCTAssertEqual(w.context, original); XCTAssertEqual(w.draft, expected)
+    }
     private func withFile(_ check: (FileMappingStore) throws -> Void) throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

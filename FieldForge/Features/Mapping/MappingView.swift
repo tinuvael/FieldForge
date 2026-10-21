@@ -64,12 +64,12 @@ struct MappingView: View {
             Button("Понятно", role: .cancel) { mapping.error = nil }
         } message: { Text(mapping.error ?? "") }
         .alert("Наблюдение сохранено", isPresented: $mapping.success) { Button("Продолжить", role: .cancel) {} }
-        .alert("Удалить несохранённый черновик и изменить контекст?", isPresented: Binding(
+        .alert("Отложить черновик и перейти?", isPresented: Binding(
             get: { mapping.workflow?.pendingContext != nil },
             set: { if !$0 { mapping.perform { $0.cancelContextChange() } } })) {
-                Button("Удалить черновик", role: .destructive) { mapping.perform { try $0.confirmDiscard() } }
+                Button("Отложить и перейти") { mapping.perform { try $0.preserveAndSwitch() } }
                 Button("Остаться", role: .cancel) { mapping.perform { $0.cancelContextChange() } }
-            } message: { Text("Поля и фотографии черновика ещё не сохранены. Записанные файлы не удаляются автоматически.") }
+            } message: { Text("Вернитесь в этот проект и горизонт, чтобы продолжить. Черновик и фотографии сохраняются в памяти до закрытия приложения.") }
     }
     private func draft<T>(_ key: WritableKeyPath<MappingDraft, T>, fallback: T) -> Binding<T> {
         Binding(get: { mapping.workflow?.draft[keyPath: key] ?? fallback },
