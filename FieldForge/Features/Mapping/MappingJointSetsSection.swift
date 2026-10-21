@@ -3,6 +3,7 @@ import SwiftUI
 /// Representatives are explicit interpretations; accepted readings remain separate originals.
 struct MappingJointSetsSection: View {
     @EnvironmentObject private var mapping: MappingModel
+    @State private var editorOwnerID: UUID?
     @State private var editing: JointSetDraft?
     @State private var editingTectonic: TectonicStructureDraft?
     private var sets: [JointSetDraft] { mapping.workflow?.draft.jointSets ?? [] }
@@ -11,7 +12,7 @@ struct MappingJointSetsSection: View {
             Text("Системы трещин").font(.subheadline).foregroundStyle(.secondary)
             ForEach(sets) { set in
                 HStack {
-                    Button { editing = set } label: {
+                    Button { editorOwnerID = mapping.workflow?.draft.id; editing = set } label: {
                         HStack {
                             Text(set.identifier.rawValue).font(.headline)
                             if let value = try? set.representative.validated() {
@@ -30,12 +31,13 @@ struct MappingJointSetsSection: View {
             }
             Button("Добавить систему", systemImage: "plus") {
                 guard let identifier = JointSetIdentifier.allCases.first(where: { candidate in !sets.contains { $0.identifier == candidate } }) else { return }
+                editorOwnerID = mapping.workflow?.draft.id
                 editing = JointSetDraft(identifier: identifier)
             }.disabled(sets.count >= 5).accessibilityIdentifier("addJointSet")
             Text("Тектоника").font(.subheadline).foregroundStyle(.secondary)
             ForEach(mapping.workflow?.draft.tectonicStructures ?? []) { structure in
                 HStack {
-                    Button { editingTectonic = structure } label: {
+                    Button { editorOwnerID = mapping.workflow?.draft.id; editingTectonic = structure } label: {
                         HStack { Text(structure.type.title); Spacer(); Image(systemName: "pencil") }.frame(minHeight: 44)
                     }.accessibilityIdentifier("editTectonic-\(structure.id.uuidString)")
                     Button(role: .destructive) {
@@ -44,11 +46,13 @@ struct MappingJointSetsSection: View {
                         .accessibilityLabel("Удалить структуру из черновика")
                 }.buttonStyle(.borderless)
             }
-            Button("Добавить структуру", systemImage: "plus") { editingTectonic = TectonicStructureDraft() }
+            Button("Добавить структуру", systemImage: "plus") {
+                editorOwnerID = mapping.workflow?.draft.id; editingTectonic = TectonicStructureDraft()
+            }
                 .accessibilityIdentifier("addTectonicStructure")
         }
         .sheet(item: $editingTectonic) { structure in
-            let ownerID = mapping.workflow?.draft.id
+            let ownerID = editorOwnerID
             TectonicCaptureSheet(initial: structure) { updated in
                 guard mapping.workflow?.draft.id == ownerID, mapping.workflow?.draft.saving == false else {
                     throw MappingError.invalid("Черновик точки изменился. Откройте структуру заново.")
@@ -59,7 +63,7 @@ struct MappingJointSetsSection: View {
             }
         }
         .sheet(item: $editing) { set in
-            let ownerID = mapping.workflow?.draft.id
+            let ownerID = editorOwnerID
             JointSetCaptureSheet(initial: set, measurements: mapping.workflow?.draft.measurements ?? []) { updated, originals in
                 guard let workflow = mapping.workflow, workflow.draft.id == ownerID, !workflow.draft.saving else {
                     throw MappingError.invalid("Черновик точки изменился. Откройте систему заново.")

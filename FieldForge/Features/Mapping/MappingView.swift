@@ -8,7 +8,7 @@ struct MappingView: View {
     @State private var lastDistance: DistanceResult?
     @State private var showPlans = false
     @State private var choosingExcavation = false
-    @State private var measurement: MappingCaptureKind?
+    @State private var measurement: MappingCaptureRequest?
     @FocusState private var focused: Bool
     @FocusState private var coordinateFocus: String?
     var body: some View {
@@ -51,10 +51,9 @@ struct MappingView: View {
                     .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Вернуться") { showPlans = false } } }
             }
         }
-        .sheet(item: $measurement) { kind in
-            let ownerID = mapping.workflow?.draft.id
-            MappingMeasurementSheet(automatic: kind == .automatic) { reading in
-                guard mapping.workflow?.draft.id == ownerID, mapping.workflow?.draft.saving == false else {
+        .sheet(item: $measurement) { request in
+            MappingMeasurementSheet(automatic: request.automatic) { reading in
+                guard mapping.workflow?.draft.id == request.draftID, mapping.workflow?.draft.saving == false else {
                     throw MappingError.invalid("Черновик точки изменился. Откройте измерение заново.")
                 }
                 try mapping.workflow!.draft.addMeasurement(reading)
@@ -179,10 +178,12 @@ struct MappingView: View {
     private func originalMeasurements(_ w: MappingWorkflow) -> some View {
         Section("Исходные замеры") {
             Button("Измерить iPhone", systemImage: "iphone.radiowaves.left.and.right") {
-                focused = false; measurement = .automatic
+                focused = false
+                if let id = mapping.workflow?.draft.id { measurement = MappingCaptureRequest(draftID: id, automatic: true) }
             }.accessibilityIdentifier("captureMappingAutomatic")
             Button("Ручной ввод", systemImage: "pencil.and.list.clipboard") {
-                focused = false; measurement = .manual
+                focused = false
+                if let id = mapping.workflow?.draft.id { measurement = MappingCaptureRequest(draftID: id, automatic: false) }
             }.accessibilityIdentifier("captureMappingManual")
             ForEach(w.draft.measurements) { reading in
                 HStack {
@@ -320,9 +321,10 @@ struct ContextEditor: View {
     }
 }
 
-private enum MappingCaptureKind: String, Identifiable {
-    case automatic, manual
-    var id: String { rawValue }
+private struct MappingCaptureRequest: Identifiable {
+    let id = UUID()
+    let draftID: UUID
+    let automatic: Bool
 }
 
 private struct ExcavationSelectionView: View {
