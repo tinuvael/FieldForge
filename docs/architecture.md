@@ -1,5 +1,10 @@
 # Architecture foundation (Phase 2)
 
+## Second iPhone field workflow update
+
+[Second iPhone review](second-iphone-review.md) documents compatible excavation selection, volatile draft parking, isolated modal sensor sessions, tagged 10 m picket capture with legacy validation, and versioned Q numerical/documentation separation. Mapping stays on schema 8 with no migration/reset; original measurements, attachment bytes, source plans and correction history remain protected. Device crash root cause and physical qualification remain open. This current contract supersedes conflicting historical workflow descriptions below.
+
+
 ## Field UI refinement (#38, #48–53)
 
 The [field interaction contract](field-ui-refinement.md) updates presentation without changing mapping schema 8, original-measurement compatibility, engineering algorithms or export serialization. `EngineeringDisplay` is a Foundation-only output formatter. `MappingModel` owns disposable active-plan preferences keyed by project/horizon UUID in UserDefaults; journal append order is the labelled default until a valid revision is chosen. A stale selection falls back for display with a visible warning and does not rewrite preferences or engineering records. `ActiveHorizonPlanView` replaces the Plan file-list root and resets loader/view identity on horizon or plan changes. Display revision choices never update `MappingDraft.planID` or saved coordinates.

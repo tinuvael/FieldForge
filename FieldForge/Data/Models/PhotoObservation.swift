@@ -116,7 +116,9 @@ extension MappingJournal {
         for photo in photos {
             try photo.metadata.validate()
             guard let point = photoPoint(photo.context), point.projectID == photo.context.projectID,
-                  point.horizonID == photo.context.horizonID, point.excavationID == photo.context.excavationID,
+                  point.horizonID == photo.context.horizonID,
+                  (point.excavationID == photo.context.excavationID || photo.context.locationBasis == .unknownBeforeFirstSave),
+                  excavations.contains(where: { $0.id == photo.context.excavationID && $0.projectID == photo.context.projectID && $0.horizonIDs.contains(photo.context.horizonID) }),
                   photo.importedAt.timeIntervalSinceReferenceDate.isFinite,
                   photo.capturedAt?.timeIntervalSinceReferenceDate.isFinite ?? true,
                   !photo.captureTimeProvenance.isEmpty else { throw StorageError.invalidRecord }

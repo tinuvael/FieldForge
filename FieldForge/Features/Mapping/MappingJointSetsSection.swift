@@ -3,13 +3,16 @@ import SwiftUI
 /// Representatives are explicit interpretations; accepted readings remain separate originals.
 struct MappingJointSetsSection: View {
     @EnvironmentObject private var mapping: MappingModel
+    @State private var editorOwnerID: UUID?
     @State private var editing: JointSetDraft?
+    @State private var editingTectonic: TectonicStructureDraft?
     private var sets: [JointSetDraft] { mapping.workflow?.draft.jointSets ?? [] }
     var body: some View {
-        Section("Системы трещин") {
+        Section("Трещиноватость и тектоника") {
+            Text("Системы трещин").font(.subheadline).foregroundStyle(.secondary)
             ForEach(sets) { set in
                 HStack {
-                    Button { editing = set } label: {
+                    Button { editorOwnerID = mapping.workflow?.draft.id; editing = set } label: {
                         HStack {
                             Text(set.identifier.rawValue).font(.headline)
                             if let value = try? set.representative.validated() {
@@ -28,11 +31,39 @@ struct MappingJointSetsSection: View {
             }
             Button("Добавить систему", systemImage: "plus") {
                 guard let identifier = JointSetIdentifier.allCases.first(where: { candidate in !sets.contains { $0.identifier == candidate } }) else { return }
+                editorOwnerID = mapping.workflow?.draft.id
                 editing = JointSetDraft(identifier: identifier)
             }.disabled(sets.count >= 5).accessibilityIdentifier("addJointSet")
+            Text("Тектоника").font(.subheadline).foregroundStyle(.secondary)
+            ForEach(mapping.workflow?.draft.tectonicStructures ?? []) { structure in
+                HStack {
+                    Button { editorOwnerID = mapping.workflow?.draft.id; editingTectonic = structure } label: {
+                        HStack { Text(structure.type.title); Spacer(); Image(systemName: "pencil") }.frame(minHeight: 44)
+                    }.accessibilityIdentifier("editTectonic-\(structure.id.uuidString)")
+                    Button(role: .destructive) {
+                        mapping.perform { $0.draft.tectonicStructures.removeAll { $0.id == structure.id } }
+                    } label: { Image(systemName: "trash").frame(minWidth: 44, minHeight: 44) }
+                        .accessibilityLabel("Удалить структуру из черновика")
+                }.buttonStyle(.borderless)
+            }
+            Button("Добавить структуру", systemImage: "plus") {
+                editorOwnerID = mapping.workflow?.draft.id; editingTectonic = TectonicStructureDraft()
+            }
+                .accessibilityIdentifier("addTectonicStructure")
+        }
+        .sheet(item: $editingTectonic) { structure in
+            let ownerID = editorOwnerID
+            TectonicCaptureSheet(initial: structure) { updated in
+                guard mapping.workflow?.draft.id == ownerID, mapping.workflow?.draft.saving == false else {
+                    throw MappingError.invalid("Черновик точки изменился. Откройте структуру заново.")
+                }
+                _ = try updated.record()
+                mapping.workflow!.draft.tectonicStructures.removeAll { $0.id == updated.id }
+                mapping.workflow!.draft.tectonicStructures.append(updated)
+            }
         }
         .sheet(item: $editing) { set in
-            let ownerID = mapping.workflow?.draft.id
+            let ownerID = editorOwnerID
             JointSetCaptureSheet(initial: set, measurements: mapping.workflow?.draft.measurements ?? []) { updated, originals in
                 guard let workflow = mapping.workflow, workflow.draft.id == ownerID, !workflow.draft.saving else {
                     throw MappingError.invalid("Черновик точки изменился. Откройте систему заново.")
@@ -162,7 +193,7 @@ private struct JointSetCaptureSheet: View {
             .confirmationDialog("Отбросить изменения системы?", isPresented: $discard, titleVisibility: .visible) {
                 Button("Отбросить", role: .destructive) { dismiss() }
             }
-            .sheet(isPresented: $measuring) {
+            .fullScreenCover(isPresented: $measuring) {
                 MappingMeasurementSheet(automatic: true, addTitle: "Принять как \(draft.identifier.rawValue)",
                     representativeIssue: { JointRepresentativeInput.issue(for: $0) },
                     onKeepOriginal: { reading in
@@ -214,5 +245,39 @@ private enum JointRepresentativeInput {
     }
     static func issue(for reading: Measurement) -> String? {
         do { _ = try make(from: reading); return nil } catch { return error.localizedDescription }
+    }
+}
+
+private struct TectonicCaptureSheet: View {
+    let initial: TectonicStructureDraft
+    let apply: (TectonicStructureDraft) throws -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var draft: TectonicStructureDraft
+    @State private var discard = false
+    @State private var error: String?
+    init(initial: TectonicStructureDraft, apply: @escaping (TectonicStructureDraft) throws -> Void) {
+        self.initial = initial; self.apply = apply; _draft = State(initialValue: initial)
+    }
+    var body: some View {
+        NavigationStack {
+            TectonicStructureEditor(draft: $draft)
+                .interactiveDismissDisabled(draft != initial)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Отмена") { if draft != initial { discard = true } else { dismiss() } }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Принять") {
+                            do { try apply(draft); dismiss() } catch { self.error = error.localizedDescription }
+                        }.disabled((try? draft.record()) == nil)
+                    }
+                }
+                .confirmationDialog("Отбросить изменения структуры?", isPresented: $discard, titleVisibility: .visible) {
+                    Button("Отбросить", role: .destructive) { dismiss() }
+                }
+                .alert("Структура не добавлена", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
+                    Button("Понятно", role: .cancel) { error = nil }
+                } message: { Text(error ?? "") }
+        }
     }
 }

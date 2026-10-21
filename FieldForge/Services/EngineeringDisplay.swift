@@ -13,6 +13,13 @@ enum EngineeringDisplay {
         return formatter.string(from: NSNumber(value: value == 0 ? 0 : value)) ?? "—"
     }
 
+    static func coordinate(_ value: Double) -> String {
+        guard value.isFinite else { return "—" }
+        let formatter = base()
+        formatter.minimumFractionDigits = 1; formatter.maximumFractionDigits = 1
+        return formatter.string(from: NSNumber(value: value == 0 ? 0 : value)) ?? "—"
+    }
+
     static func significant(_ value: Double) -> String {
         guard value.isFinite else { return "—" }
         let formatter = base()

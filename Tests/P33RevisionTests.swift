@@ -18,7 +18,7 @@ private typealias RevisionReading = FieldForge.Measurement
         raw.source = .coreMotion; raw.referenceFrame = .magneticNorthZVertical; raw.magneticAccuracy = .high; raw.magneticField.x = 40
         let sensor = RevisionReading.process(raw)
         try w.draft.addMeasurement(manual); try w.draft.addMeasurement(sensor)
-        w.draft.picket = "ПК 0+005"; w.draft.observedAtOverride = fieldTime; w.draft.timeZoneID = "Asia/Almaty"
+        w.draft.picketConvention = .legacyMeters; w.draft.picket = "ПК 0+005"; w.draft.observedAtOverride = fieldTime; w.draft.timeZoneID = "Asia/Almaty"
         w.draft.startPicket = "5"; w.draft.endPicket = "10"; w.draft.observationPosition = .roof
         for id in [JointSetIdentifier.J1, .J2] {
             var set = JointSetDraft(identifier: id)

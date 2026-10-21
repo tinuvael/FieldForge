@@ -105,6 +105,7 @@ struct MappingObservation: Codable, Equatable, Identifiable {
     let notes: String
     let geology: MappingGeology?
     var ratings: MappingRatings? = nil
+    var picketConvention: PicketConvention? = nil
 }
 
 struct MappingJournal: Codable, Equatable {
@@ -181,7 +182,7 @@ struct MappingJournal: Codable, Equatable {
             if includingRevisions, o.geology?.jointSets.contains(where: { $0.revision != 1 }) == true { throw StorageError.invalidRecord }
             guard validContext(MappingContext(projectID: o.projectID, horizonID: o.horizonID, excavationID: o.excavationID)),
                   o.chainageMeters.isFinite, o.chainageMeters >= 0,
-                  try PicketInput.meters(o.picket) == o.chainageMeters,
+                  try (o.picketConvention ?? .legacyMeters).meters(o.picket) == o.chainageMeters,
                   !o.chainageOriginAndDirection.isEmpty,
                   o.observedAt.timeIntervalSinceReferenceDate.isFinite,
                   o.createdAt.timeIntervalSinceReferenceDate.isFinite,
@@ -242,6 +243,47 @@ enum PicketInput {
     }
 }
 
+/// Missing tags in schema-8 records retain the original kilometre/metre interpretation.
+enum PicketConvention: String, Codable {
+    case legacyMeters, tenMeters
+    func meters(_ text: String) throws -> Double {
+        switch self {
+        case .legacyMeters: return try PicketInput.meters(text)
+        case .tenMeters: return try FieldPicketInput.meters(text)
+        }
+    }
+}
+
+enum FieldPicketInput {
+    /// One picket = 10 m. Plus offsets have one integer digit (0...9), with optional decimals.
+    /// Leading-zero offsets such as 1+07 are rejected rather than guessed.
+    static func meters(_ text: String) throws -> Double {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: #"^ПК\s*"#, with: "", options: [.regularExpression, .caseInsensitive])
+        let result: Double?
+        if value.range(of: #"^[0-9]+\+[0-9](?:[.,][0-9]+)?$"#, options: .regularExpression) != nil {
+            let parts = value.split(separator: "+")
+            result = Double(parts[0]).flatMap { whole in
+                Double(parts[1].replacingOccurrences(of: ",", with: ".")).map { whole * 10 + $0 }
+            }
+        } else if value.range(of: #"^[0-9]+(?:[.,][0-9]+)?$"#, options: .regularExpression) != nil {
+            result = Double(value.replacingOccurrences(of: ",", with: ".")).map { $0 * 10 }
+        } else { result = nil }
+        guard let result, result.isFinite, result >= 0, result < 1e15 else {
+            throw MappingError.invalid("Введите пикет: 12, 1,7 или 12+9. Один пикет — 10 м; остаток после + от 0 до <10 м, например 12+9,5. Без ведущих нулей в остатке.")
+        }
+        return result
+    }
+    static func normalized(_ meters: Double) -> String {
+        let whole = floor(meters / 10), offset = meters - whole * 10
+        return "ПК " + ElevationInput.text(whole) + (offset == 0 ? "" : "+" + EngineeringDisplay.number(offset, decimals: 9))
+    }
+    static func confirmation(_ text: String) -> String? {
+        guard let meters = try? meters(text) else { return nil }
+        return "\(normalized(meters)) · \(EngineeringDisplay.number(meters, decimals: 6)) м"
+    }
+}
+
 struct MappingDraft: Equatable {
     let id: UUID
     init(id: UUID = UUID()) { self.id = id }
@@ -264,6 +306,9 @@ struct MappingDraft: Equatable {
     var startPicket = "", endPicket = ""
     var observationPosition: ObservationPosition?
     var picket = ""
+    var picketConvention = PicketConvention.tenMeters
+    var startPicketConvention = PicketConvention.tenMeters
+    var endPicketConvention = PicketConvention.tenMeters
     var chainageOriginAndDirection = ""
     var observedAtOverride: Date?
     var timeZoneID = TimeZone.current.identifier
@@ -325,6 +370,7 @@ extension MappingDraft {
     init(observation: MappingObservation, measurements: [Measurement]) {
         self.init(id: observation.id)
         self.measurements = measurements
+        picketConvention = observation.picketConvention ?? .legacyMeters
         picket = observation.picket; chainageOriginAndDirection = observation.chainageOriginAndDirection
         observedAtOverride = observation.observedAt; timeZoneID = observation.observedTimeZoneID
         notes = observation.notes
@@ -336,6 +382,8 @@ extension MappingDraft {
             zOrigin = c.zOrigin; zHorizonID = c.zHorizonID; zHorizonElevation = c.zHorizonElevation; zDatum = c.zDatum
         }
         if let g = observation.geology {
+            startPicketConvention = g.start?.convention ?? .legacyMeters
+            endPicketConvention = g.end?.convention ?? .legacyMeters
             startPicket = g.start?.text ?? ""; endPicket = g.end?.text ?? ""; observationPosition = g.position
             jointSets = g.jointSets.map(JointSetDraft.init)
             tectonicStructures = g.tectonicStructures.map(TectonicStructureDraft.init)

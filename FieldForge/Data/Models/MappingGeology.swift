@@ -13,9 +13,9 @@ enum GeologyInput {
         }
         return value
     }
-    static func optionalPicket(_ text: String, field: String) throws -> MappingPicket? {
+    static func optionalPicket(_ text: String, field: String, convention: PicketConvention = .tenMeters) throws -> MappingPicket? {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-        do { return MappingPicket(text: text, meters: try PicketInput.meters(text)) }
+        do { return MappingPicket(text: text, meters: try convention.meters(text), convention: convention) }
         catch { throw MappingError.invalid("\(field): \(error.localizedDescription)") }
     }
 }
@@ -23,8 +23,9 @@ enum GeologyInput {
 struct MappingPicket: Codable, Equatable {
     let text: String
     let meters: Double
+    var convention: PicketConvention? = nil
     func validate() throws {
-        guard meters.isFinite, meters >= 0, try PicketInput.meters(text) == meters else { throw StorageError.invalidRecord }
+        guard meters.isFinite, meters >= 0, try (convention ?? .legacyMeters).meters(text) == meters else { throw StorageError.invalidRecord }
     }
 }
 
@@ -117,12 +118,13 @@ struct TectonicStructureDraft: Equatable, Identifiable {
     var type = TectonicStructureType.fault
     var orientation = ManualOrientationInput()
     var thickness = "", picket = "", position = "", description = ""
+    var picketConvention = PicketConvention.tenMeters
     init(id: UUID = UUID()) { self.id = id }
     func record() throws -> TectonicStructure {
         _ = try orientation.validatedTectonic()
         return TectonicStructure(id: id, type: type, orientation: orientation,
             thicknessMeters: try GeologyInput.optionalNonnegative(thickness, field: "Мощность, м"),
-            picket: try GeologyInput.optionalPicket(picket, field: "Пикет структуры"), position: position, description: description)
+            picket: try GeologyInput.optionalPicket(picket, field: "Пикет структуры", convention: picketConvention), position: position, description: description)
     }
 }
 
@@ -133,8 +135,8 @@ extension MappingDraft {
         jointSets.sort { $0.identifier.rawValue < $1.identifier.rawValue }
     }
     func geology(now: Date) throws -> MappingGeology? {
-        let start = try GeologyInput.optionalPicket(startPicket, field: "Начало интервала")
-        let end = try GeologyInput.optionalPicket(endPicket, field: "Конец интервала")
+        let start = try GeologyInput.optionalPicket(startPicket, field: "Начало интервала", convention: startPicketConvention)
+        let end = try GeologyInput.optionalPicket(endPicket, field: "Конец интервала", convention: endPicketConvention)
         guard start != nil || end != nil || observationPosition != nil || !jointSets.isEmpty || !tectonicStructures.isEmpty else { return nil }
         let structures = try tectonicStructures.enumerated().map { index, draft in
             do { return try draft.record() }
@@ -171,6 +173,7 @@ extension TectonicStructureDraft {
         self.init(id: record.id)
         type = record.type; orientation = record.orientation
         thickness = record.thicknessMeters.map(ElevationInput.text) ?? ""
+        picketConvention = record.picket?.convention ?? .legacyMeters
         picket = record.picket?.text ?? ""; position = record.position; description = record.description
     }
 }

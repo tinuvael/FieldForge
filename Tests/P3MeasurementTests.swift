@@ -29,7 +29,7 @@ private typealias OriginalReading = FieldForge.Measurement
         try w.draft.addMeasurement(manual); try w.draft.addMeasurement(automatic)
         XCTAssertTrue(store.value.measurements.isEmpty); XCTAssertTrue(store.value.observations.isEmpty)
         XCTAssertEqual(w.draft.measurements.count, 2)
-        w.draft.picket = "ПК 0+005"; w.draft.notes = "Point"
+        w.draft.picket = "ПК 0+5"; w.draft.notes = "Point"
         w.draft.observedAtOverride = date.addingTimeInterval(-100); w.draft.x = "12"; w.draft.z = "390"
         let record = try w.save(now: date.addingTimeInterval(10))
         XCTAssertEqual(record.measurementIDs, [manual.id, automatic.id])
@@ -39,7 +39,7 @@ private typealias OriginalReading = FieldForge.Measurement
         XCTAssertEqual(w.context, context); XCTAssertTrue(w.draft.measurements.isEmpty)
         XCTAssertEqual(w.draft.z, "393"); XCTAssertEqual(w.draft.x, ""); XCTAssertEqual(w.draft.notes, "")
         XCTAssertNil(w.draft.observedAtOverride); XCTAssertFalse(w.draft.hasChanges)
-        w.draft.picket = "ПК 0+010"; let second = try w.save(now: date.addingTimeInterval(20))
+        w.draft.picket = "ПК 1"; let second = try w.save(now: date.addingTimeInterval(20))
         XCTAssertTrue(second.measurementIDs.isEmpty); XCTAssertNotEqual(record.id, second.id)
         let reopened = try MappingWorkflow(store: store)
         XCTAssertEqual(reopened.journal.measurements(for: record), [manual, automatic])
@@ -57,18 +57,20 @@ private typealias OriginalReading = FieldForge.Measurement
         store.fail = false; _ = try w.save()
         XCTAssertEqual(store.value.observations.count, 1); XCTAssertEqual(store.value.measurements.count, 1)
     }
-    func testMeasurementsAloneAreDirtyAndEveryContextChangeRequiresConfirmation() async throws {
+    func testMeasurementsAloneGuardSpatialContextAndSurviveExcavationChanges() async throws {
         let (_, initial) = try P2MappingTests().configured(); var w = initial
         let original = w.context; let reading = try manual(); try w.draft.addMeasurement(reading)
         let otherProject = try w.createProject(name: "Other")
         let otherHorizon = try w.createHorizon(elevation: "200")
         let otherExcavation = try w.createExcavation(name: "Other", horizonIDs: [original.horizonID!])
         for next in [MappingContext(projectID: otherProject),
-                     MappingContext(projectID: original.projectID, horizonID: otherHorizon),
-                     MappingContext(projectID: original.projectID, horizonID: original.horizonID, excavationID: otherExcavation)] {
+                     MappingContext(projectID: original.projectID, horizonID: otherHorizon)] {
             try w.requestContext(next); XCTAssertEqual(w.context, original); XCTAssertEqual(w.pendingContext, next)
             w.cancelContextChange(); XCTAssertEqual(w.draft.measurements, [reading])
         }
+        try w.requestContext(MappingContext(projectID: original.projectID, horizonID: original.horizonID, excavationID: otherExcavation))
+        XCTAssertEqual(w.context.excavationID, otherExcavation); XCTAssertNil(w.pendingContext)
+        XCTAssertEqual(w.draft.measurements, [reading])
         try w.requestContext(MappingContext(projectID: otherProject)); try w.confirmDiscard()
         XCTAssertTrue(w.draft.measurements.isEmpty); XCTAssertFalse(w.draft.hasChanges)
     }

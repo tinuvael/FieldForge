@@ -8,8 +8,9 @@ struct MappingView: View {
     @State private var lastDistance: DistanceResult?
     @State private var showPlans = false
     @State private var choosingExcavation = false
-    @State private var measurement: MappingCaptureKind?
+    @State private var measurement: MappingCaptureRequest?
     @FocusState private var focused: Bool
+    @FocusState private var coordinateFocus: String?
     var body: some View {
         NavigationStack {
             Group {
@@ -38,7 +39,7 @@ struct MappingView: View {
                         NavigationLink("Настройки", destination: SettingsView())
                     } label: { Label("Сервисы", systemImage: "ellipsis.circle") }.accessibilityIdentifier("mappingServices")
                 }
-                ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Готово") { focused = false } }
+                ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Готово") { focused = false; coordinateFocus = nil } }
             }
         }
         .fullScreenCover(isPresented: $showDistance) {
@@ -50,9 +51,11 @@ struct MappingView: View {
                     .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Вернуться") { showPlans = false } } }
             }
         }
-        .sheet(item: $measurement) { kind in
-            MappingMeasurementSheet(automatic: kind == .automatic) { reading in
-                guard mapping.workflow != nil else { throw StorageError.writesBlocked }
+        .sheet(item: $measurement) { request in
+            MappingMeasurementSheet(automatic: request.automatic) { reading in
+                guard mapping.workflow?.draft.id == request.draftID, mapping.workflow?.draft.saving == false else {
+                    throw MappingError.invalid("Черновик точки изменился. Откройте измерение заново.")
+                }
                 try mapping.workflow!.draft.addMeasurement(reading)
             }
         }
@@ -64,12 +67,12 @@ struct MappingView: View {
             Button("Понятно", role: .cancel) { mapping.error = nil }
         } message: { Text(mapping.error ?? "") }
         .alert("Наблюдение сохранено", isPresented: $mapping.success) { Button("Продолжить", role: .cancel) {} }
-        .alert("Удалить несохранённый черновик и изменить контекст?", isPresented: Binding(
+        .alert("Отложить черновик и перейти?", isPresented: Binding(
             get: { mapping.workflow?.pendingContext != nil },
             set: { if !$0 { mapping.perform { $0.cancelContextChange() } } })) {
-                Button("Удалить черновик", role: .destructive) { mapping.perform { try $0.confirmDiscard() } }
+                Button("Отложить и перейти") { mapping.perform { try $0.preserveAndSwitch() } }
                 Button("Остаться", role: .cancel) { mapping.perform { $0.cancelContextChange() } }
-            } message: { Text("Поля и фотографии черновика ещё не сохранены. Записанные файлы не удаляются автоматически.") }
+            } message: { Text("Вернитесь в этот проект и горизонт, чтобы продолжить. Черновик и фотографии сохраняются в памяти до закрытия приложения.") }
     }
     private func draft<T>(_ key: WritableKeyPath<MappingDraft, T>, fallback: T) -> Binding<T> {
         Binding(get: { mapping.workflow?.draft[keyPath: key] ?? fallback },
@@ -96,18 +99,26 @@ struct MappingView: View {
                     Button { focused = false; choosingExcavation = true } label: {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Выработка").font(.caption).foregroundStyle(.secondary)
-                            Label(w.excavations.first { $0.id == w.context.excavationID }?.name ?? "Выбрать выработку", systemImage: "chevron.up.chevron.down")
-                                .font(.headline).lineLimit(2)
-                        }.frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                            HStack(spacing: 6) {
+                                Text(w.excavations.first { $0.id == w.context.excavationID }?.name ?? "Не выбрано")
+                                    .font(.body).lineLimit(2)
+                                Image(systemName: "chevron.up.chevron.down").font(.caption)
+                            }
+                            .frame(minHeight: 44)
+                        }.frame(maxWidth: .infinity, alignment: .leading)
                     }.accessibilityIdentifier("excavationPicker")
-                    Button("Создать выработку", systemImage: "plus") { focused = false; editor = .excavation }
-                        .disabled(w.context.projectID == nil).font(.subheadline)
+                    Button { focused = false; editor = .excavation } label: {
+                        Image(systemName: "plus.circle").font(.title2).frame(minWidth: 44, minHeight: 44)
+                    }.accessibilityLabel("Управление: Выработка").disabled(w.context.projectID == nil)
                 }
             }.padding(.horizontal).padding(.vertical, 6).background(.bar)
             Form {
                 Section("Пикет и дата") {
-                    TextField("Пикет: ПК 0+005 или метры", text: draft(\.picket, fallback: ""))
+                    TextField("Пикет: 12 или 12+9", text: draft(\.picket, fallback: ""))
                         .accessibilityIdentifier("mappingPicket").focused($focused)
+                    if let confirmation = FieldPicketInput.confirmation(w.draft.picket) {
+                        Text(confirmation).font(.caption).foregroundStyle(.secondary)
+                    }
                     DatePicker("Дата наблюдения", selection: Binding(get: { mapping.workflow?.draft.observedAtOverride ?? Date() },
                         set: { value in mapping.perform { $0.draft.observedAtOverride = value } }))
                         .accessibilityIdentifier("mappingDate")
@@ -121,16 +132,18 @@ struct MappingView: View {
                 }
                 MappingJointSetsSection()
                 Section {
-                    NavigationLink("Дополнительно") {
+                    NavigationLink("Интервал и исходные замеры") {
                         Form {
                             Section {
                                 MappingIntervalForm(start: draft(\.startPicket, fallback: ""), end: draft(\.endPicket, fallback: ""),
                                                     position: draft(\.observationPosition, fallback: nil), focus: $focused)
                             }
                             originalMeasurements(w)
-                            MappingTectonicsForm(structures: draft(\.tectonicStructures, fallback: []))
-                        }.navigationTitle("Дополнительно").navigationBarTitleDisplayMode(.inline)
+                        }.navigationTitle("Интервал и замеры").navigationBarTitleDisplayMode(.inline)
                             .scrollDismissesKeyboard(.interactively)
+                    }
+                    if !w.draft.startPicket.isEmpty || !w.draft.endPicket.isEmpty {
+                        Text("Интервал: \(w.draft.startPicket) — \(w.draft.endPicket)").font(.caption)
                     }
                 }
                 MappingRatingsForm(q: draft(\.bartonQ, fallback: BartonQInput()),
@@ -165,10 +178,12 @@ struct MappingView: View {
     private func originalMeasurements(_ w: MappingWorkflow) -> some View {
         Section("Исходные замеры") {
             Button("Измерить iPhone", systemImage: "iphone.radiowaves.left.and.right") {
-                focused = false; measurement = .automatic
+                focused = false
+                if let id = mapping.workflow?.draft.id { measurement = MappingCaptureRequest(draftID: id, automatic: true) }
             }.accessibilityIdentifier("captureMappingAutomatic")
             Button("Ручной ввод", systemImage: "pencil.and.list.clipboard") {
-                focused = false; measurement = .manual
+                focused = false
+                if let id = mapping.workflow?.draft.id { measurement = MappingCaptureRequest(draftID: id, automatic: false) }
             }.accessibilityIdentifier("captureMappingManual")
             ForEach(w.draft.measurements) { reading in
                 HStack {
@@ -183,11 +198,8 @@ struct MappingView: View {
         }
     }
     private func coordinate(_ name: String, _ key: WritableKeyPath<MappingDraft, String>) -> some View {
-        HStack {
-            Text(name == "Z" && mapping.workflow?.draft.xyUnits != "m" ? "Z, м" : name).frame(width: 42, alignment: .leading)
-            TextField("Неизвестно", text: draft(key, fallback: "")).keyboardType(.numbersAndPunctuation)
-                .focused($focused).accessibilityIdentifier("mapping\(name)")
-        }
+        MappingCoordinateField(title: name == "Z" && mapping.workflow?.draft.xyUnits != "m" ? "Z, м" : name,
+            text: draft(key, fallback: ""), identifier: "mapping\(name)", focus: $coordinateFocus)
     }
     private func selector(_ title: String, id: String, values: [(UUID, String)], selection: Binding<UUID?>, kind: ContextEditorKind) -> some View {
         HStack {
@@ -196,7 +208,7 @@ struct MappingView: View {
                 Picker(title, selection: selection) {
                     Text("Не выбрано").tag(nil as UUID?)
                     ForEach(values, id: \.0) { value in Text(value.1).tag(Optional(value.0)) }
-                }.labelsHidden().accessibilityIdentifier(id)
+                }.labelsHidden().frame(minHeight: 44).accessibilityIdentifier(id)
             }.frame(maxWidth: .infinity, alignment: .leading)
             Button { editor = kind } label: { Image(systemName: "plus.circle").font(.title2).frame(minWidth: 44, minHeight: 44) }
                 .accessibilityLabel("Управление: \(title)").accessibilityIdentifier("manage-\(id)")
@@ -309,9 +321,10 @@ struct ContextEditor: View {
     }
 }
 
-private enum MappingCaptureKind: String, Identifiable {
-    case automatic, manual
-    var id: String { rawValue }
+private struct MappingCaptureRequest: Identifiable {
+    let id = UUID()
+    let draftID: UUID
+    let automatic: Bool
 }
 
 private struct ExcavationSelectionView: View {
@@ -336,6 +349,25 @@ private struct ExcavationSelectionView: View {
             }.navigationTitle("Выработки")
                 .searchable(text: $search, prompt: "Название выработки")
                 .toolbar { Button("Закрыть") { dismiss() } }
+        }
+    }
+}
+
+/// Unfocused text is presentation only. Focusing exposes the exact original input for editing.
+struct MappingCoordinateField: View {
+    let title: String
+    @Binding var text: String
+    let identifier: String
+    let focus: FocusState<String?>.Binding
+    var body: some View {
+        HStack {
+            Text(title).frame(width: 42, alignment: .leading)
+            TextField("Неизвестно", text: Binding(get: {
+                if focus.wrappedValue == identifier { return text }
+                return (try? ElevationInput.meters(text)).map(EngineeringDisplay.coordinate) ?? text
+            }, set: { text = $0 }))
+                .keyboardType(.numbersAndPunctuation).focused(focus, equals: identifier)
+                .accessibilityIdentifier(identifier)
         }
     }
 }

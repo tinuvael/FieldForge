@@ -1,5 +1,8 @@
 # P3.2b — point/interval rock-mass assessments
 
+**Current field calculator update:** [Second iPhone review](second-iphone-review.md#barton-q-numerical-calculation-versus-documented-assessment) adds the field-2 numerical entry point and compact UI. The strict field-1 documentation gates described below remain the historical validator; they no longer block a new preliminary field calculation. Published tables and formula are unchanged.
+
+
 **Pre-MVP owner storage decision:** mapping uses only current experimental schema **8**. No automatic mapping migrations, new `.pN-backup`, resets or deletions; old/corrupt files fail closed and all existing files are preserved. Earlier mapping-schema descriptions below are historical, not supported compatibility. Atomic current saves/`.previous`, integrity, external-change guards and immutable evidence/history remain. The independent original-measurement journal keeps its deployed compatibility. See [current storage/recovery](p4-1-photos.md) and [AGENTS.md](../AGENTS.md).
 
 ## Qualified reference and edition

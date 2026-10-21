@@ -205,9 +205,13 @@ struct MappingObservationDetail: View {
             Section(record.coordinates.map { MappingCoordinateText.header(xyUnits: $0.units) } ?? "Координаты") {
                 if let c = record.coordinates {
                     let xyUnit = MappingCoordinateText.xyUnit(c.units)
-                    LabeledContent(c.units == "m" ? "X" : "X, \(xyUnit)", value: c.x.map { EngineeringDisplay.number($0) } ?? "Неизвестно")
-                    LabeledContent(c.units == "m" ? "Y" : "Y, \(xyUnit)", value: c.y.map { EngineeringDisplay.number($0) } ?? "Неизвестно")
-                    LabeledContent(c.units == "m" ? "Z" : "Z, м", value: c.z.map { EngineeringDisplay.number($0) } ?? "Неизвестно")
+                    LabeledContent(c.units == "m" ? "X" : "X, \(xyUnit)", value: c.x.map { EngineeringDisplay.coordinate($0) } ?? "Неизвестно")
+                    LabeledContent(c.units == "m" ? "Y" : "Y, \(xyUnit)", value: c.y.map { EngineeringDisplay.coordinate($0) } ?? "Неизвестно")
+                    LabeledContent(c.units == "m" ? "Z" : "Z, м", value: c.z.map { EngineeringDisplay.coordinate($0) } ?? "Неизвестно")
+                    DisclosureGroup("Полная точность координат") {
+                        Text("X \(c.x.map(ElevationInput.text) ?? "—") · Y \(c.y.map(ElevationInput.text) ?? "—") · Z \(c.z.map(ElevationInput.text) ?? "—")")
+                            .font(.caption).textSelection(.enabled)
+                    }
                     LabeledContent("СК", value: c.crs); LabeledContent("Оси / высоты", value: c.axes)
                     Text(c.provenance)
                     LabeledContent("Источник Z", value: c.zOrigin == .horizonDefault ? "По горизонту · не съёмка" : c.zOrigin == .manualOverride ? "Ручное значение" : "Не указан в исходной записи")

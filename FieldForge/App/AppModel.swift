@@ -32,12 +32,16 @@ enum MeasurementMode: String, CaseIterable {
     }
     var canSaveManual: Bool { storageWritable && savedManual == nil && manualValidationMessage == nil }
 
-    init() {
+    init(captureOnly: Bool = false) {
         #if targetEnvironment(simulator)
         acquisition = MeasurementAcquisition(provider: MockSensorProvider())
         #else
         acquisition = MeasurementAcquisition(provider: CoreMotionSensorProvider())
         #endif
+        if captureOnly {
+            acquisition.onChange = { [weak self] in self?.objectWillChange.send() }
+            return
+        }
         do {
             let fileStore = try FileMeasurementStore.applicationStore()
             #if DEBUG && targetEnvironment(simulator)

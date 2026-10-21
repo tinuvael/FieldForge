@@ -1,5 +1,10 @@
 # Development roadmap
 
+## Second iPhone review iteration
+
+[Second iPhone review](second-iphone-review.md) documents compatible excavation selection, volatile draft parking, isolated modal sensor sessions, tagged 10 m picket capture with legacy validation, and versioned Q numerical/documentation separation. Mapping stays on schema 8 with no migration/reset; original measurements, attachment bytes, source plans and correction history remain protected. Device crash root cause and physical qualification remain open. This current contract supersedes conflicting historical workflow descriptions below.
+
+
 The authoritative [product vision](product-vision.md) defines exactly three primary modules: **Geomechanical Mapping**, **Excavation Plans & Spatial Positioning**, and **Wedge Analysis**, sharing one offline project database. This roadmap sequences their implementation and future native iPad adaptation; it does not add a CAD/GIS/geological-modeling or numerical-simulation product. Existing Phase 1/2 features and verification remain distinct from future milestones.
 
 ## Phase 1 — merged foundation
