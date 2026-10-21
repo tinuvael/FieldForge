@@ -10,7 +10,7 @@ struct MappingCorrectionEditor: View {
     @State private var discard = false
     @State private var showPlans = false
     @FocusState private var focused: Bool
-    @FocusState private var coordinateFocus: String?
+    @State private var coordinateFocus: String?
     init(draft: MappingCorrectionDraft) { _draft = State(initialValue: draft) }
     var body: some View {
         NavigationStack {
@@ -42,13 +42,13 @@ struct MappingCorrectionEditor: View {
                                         position: $draft.fields.observationPosition, focus: $focused,
                                         startConvention: draft.fields.startPicketConvention, endConvention: draft.fields.endPicketConvention)
                 }
-                Section(MappingCoordinateText.header(xyUnits: draft.fields.xyUnits)) {
+                Section("Координаты") {
                     MappingCoordinateField(title: "X", text: $draft.fields.x, identifier: "correctionX", focus: $coordinateFocus)
                     MappingCoordinateField(title: "Y", text: $draft.fields.y, identifier: "correctionY", focus: $coordinateFocus)
                     MappingCoordinateField(title: "Z", text: $draft.fields.z, identifier: "correctionZ", focus: $coordinateFocus)
-                    Text("Источник Z: \(draft.fields.zOrigin == .horizonDefault ? "по горизонту · не съёмка" : "ручное / неизвестно")").font(.caption)
-                    Button("Выбрать X/Y на плане") { focused = false; showPlans = true }.accessibilityIdentifier("correctionSelectPlan")
+                    Button("Выбрать на плане") { focused = false; coordinateFocus = nil; showPlans = true }.accessibilityIdentifier("correctionSelectPlan")
                     DisclosureGroup("СК, оси и происхождение") {
+                        Text("Источник Z: \(draft.fields.zOrigin == .horizonDefault ? "по горизонту · не съёмка" : "ручное / неизвестно")").font(.caption)
                         TextField("СК", text: $draft.fields.crs).focused($focused).disabled(draft.fields.planID != nil)
                         TextField("Оси", text: $draft.fields.axes).focused($focused).disabled(draft.fields.planID != nil)
                         TextField("Происхождение координат", text: $draft.fields.coordinateProvenance, axis: .vertical)

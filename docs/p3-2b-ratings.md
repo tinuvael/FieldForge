@@ -1,5 +1,7 @@
 # P3.2b — point/interval rock-mass assessments
 
+**Current update (2026-10-21):** [Final field polish](final-field-polish.md) supersedes the historical default-export, sheet-order and input-only RMR descriptions below. Excel is the default, with five Russian field sheets and preserved technical sheets. Verified preliminary RMRbasic categories are available under a separate method version; legacy inputs stay unchanged.
+
 **Current field calculator update:** [Second iPhone review](second-iphone-review.md#barton-q-numerical-calculation-versus-documented-assessment) adds the field-2 numerical entry point and compact UI. The strict field-1 documentation gates described below remain the historical validator; they no longer block a new preliminary field calculation. Published tables and formula are unchanged.
 
 

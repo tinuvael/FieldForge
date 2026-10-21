@@ -56,6 +56,7 @@ struct MappingCSVExport {
     let selection: MappingExportSelection
     let tables: [Table]
     let manifest: Data
+    var fieldTables: [Table] = []
     var pointCount: Int { tables.first { $0.name == "points" }?.rows.count ?? 0 }
 
     static func prepare(journal: MappingJournal, selection: MappingExportSelection, now: Date = Date(), id: UUID = UUID()) throws -> Self {
@@ -140,18 +141,18 @@ struct MappingCSVExport {
                 faults.append([u(f.id), u(p.id), t(f.type.rawValue), .number(o.dipDirection), .number(o.dipAngle), t(f.orientation.reference.rawValue), t(f.orientation.dipDirectionText), t(f.orientation.dipAngleText), t(String(f.orientation.usesConventionalDipSide)), .number(f.thicknessMeters), t(f.picket?.text), .number(f.picket?.meters), t(f.position), t(f.description)])
             }
             if let q = p.ratings?.bartonQ {
-                ratings.append([u(p.id), t("Q"), t(q.method), .integer(q.revision), d(q.assessedAt), .number(q.evaluation.result?.value), t(q.evaluation.result?.rockClass?.rawValue), t(q.input.rqd), t(q.input.jn.value), t(q.input.jr.value), t(q.input.ja.value), t(q.input.jw.value), t(q.input.srf.value), try json(q.input), try json(q.evaluation), try json(q.evaluation.missing)] + Array(repeating: Cell.empty, count: 19))
+                ratings.append([u(p.id), t("Q"), t(q.method), .integer(q.revision), d(q.assessedAt), .number(q.evaluation.result?.value), t(q.evaluation.result?.rockClass?.rawValue), t(q.input.rqd), t(q.input.jn.value), t(q.input.jr.value), t(q.input.ja.value), t(q.input.jw.value), t(q.input.srf.value), try json(q.input), try json(q.evaluation), try json(q.evaluation.missing)] + Array(repeating: Cell.empty, count: 22))
             }
             if let r = p.ratings?.rmr89 {
-                ratings.append([u(p.id), t("RMR89-input-only"), t(r.method), .integer(r.revision), d(r.assessedAt), .empty, .empty, t(r.input.rqd), .empty, .empty, .empty, .empty, .empty, try json(r.input), .empty, try json(r.missing),
-                    t(r.input.strengthTest?.rawValue), t(r.input.strengthMPa), t(r.input.strengthEvidence), t(r.input.rqdEvidence), t(r.input.spacingMeters), t(r.input.persistenceMeters), t(r.input.apertureMillimeters), t(r.input.roughness), t(r.input.infill), t(r.input.weathering), t(r.input.groundwater), t(r.input.inflowLitersPerMinutePer10m), t(r.input.waterPressureRatio), t(r.input.application?.rawValue), t(r.input.orientationDescription), t(r.input.source), t(r.input.assessor), t(r.input.missingReason), t("inputOnly")])
+                ratings.append([u(p.id), t(r.calculation == nil ? "RMR89-input-only" : "RMR89-basic"), t(r.method), .integer(r.revision), d(r.assessedAt), .empty, .empty, t(r.input.rqd), .empty, .empty, .empty, .empty, .empty, try json(r.input), .empty, try json(r.missing),
+                    t(r.input.strengthTest?.rawValue), t(r.input.strengthMPa), t(r.input.strengthEvidence), t(r.input.rqdEvidence), t(r.input.spacingMeters), t(r.input.persistenceMeters), t(r.input.apertureMillimeters), t(r.input.roughness), t(r.input.infill), t(r.input.weathering), t(r.input.groundwater), t(r.input.inflowLitersPerMinutePer10m), t(r.input.waterPressureRatio), t(r.input.application?.rawValue), t(r.input.orientationDescription), t(r.input.source), t(r.input.assessor), t(r.input.missingReason), t(r.calculation == nil ? "inputOnly" : r.calculation?.value == nil ? "incomplete" : "calculated"), .integer(r.calculation?.value), t(r.calculation?.rockClass), try json(r.calculation)])
             }
         }
         table("measurements", ["measurement_id", "point_id", "timestamp_utc", "dip_direction_deg", "dip_angle_deg", "north", "direction_meaning", "source", "quality", "status", "plane", "algorithm_version", "original_direction_text", "original_dip_text", "notes", "sensor_sample_json", "orientation_json"], measurementRows)
         table("joint_sets", ["joint_set_id", "point_id", "revision", "identifier", "interpreted_at_utc", "author", "method", "dip_direction_deg", "dip_angle_deg", "north", "direction_meaning", "original_direction_text", "original_dip_text", "spacing_m", "persistence_m", "aperture_mm", "roughness", "infill", "notes"], sets)
         table("interpretation_evidence", ["joint_set_id", "joint_set_revision", "point_id", "measurement_id", "role"], links)
         table("tectonic_structures", ["structure_id", "point_id", "type", "dip_direction_deg", "dip_angle_deg", "north", "original_direction_text", "original_dip_text", "conventional_dip_side", "thickness_m", "picket_text", "chainage_m", "position", "description"], faults)
-        table("assessments", ["point_id", "kind", "method", "revision", "assessed_at_utc", "stored_q", "stored_q_class", "rqd_text", "jn_text", "jr_text", "ja_text", "jw_text", "srf_text", "input_json", "stored_evaluation_json", "missing_json", "rmr_strength_test", "rmr_strength_mpa_text", "rmr_strength_evidence", "rmr_rqd_evidence", "rmr_spacing_m_text", "rmr_persistence_m_text", "rmr_aperture_mm_text", "rmr_roughness", "rmr_infill", "rmr_weathering", "rmr_groundwater", "rmr_inflow_l_min_per_10m_text", "rmr_water_pressure_ratio_text", "rmr_application", "rmr_orientation_description", "rmr_source", "rmr_assessor", "rmr_missing_reason", "rmr_status"], ratings)
+        table("assessments", ["point_id", "kind", "method", "revision", "assessed_at_utc", "stored_q", "stored_q_class", "rqd_text", "jn_text", "jr_text", "ja_text", "jw_text", "srf_text", "input_json", "stored_evaluation_json", "missing_json", "rmr_strength_test", "rmr_strength_mpa_text", "rmr_strength_evidence", "rmr_rqd_evidence", "rmr_spacing_m_text", "rmr_persistence_m_text", "rmr_aperture_mm_text", "rmr_roughness", "rmr_infill", "rmr_weathering", "rmr_groundwater", "rmr_inflow_l_min_per_10m_text", "rmr_water_pressure_ratio_text", "rmr_application", "rmr_orientation_description", "rmr_source", "rmr_assessor", "rmr_missing_reason", "rmr_status", "stored_rmr_basic", "stored_rmr_class", "stored_rmr_calculation_json"], ratings)
         table("photos", ["photo_id", "point_id", "project_id", "horizon_id", "excavation_id", "context_revision_id", "context_point_version", "capture_location_basis", "name", "number", "description", "category", "metadata_revision_id", "metadata_version", "metadata_corrected_at_utc", "source", "captured_at_utc", "capture_time_text", "capture_time_provenance", "imported_at_utc", "attachment_id", "original_integrity"], photos.map { photo in
             let m = journal.metadata(for: photo), r = journal.photoRevisions.last { $0.photoID == photo.id }, c = photo.context
             return [u(photo.id), u(c.pointID), u(c.projectID), u(c.horizonID), u(c.excavationID), u(c.pointRevisionID), .integer(c.pointVersion), t(c.locationBasis.rawValue), t(m.name), t(m.number), t(m.description), t(m.category?.rawValue), u(r?.id ?? photo.id), .integer(r?.version ?? 1), d(r?.correctedAt), t(photo.source.rawValue), d(photo.capturedAt), t(photo.captureTimeText), t(photo.captureTimeProvenance), d(photo.importedAt), u(photo.attachmentID), t("notChecked; originalsNotIncluded")]
@@ -168,8 +169,10 @@ struct MappingCSVExport {
             "effective_policy": "One latest effective point per stable UUID; version 1 revision_id is point_id. Photo contexts are historical reference rows, not selected observations. No correction audit history.",
             "tables": Dictionary(uniqueKeysWithValues: tables.map { ($0.name + ".csv", ["rows": $0.rows.count, "columns": $0.columns] as [String: Any]) }),
             "encoding": "UTF-8 BOM; comma; CRLF; all cells quoted; embedded quotes doubled. Formula-like text prefixed with apostrophe, including leading apostrophes/control characters. Numbers use round-trip Double strings; nulls empty. Excel may truncate numbers beyond 15 significant digits; retain original text/JSON.",
-            "limitations": ["Analysis export, not a complete backup; no image originals, thumbnails, DXF bytes or full audit history.", "Original file availability/integrity not checked; missing originals do not exclude metadata.", "unknownBeforeFirstSave means capture location UNKNOWN; referenced point context is linkage context only, never capture coordinates.", "No north/CRS conversions; XY declared units, Z and chainage meters, orientation degrees. No rating recalculation; RMR input only.", "ISO UTC timestamps have millisecond display precision; companion *_reference_seconds values are exact stored Date seconds since 2001-01-01T00:00:00Z. JSON dates use the same epoch. Nested JSON cells retain detailed stored input/diagnostics; no EXIF GPS is read or exported. Private text/filenames may be present."]]
-        return Self(id: id, snapshotAt: now, selection: selection, tables: tables, manifest: try JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]))
+            "limitations": ["Analysis export, not a complete backup; no image originals, thumbnails, DXF bytes or full audit history.", "Original file availability/integrity not checked; missing originals do not exclude metadata.", "unknownBeforeFirstSave means capture location UNKNOWN; referenced point context is linkage context only, never capture coordinates.", "No north/CRS conversions; XY declared units, Z and chainage meters, orientation degrees. No rating recalculation; versioned RMR basic snapshots when available, legacy input-only preserved.", "ISO UTC timestamps have millisecond display precision; companion *_reference_seconds values are exact stored Date seconds since 2001-01-01T00:00:00Z. JSON dates use the same epoch. Nested JSON cells retain detailed stored input/diagnostics; no EXIF GPS is read or exported. Private text/filenames may be present."]]
+        var snapshot = Self(id: id, snapshotAt: now, selection: selection, tables: tables, manifest: try JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]))
+        snapshot.fieldTables = try MappingFieldWorkbook.tables(points: points, photos: photos, journal: journal)
+        return snapshot
     }
 
     static func iso(_ date: Date) -> String {
@@ -184,7 +187,7 @@ final class MappingExportFiles {
     let urls: [URL]
     init(directory: URL, urls: [URL]) { self.directory = directory; self.urls = urls }
     static func write(_ export: MappingCSVExport, parent: URL = FileManager.default.temporaryDirectory,
-                      format: MappingExportFormat = .csv,
+                      format: MappingExportFormat = .xlsx, showTechnicalSheets: Bool = false,
                       write: (Data, URL) throws -> Void = { try $0.write(to: $1, options: .atomic) },
                       xlsxAppend: @escaping (Data, FileHandle) throws -> Void = { try $1.write(contentsOf: $0) }) throws -> MappingExportFiles {
         try Task.checkCancellation()
@@ -194,7 +197,7 @@ final class MappingExportFiles {
         do {
             if format == .xlsx {
                 let url = directory.appendingPathComponent("FieldForge-Mapping.xlsx")
-                try MappingXLSXExport.write(export, to: url, append: xlsxAppend)
+                try MappingXLSXExport.write(export, to: url, showTechnicalSheets: showTechnicalSheets, append: xlsxAppend)
                 try Task.checkCancellation()
                 return MappingExportFiles(directory: directory, urls: [url])
             }

@@ -55,7 +55,9 @@ struct WedgeHeadingSheet: View {
                         .font(.largeTitle.monospacedDigit()).frame(maxWidth: .infinity)
                     Text(model.message).font(.subheadline)
                     if let sample = model.sample {
-                        Text("Магнитное поле: \(EngineeringDisplay.number(sample.magneticField.length, decimals: 1)) мкТл").font(.caption)
+                        DisclosureGroup("Технические сведения") {
+                            Text("Магнитное поле: \(EngineeringDisplay.number(sample.magneticField.length, decimals: 1)) мкТл")
+                        }.font(.caption)
                     }
                     Button("Принять направление") {
                         if let capture = model.capture() { onCapture(capture); dismiss() }

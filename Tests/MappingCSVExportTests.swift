@@ -88,7 +88,8 @@ import XCTest
         let export = try MappingCSVExport.prepare(journal: w.journal, selection: selection(p, "2023-11-15T12:00:00Z"))
         let point = try XCTUnwrap(rows(export, "points").first)
         XCTAssertEqual(point["revision_id"], r.id.uuidString); XCTAssertEqual(point["version"], "2")
-        XCTAssertEqual(point["interval_start_m"], "5.0"); XCTAssertEqual(point["interval_end_m"], "10.0")
+        XCTAssertEqual(point["interval_start_m"].flatMap(Double.init), p.geology?.start?.meters)
+        XCTAssertEqual(point["interval_end_m"].flatMap(Double.init), p.geology?.end?.meters)
         XCTAssertEqual(point["position"], "roof"); XCTAssertEqual(point["observed_zone"], "Asia/Almaty")
         XCTAssertEqual(point["observed_offset_seconds"], String(r.snapshot.observedUTCOffsetSeconds))
         XCTAssertEqual(point["picket"], "25,125"); XCTAssertEqual(point["x"].flatMap(Double.init), r.snapshot.coordinates?.x)
@@ -162,7 +163,7 @@ import XCTest
         let export = try MappingCSVExport.prepare(journal: w.journal, selection: selection(p, "2023-11-14T12:00:00Z"))
         var correction = try w.correction(for: p.id); correction.reason = "Later edit"; correction.fields.observedAtOverride = instant("2025-01-01T00:00:00Z")
         _ = try w.saveCorrection(correction); try w.requestContext(MappingContext())
-        let files = try MappingExportFiles.write(export); defer { files.cleanup() }
+        let files = try MappingExportFiles.write(export, format: .csv); defer { files.cleanup() }
         let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: files.urls.last!)) as? [String: Any])
         let counts = try XCTUnwrap(manifest["tables"] as? [String: [String: Any]])
         for table in export.tables {
@@ -186,12 +187,12 @@ import XCTest
         let export = try MappingCSVExport.prepare(journal: w.journal, selection: selection(p, "2023-11-14T12:00:00Z"))
         enum Failure: Error { case disk }
         var count = 0
-        XCTAssertThrowsError(try MappingExportFiles.write(export, parent: root, write: { data, url in
+        XCTAssertThrowsError(try MappingExportFiles.write(export, parent: root, format: .csv, write: { data, url in
             count += 1; if count == 3 { throw Failure.disk }; try data.write(to: url)
         }))
         let task = Task.detached {
             withUnsafeCurrentTask { $0?.cancel() }
-            return try MappingExportFiles.write(export, parent: root)
+            return try MappingExportFiles.write(export, parent: root, format: .csv)
         }
         do { _ = try await task.value; XCTFail("Expected cancellation") } catch { XCTAssertTrue(error is CancellationError) }
         let prepare = Task.detached {
@@ -202,7 +203,7 @@ import XCTest
         XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: root.path)), ["original.jpg", "mapping.json"])
         XCTAssertEqual(try Data(contentsOf: originals), bytes); XCTAssertEqual(try Data(contentsOf: database), bytes)
         XCTAssertEqual(w.journal, before); XCTAssertEqual(w.draft, draft)
-        let success = try MappingExportFiles.write(export, parent: root); XCTAssertTrue(FileManager.default.fileExists(atPath: success.directory.path))
+        let success = try MappingExportFiles.write(export, parent: root, format: .csv); XCTAssertTrue(FileManager.default.fileExists(atPath: success.directory.path))
         success.cleanup(); XCTAssertFalse(FileManager.default.fileExists(atPath: success.directory.path))
     }
     func testIndependentHorizonAndExcavationFiltersWithinProject() async throws {
@@ -245,7 +246,7 @@ import XCTest
         let originalBytes = try Data(contentsOf: plans.fileURL(plan))
         let task = Task.detached {
             var writes = 0
-            return try MappingExportFiles.write(export, parent: root, write: { data, url in
+            return try MappingExportFiles.write(export, parent: root, format: .csv, write: { data, url in
                 try data.write(to: url); writes += 1
                 if writes == 2 { withUnsafeCurrentTask { $0?.cancel() } }
             })

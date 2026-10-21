@@ -399,7 +399,7 @@ struct HorizonPlanView: View {
         }.navigationTitle(plan.file?.originalFilename ?? "DXF").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 Menu {
-                    Button("Свойства и ограничения", systemImage: "info.circle") { properties = true }
+                    Button("Сведения о плане", systemImage: "info.circle") { properties = true }
                     Picker("Выработка", selection: $filter) {
                         Text("Все выработки").tag(nil as UUID?)
                         ForEach(mapping.workflow?.journal.excavations.filter { $0.horizonIDs.contains(plan.horizonID) } ?? []) {
@@ -433,19 +433,49 @@ struct HorizonPlanView: View {
             .sheet(isPresented: $properties) {
                 NavigationStack {
                     List {
-                        Text("Версия: \(plan.version)")
-                        Text("СК: \(plan.file?.crs ?? "unknown")")
-                        Text("Оси: \(plan.file?.axes ?? "unknown")")
-                        Text("XY: \(plan.file?.units.label ?? "unknown"); без преобразования координат")
-                        Text("Z: отдельная отметка в метрах; не получена из DXF")
-                        Text("Показаны точки исходной и совместимых ревизий в этом проекте и горизонте. Координаты и исходные ссылки не изменяются.")
-                        if let confirmation = plan.frameConfirmation {
-                            Text("Совпадение СК подтверждено при импорте: \(confirmation.confirmedAt.formatted())")
+                        Section("Сведения о плане") {
+                            LabeledContent("Имя файла", value: plan.file?.originalFilename ?? "Неизвестно")
+                            LabeledContent("Ревизия", value: plan.version)
+                            LabeledContent("Горизонт", value: mapping.workflow?.journal.horizons.first { $0.id == plan.horizonID }?.displayName ?? "Неизвестно")
+                            if let file = plan.file {
+                                LabeledContent("Дата импорта", value: file.importedAt.formatted(date: .numeric, time: .shortened))
+                                LabeledContent("Единицы XY", value: file.units.label)
+                            }
                         }
-                        Text("Если прежних точек нет: при импорте новой ревизии подтвердите совпадение СК с предыдущей либо укажите одинаковые подтверждённые СК, оси и единицы. При противоречии исправьте метаданные источника и импортируйте новую ревизию.")
-                        ForEach(drawing.warnings, id: \.self) { Text($0) }
-                        Text("SHA-256: \(plan.file?.sha256 ?? "unknown")").textSelection(.enabled).font(.caption)
-                    }.navigationTitle("Свойства и ограничения").toolbar { Button("Закрыть") { properties = false } }
+                        Section("Совместимость") {
+                            Text("Показаны точки этой и совместимых ревизий горизонта.")
+                            if let workflow = mapping.workflow {
+                                ForEach(workflow.journal.plans.filter { $0.horizonID == plan.horizonID && $0.id != plan.id }) { other in
+                                    let compatible = PlanCoordinateCompatibility.compatible(plan, other, plans: workflow.journal.plans)
+                                    LabeledContent("Ревизия \(other.version)", value: compatible ? "Совместима" : "Совместимость не подтверждена")
+                                    if !compatible {
+                                        Text("Для совместного показа подтвердите единицы и совпадение СК при импорте новой ревизии.").font(.caption)
+                                    }
+                                }
+                            }
+                        }
+                        Section {
+                            DisclosureGroup("Технические сведения") {
+                                LabeledContent("СК", value: plan.file?.crs ?? "Неизвестно")
+                                LabeledContent("Оси", value: plan.file?.axes ?? "Неизвестно")
+                                Text("Z — отдельная отметка в метрах; не получена из DXF. XY без преобразования координат.")
+                                Text("План: \(plan.id.uuidString)")
+                                Text("Исходный файл: \(plan.attachmentID.uuidString)")
+                                if let file = plan.file {
+                                    Text("Размер: \(file.byteCount) байт")
+                                    Text("Источник единиц: \(file.unitDeclaration)")
+                                    Text("DXF $INSUNITS: \(file.insertionUnits.map(String.init) ?? "не задано")")
+                                }
+                                if let confirmation = plan.frameConfirmation {
+                                    Text("Совпадение СК подтверждено при импорте: \(confirmation.confirmedAt.formatted())")
+                                    Text("Предыдущая ревизия: \(confirmation.previousPlanID.uuidString)")
+                                }
+                                ForEach(drawing.warnings, id: \.self) { Text($0) }
+                                Text("SHA-256")
+                                Text(plan.file?.sha256 ?? "Неизвестно").font(.system(.caption, design: .monospaced))
+                            }.font(.caption).textSelection(.enabled)
+                        }
+                    }.navigationTitle("Сведения о плане").toolbar { Button("Закрыть") { properties = false } }
                 }
             }
             .alert("План", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {

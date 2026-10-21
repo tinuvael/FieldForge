@@ -50,12 +50,12 @@ import FoundationXML
     /// Compare every emitted sheet cell against its typed snapshot (no CSV apostrophes).
     @discardableResult private func verify(_ export: MappingCSVExport) throws -> [String: Data] {
         let package = try parts(export)
-        XCTAssertEqual(package.count, 22)
+        XCTAssertEqual(package.count, 22 + export.fieldTables.count)
         for (name, data) in package { XCTAssertTrue(name.hasSuffix(".xml") || name.hasSuffix(".rels")); _ = try xml(data) }
         let book = try xml(XCTUnwrap(package["xl/workbook.xml"]))
-        XCTAssertEqual(book.sheetNames, ["Сводка"] + export.tables.map(\.name))
+        XCTAssertEqual(book.sheetNames, export.fieldTables.filter { $0.name != "field_links" }.map(\.name) + ["Сводка"] + export.tables.map(\.name) + export.fieldTables.filter { $0.name == "field_links" }.map(\.name))
         for (i, table) in export.tables.enumerated() {
-            let data = try XCTUnwrap(package["xl/worksheets/sheet\(i + 2).xml"]), reader = try xml(data)
+            let data = try XCTUnwrap(package["xl/worksheets/sheet\(i + 2 + export.fieldTables.filter { $0.name != "field_links" }.count).xml"]), reader = try xml(data)
             XCTAssertEqual(reader.rowCount, table.rows.count + 1)
             XCTAssertEqual(reader.pane?["state"], "frozen"); XCTAssertEqual(reader.pane?["ySplit"], "1")
             XCTAssertEqual(reader.filter, "A1:\(MappingXLSXExport.column(table.columns.count))\(table.rows.count + 1)")

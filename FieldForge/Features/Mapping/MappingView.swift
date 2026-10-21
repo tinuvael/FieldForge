@@ -10,7 +10,7 @@ struct MappingView: View {
     @State private var planSelection: MappingPlanSelectionRequest?
     @State private var choosingExcavation = false
     @FocusState private var focused: Bool
-    @FocusState private var coordinateFocus: String?
+    @State private var coordinateFocus: String?
     var body: some View {
         NavigationStack {
             Group {
@@ -130,9 +130,7 @@ struct MappingView: View {
                         catch { mapping.error = error.localizedDescription }
                     }
                         .disabled(w.context.horizonID == nil).accessibilityIdentifier("selectHorizonPlan")
-                } header: { Text(MappingCoordinateText.header(xyUnits: w.draft.xyUnits)) } footer: {
-                    Text(w.draft.zOrigin == .horizonDefault ? "Z: по горизонту · номинальная отметка, не съёмка" : "Z: ручной ввод или неизвестно · метры")
-                }
+                } header: { Text("Координаты") }
                 MappingJointSetsSection { geologyEditor = $0 }
                 MappingRatingsForm(q: draft(\.bartonQ, fallback: BartonQInput()),
                                    rmr: draft(\.rmr89, fallback: RMR89Input()), focus: $focused)
@@ -164,7 +162,7 @@ struct MappingView: View {
         }.disabled(w.draft.saving).frame(maxWidth: 760).frame(maxWidth: .infinity)
     }
     private func coordinate(_ name: String, _ key: WritableKeyPath<MappingDraft, String>) -> some View {
-        MappingCoordinateField(title: name == "Z" && mapping.workflow?.draft.xyUnits != "m" ? "Z, м" : name,
+        MappingCoordinateField(title: name,
             text: draft(key, fallback: ""), identifier: "mapping\(name)", focus: $coordinateFocus)
     }
     private func selector(_ title: String, id: String, values: [(UUID, String)], selection: Binding<UUID?>, kind: ContextEditorKind) -> some View {
@@ -318,16 +316,17 @@ struct MappingCoordinateField: View {
     let title: String
     @Binding var text: String
     let identifier: String
-    let focus: FocusState<String?>.Binding
+    let focus: Binding<String?>
     var body: some View {
         HStack {
             Text(title).frame(width: 42, alignment: .leading)
-            TextField("Неизвестно", text: Binding(get: {
-                if focus.wrappedValue == identifier { return text }
-                return (try? ElevationInput.meters(text)).map(EngineeringDisplay.coordinate) ?? text
-            }, set: { text = $0 }))
-                .keyboardType(.numbersAndPunctuation).focused(focus, equals: identifier)
-                .accessibilityIdentifier(identifier)
+            LosslessNumericField(text: $text,
+                displayText: (try? ElevationInput.meters(text)).map(EngineeringDisplay.coordinate) ?? text,
+                focused: focus.wrappedValue == identifier, identifier: identifier) { active in
+                    if active { focus.wrappedValue = identifier }
+                    else if focus.wrappedValue == identifier { focus.wrappedValue = nil }
+                }
         }
+        .contentShape(Rectangle()).onTapGesture { focus.wrappedValue = identifier }
     }
 }

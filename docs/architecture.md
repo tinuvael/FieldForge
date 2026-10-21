@@ -1,5 +1,11 @@
 # Architecture foundation (Phase 2)
 
+## Final field polish
+
+[Current contract](final-field-polish.md): `RMR89Basic.swift` is a Foundation-only category evaluator. Optional `RMR89Input.basicSelections` and `RMR89Assessment.calculation` add the exact `Bieniawski-RMR89/basic-categories-v1` method; input-only-v1 records retain their old validation. New result, component ratings and missing lists are revalidated against exact input/method. Schema remains 8, with no mapping migration/reset or standalone-measurement changes.
+
+`MappingCSVExport.prepare` freezes five field sheets and a `field_links` sheet with the same effective observations, period and context as its existing technical tables. `MappingFieldWorkbook` uses typed domain values, never parses CSV, and never evaluates ratings. XLSX/2 emits field sheets first, numeric field values/civil dates, and the preserved exact technical contract with hidden-by-default technical tabs. The share controller receives one URL for ordinary Excel. CSV and photo packages remain explicit advanced operations. `LosslessNumericField` is a UIKit presentation adapter for coordinates/axis: native begin/end editing callbacks swap display/raw text, and only editingChanged writes domain input. Wedges keyboard dismissal uses a reserved full-width safe-area bar, not an overlay over fields.
+
 ## Third iPhone review contract
 
 [Third iPhone review](third-iphone-review.md) supersedes earlier capture/plan presentation: immutable editor and coordinate-selection requests, decimal canonical pickets with exact historical validation, owner-defined Q presentation, and qualified cross-revision overlays. Schema stays 8; the optional plan `frameConfirmation` records a predecessor UUID/time at import, with units/frame/axes, relationship, cycle and transitive-conflict validation. Missing declarations imply no confirmation. Original plans/coordinates/evidence and correction history remain immutable; no migration, reset or coordinate transformation is introduced.

@@ -1,6 +1,8 @@
 # P5.2 offline mapping XLSX
 
-Issue #10. **Картирование → Журнал → Выгрузка → Формат файла → Excel (.xlsx)** creates one `FieldForge-Mapping.xlsx` through the native iOS Share Sheet / Files. CSV remains the default and keeps its existing 14 files and manifest contract. Switching format keeps the same frozen preview. Changing selection still invalidates preview.
+**Current update (2026-10-21):** [Final field polish](final-field-polish.md) supersedes the historical default-export, sheet-order and input-only RMR descriptions below. Excel is the default, with five Russian field sheets and preserved technical sheets. Verified preliminary RMRbasic categories are available under a separate method version; legacy inputs stay unchanged.
+
+Issue #10. **Картирование → Журнал → Выгрузка → Формат файла → Excel (.xlsx)** creates one `FieldForge-Mapping.xlsx` through the native iOS Share Sheet / Files. CSV is a secondary option and keeps its 14 files and manifest contract. Switching format invalidates the preview; the saved-journal source snapshot stays fixed while the export screen is open. Changing selection still invalidates preview.
 
 ## Shared data contract
 

@@ -3,6 +3,7 @@ import SwiftUI
 struct WedgesView: View {
     @EnvironmentObject private var mapping: MappingModel
     @State private var axisText = ""
+    @State private var axisFocused = false
     @State private var axisNorth = GeographicReference.unknown
     @State private var axisCapture: WedgeAxisCapture?
     @State private var axisEdited = true
@@ -14,7 +15,7 @@ struct WedgesView: View {
     @State private var headingPresented = false
     @State private var distanceTarget: DimensionTarget?
     @FocusState private var focusedField: InputField?
-    private enum InputField: Hashable { case axis, width, height, length }
+    private enum InputField: Hashable { case width, height, length }
     private enum DimensionTarget: String, Identifiable { case width, height; var id: String { rawValue } }
     private var sources: [WedgeMappingSource] { mapping.workflow.map(WedgeMappingSource.available) ?? [] }
     private var source: WedgeMappingSource? { sources.first { $0.id == sourceID } }
@@ -41,13 +42,20 @@ struct WedgesView: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Клинья")
-            .toolbar {
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("Готово") { focusedField = nil }.accessibilityIdentifier("wedgesKeyboardDone")
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if axisFocused || focusedField != nil {
+                    HStack {
+                        Spacer()
+                        Button("Готово") { axisFocused = false; focusedField = nil }
+                            .padding(.horizontal, 12).frame(minHeight: 44)
+                            .accessibilityIdentifier("wedgesKeyboardDone")
+                    }
+                    .padding(.horizontal, 16).frame(height: 52)
+                    .background(.bar).overlay(alignment: .top) { Divider() }
                 }
             }
-            .onDisappear { focusedField = nil }
+            .onDisappear { axisFocused = false; focusedField = nil }
+            .onChange(of: focusedField) { _, value in if value != nil { axisFocused = false } }
             .sheet(isPresented: $headingPresented) {
                 WedgeHeadingSheet { capture in
                     axisText = String(capture.azimuth); axisNorth = .magneticNorth
@@ -65,16 +73,18 @@ struct WedgesView: View {
     private var geometrySection: some View {
         Section("Геометрия выработки") {
             HStack {
-                TextField("Азимут оси, °", text: Binding(get: {
-                    if !axisEdited, focusedField != .axis, let value = WedgeInput.number(axisText) {
-                        return EngineeringDisplay.number(value, decimals: 1)
-                    }
-                    return axisText
-                }, set: { axisText = $0; axisEdited = true }))
-                    .keyboardType(.decimalPad)
-                    .focused($focusedField, equals: .axis)
-                Button("Замерить ось") { focusedField = nil; headingPresented = true }.buttonStyle(.bordered)
+                Text("Азимут оси, °")
+                Spacer()
+                LosslessNumericField(text: Binding(get: { axisText }, set: { axisText = $0; axisEdited = true }),
+                    displayText: WedgeInput.azimuth(axisText).map { EngineeringDisplay.orientationInput($0) + "°" } ?? axisText,
+                    focused: axisFocused, identifier: "wedgeAxis", placeholder: "Не задан",
+                    keyboard: .decimalPad, alignment: .right, nativeDone: false) { active in
+                        axisFocused = active
+                        if active { focusedField = nil }
+                    }.frame(maxWidth: 110)
             }
+            .contentShape(Rectangle()).onTapGesture { axisFocused = true; focusedField = nil }
+            Button("Замерить ось") { axisFocused = false; focusedField = nil; headingPresented = true }
             Picker("Север оси", selection: Binding(get: { axisNorth }, set: { axisNorth = $0; axisEdited = true })) {
                 ForEach(GeographicReference.manualChoices, id: \.self) { Text($0.title).tag($0) }
             }
@@ -89,20 +99,25 @@ struct WedgesView: View {
             }
             if !axisText.isEmpty, WedgeInput.azimuth(axisText) == nil { Text("Азимут: 0–360°").font(.caption).foregroundStyle(.orange) }
             dimensionRow("Ширина B, м", input: $width, target: .width)
-            dimensionRow("Полная высота H, м", input: $height, target: .height)
-            TextField("Длина L, м · вручную", text: $length).keyboardType(.decimalPad)
-                .focused($focusedField, equals: .length)
+            dimensionRow("Высота H, м", input: $height, target: .height)
+            HStack {
+                Text("Длина L, м")
+                TextField("Не задана", text: $length).keyboardType(.decimalPad)
+                    .multilineTextAlignment(.trailing).focused($focusedField, equals: .length)
+            }
             switch dimensions {
-            case .success(let value):
-                Text("Свод: \(DistanceMath.text(value.archHeight)); стенка: \(DistanceMath.text(value.wallHeight))").font(.caption)
-            case .failure(let error): Text(error.localizedDescription).font(.caption).foregroundStyle(.orange)
+            case .success: EmptyView()
+            case .failure(let error):
+                if !width.text.isEmpty && !height.text.isEmpty && !length.isEmpty {
+                    Text(error.localizedDescription).font(.caption).foregroundStyle(.orange)
+                }
             }
         }
     }
     private func dimensionRow(_ title: String, input: Binding<WedgeDimensionInput>, target: DimensionTarget) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
             HStack {
-                TextField(title, text: Binding(get: {
+                Text(title)
+                TextField("Не задана", text: Binding(get: {
                     let field: InputField = target == .width ? .width : .height
                     if !input.wrappedValue.manuallyEdited, focusedField != field, let result = input.wrappedValue.measurement {
                         return EngineeringDisplay.number(result.metres, decimals: 2)
@@ -111,13 +126,9 @@ struct WedgesView: View {
                 }, set: { input.wrappedValue.edit($0) }))
                     .keyboardType(.decimalPad)
                     .focused($focusedField, equals: target == .width ? .width : .height)
-                Button("LiDAR") { focusedField = nil; distanceTarget = target }.buttonStyle(.bordered)
+                    .multilineTextAlignment(.trailing)
+                Button("LiDAR") { axisFocused = false; focusedField = nil; distanceTarget = target }.buttonStyle(.borderless)
             }
-            if let result = input.wrappedValue.measurement {
-                Text("\(result.text)\(input.wrappedValue.manuallyEdited ? " · исправлено вручную" : " · измерено"). Приблизительно, точность не проверена.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-        }
     }
     private var jointsSection: some View {
         Section("Системы трещин") {
@@ -163,6 +174,10 @@ struct WedgesView: View {
                     .accessibilityLabel("Трёхцентровая выработка и схематические плоскости. Вращение пальцем, масштаб двумя пальцами.")
                 Text("Вращение пальцем · масштаб двумя пальцами").font(.caption)
                 DisclosureGroup("Допущения модели") {
+                    Text("LiDAR: приблизительные размеры; точность не проверена.")
+                    Text("Свод: \(DistanceMath.text(value.archHeight)); стенка: \(DistanceMath.text(value.wallHeight))")
+                    if let result = width.measurement { Text("Исходная ширина: \(result.text)\(width.manuallyEdited ? " · исправлено вручную" : "")") }
+                    if let result = height.measurement { Text("Исходная высота: \(result.text)\(height.manuallyEdited ? " · исправлено вручную" : "")") }
                     Text("W1: прямая горизонтальная выработка; параметры не сохраняются. H — от почвы до вершины свода; временно f ≤ 12, подъём B/3. f — коэффициент Протодъяконова.")
                     Text("X — вправо, Y — вдоль оси, Z — вверх; метры. Ось направлена по возрастанию пикетажа. Азимуты по часовой стрелке от выбранного севера.")
                     Text("Плоскости проходят через условный центр. Положение, протяжённость и окончания трещин неизвестны. Конечный клин и механическая устойчивость не определены.")
