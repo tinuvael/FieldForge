@@ -59,6 +59,60 @@ final class MappingTests: XCTestCase {
         XCTAssertThrowsError(try w.requestContext(next))
         XCTAssertEqual(w.context, original); XCTAssertEqual(w.draft, expected)
     }
+    func testTenMetrePicketsAndLegacyJournalCompatibility() throws {
+        for (text, meters, normalized) in [("1", 10.0, "ПК 1"), ("1,7", 17, "ПК 1+7"),
+                ("1.7", 17, "ПК 1+7"), ("1+7", 17, "ПК 1+7"), ("12+9", 129, "ПК 12+9"),
+                ("12", 120, "ПК 12"), ("12+9,5", 129.5, "ПК 12+9,5")] {
+            XCTAssertEqual(try FieldPicketInput.meters(text), meters)
+            XCTAssertEqual(FieldPicketInput.normalized(meters), normalized)
+        }
+        for text in ["1+10", "1+07", "ПК 0+005", "1,7+2", "-1", "1e3", "1..7", "1+", "nan", "1 000", "5 м"] {
+            XCTAssertThrowsError(try FieldPicketInput.meters(text), text)
+        }
+        XCTAssertEqual(try FieldPicketInput.meters("0,17"), 1.7, accuracy: 1e-12)
+        XCTAssertEqual(try PicketInput.meters("1.7"), 1.7)
+        XCTAssertEqual(try PicketInput.meters("12+009"), 12009)
+        try MappingPicket(text: "12+009", meters: 12009).validate()
+        XCTAssertThrowsError(try MappingPicket(text: "12+009", meters: 129).validate())
+        try withFile { store in
+            var w = try configured(store)
+            w.draft.picketConvention = .legacyMeters
+            w.draft.picket = "1.7"
+            w.draft.startPicket = "0+005"; w.draft.startPicketConvention = .legacyMeters
+            let legacy = try w.save()
+            // Simulate schema-8 data written before the optional convention tags existed.
+            var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(w.journal)) as? [String: Any])
+            var points = try XCTUnwrap(json["observations"] as? [[String: Any]])
+            points[0].removeValue(forKey: "picketConvention")
+            if var geology = points[0]["geology"] as? [String: Any], var start = geology["start"] as? [String: Any] {
+                start.removeValue(forKey: "convention"); geology["start"] = start; points[0]["geology"] = geology
+            }
+            json["observations"] = points
+            let historical = try JSONDecoder().decode(MappingJournal.self, from: JSONSerialization.data(withJSONObject: json))
+            try historical.validate()
+            let legacyURL = store.url.appendingPathExtension("legacy")
+            try JSONEncoder().encode(historical).write(to: legacyURL)
+            let legacyStore = FileMappingStore(url: legacyURL)
+            w = try MappingWorkflow(store: legacyStore)
+            var correction = try w.correction(for: legacy.id); correction.reason = "Notes only"; correction.fields.notes = "Checked"
+            let revision = try w.saveCorrection(correction)
+            XCTAssertEqual(revision.snapshot.chainageMeters, 1.7)
+            XCTAssertEqual(revision.snapshot.geology?.start?.meters, 5)
+            XCTAssertNil(revision.snapshot.picketConvention)
+            w.draft.picket = "1.7"; w.draft.startPicket = "1,7"; w.draft.endPicket = "12+9"
+            var structure = TectonicStructureDraft(); structure.picket = "12+9"
+            w.draft.tectonicStructures = [structure]
+            let current = try w.save()
+            XCTAssertEqual(current.geology?.start?.meters, 17)
+            XCTAssertEqual(current.geology?.end?.meters, 129)
+            XCTAssertEqual(current.geology?.tectonicStructures.first?.picket?.meters, 129)
+            XCTAssertEqual(current.chainageMeters, 17); XCTAssertEqual(current.picketConvention, .tenMeters)
+            let reopened = try legacyStore.load()
+            XCTAssertEqual(reopened.observations[0].chainageMeters, 1.7)
+            XCTAssertEqual(reopened.observations[1].chainageMeters, 17)
+            XCTAssertEqual(reopened.history(for: legacy.id).count, 1)
+        }
+    }
     private func withFile(_ check: (FileMappingStore) throws -> Void) throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -68,7 +122,7 @@ final class MappingTests: XCTestCase {
     func testTwoIndependentProjectsAndNoLeakage() throws {
         let store = MemoryStore(); var w = try configured(store)
         let original = w.context
-        w.draft.picket = "ПК 0+005"; let first = try w.save()
+        w.draft.picket = "ПК 0+5"; let first = try w.save()
         let other = try w.createProject(name: "Другой рудник")
         try w.requestContext(MappingContext(projectID: other))
         XCTAssertTrue(w.observations.isEmpty); XCTAssertTrue(w.horizons.isEmpty); XCTAssertTrue(w.excavations.isEmpty)
@@ -85,7 +139,7 @@ final class MappingTests: XCTestCase {
         var w = try configured(MemoryStore()); let context = w.context
         let historical = Date(timeIntervalSince1970: 946684800.123)
         let now = Date(timeIntervalSince1970: 1800000000)
-        w.draft.picket = "ПК 0+005"; w.draft.observedAtOverride = historical
+        w.draft.picket = "ПК 0+5"; w.draft.observedAtOverride = historical
         w.draft.timeZoneID = "Asia/Almaty"; w.draft.x = "123,456789"; w.draft.z = "-5"
         w.draft.crs = "Локальная СК"; w.draft.axes = "X север, Y восток, Z вверх; датум неизвестен"
         w.draft.coordinateProvenance = "Переписано с плана, приблизительно"; w.draft.notes = "Первое"
@@ -96,7 +150,7 @@ final class MappingTests: XCTestCase {
         XCTAssertNil(first.coordinates?.y); XCTAssertEqual(first.coordinates?.z, -5)
         XCTAssertEqual(first.observedTimeZoneID, "Asia/Almaty")
         XCTAssertEqual(w.draft.z, "200"); XCTAssertFalse(w.draft.hasChanges); XCTAssertEqual(w.context, context)
-        w.draft.picket = "ПК 0+010"
+        w.draft.picket = "ПК 1"
         let second = try w.save(now: now.addingTimeInterval(60))
         XCTAssertEqual(second.chainageMeters, 10); XCTAssertEqual(second.coordinates?.z, 200); XCTAssertEqual(second.coordinates?.zOrigin, .horizonDefault)
         XCTAssertEqual(second.observedAt, now.addingTimeInterval(60)); XCTAssertEqual(w.context, context)

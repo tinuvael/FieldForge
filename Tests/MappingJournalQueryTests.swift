@@ -9,20 +9,20 @@ final class MappingJournalQueryTests: XCTestCase {
     func testProjectHorizonExcavationSearchInclusiveDatesAndOptionalSort() throws {
         let (_, initial) = try P2MappingTests().configured(); var w = initial
         let project = w.context.projectID!, horizon = w.context.horizonID!, excavation = w.context.excavationID!
-        w.draft.picket = "ПК 0+010"; let a = try w.save(now: Date(timeIntervalSince1970: 86400))
-        w.draft.picket = "ПК 0+005"; let b = try w.save(now: Date(timeIntervalSince1970: 172799.999))
+        w.draft.picketConvention = .legacyMeters; w.draft.picket = "ПК 0+010"; let a = try w.save(now: Date(timeIntervalSince1970: 86400))
+        w.draft.picketConvention = .legacyMeters; w.draft.picket = "ПК 0+005"; let b = try w.save(now: Date(timeIntervalSince1970: 172799.999))
         let otherHorizon = try w.createHorizon(elevation: "615")
         try w.requestContext(MappingContext(projectID: project, horizonID: otherHorizon))
         let otherExcavation = try w.createExcavation(name: "Other", horizonIDs: [otherHorizon])
         try w.requestContext(MappingContext(projectID: project, horizonID: otherHorizon, excavationID: otherExcavation))
-        w.draft.picket = "ПК 0+015"; let c = try w.save(now: Date(timeIntervalSince1970: 172800))
+        w.draft.picketConvention = .legacyMeters; w.draft.picket = "ПК 0+015"; let c = try w.save(now: Date(timeIntervalSince1970: 172800))
         let secondProject = try w.createProject(name: "Second")
         try w.requestContext(MappingContext(projectID: secondProject))
         let secondHorizon = try w.createHorizon(elevation: "200")
         try w.requestContext(MappingContext(projectID: secondProject, horizonID: secondHorizon))
         let secondExcavation = try w.createExcavation(name: "Other", horizonIDs: [secondHorizon])
         try w.requestContext(MappingContext(projectID: secondProject, horizonID: secondHorizon, excavationID: secondExcavation))
-        w.draft.picket = "ПК 0+005"; _ = try w.save(now: Date(timeIntervalSince1970: 90000))
+        w.draft.picketConvention = .legacyMeters; w.draft.picket = "ПК 0+005"; _ = try w.save(now: Date(timeIntervalSince1970: 90000))
         let all = w.journal.observations
         var query = MappingJournalQuery()
         XCTAssertEqual(query.apply(all, projectID: project), [c,b,a])

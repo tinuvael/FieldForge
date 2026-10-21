@@ -117,7 +117,7 @@ struct MappingCorrectionDraft: Equatable {
         let unchangedTime = date == old.observedAt && fields.timeZoneID == old.observedTimeZoneID
         let origin = fields.chainageOriginAndDirection.trimmingCharacters(in: .whitespacesAndNewlines)
         return MappingObservation(id: old.id, projectID: old.projectID, horizonID: old.horizonID, excavationID: old.excavationID,
-            picket: fields.picket, chainageMeters: try PicketInput.meters(fields.picket),
+            picket: fields.picket, chainageMeters: try fields.picketConvention.meters(fields.picket),
             chainageOriginAndDirection: origin.isEmpty ? "unknown" : fields.chainageOriginAndDirection,
             observedAt: date, observedTimeZoneID: fields.timeZoneID,
             observedUTCOffsetSeconds: unchangedTime ? old.observedUTCOffsetSeconds : zone.secondsFromGMT(for: date),
@@ -125,7 +125,8 @@ struct MappingCorrectionDraft: Equatable {
             coordinates: fields == initial ? old.coordinates : try correctedCoordinates(),
             measurementIDs: old.measurementIDs, notes: fields.notes,
             geology: geologyUnchanged ? old.geology : geology,
-            ratings: fields.bartonQ == initial.bartonQ && fields.rmr89 == initial.rmr89 ? old.ratings : ratings)
+            ratings: fields.bartonQ == initial.bartonQ && fields.rmr89 == initial.rmr89 ? old.ratings : ratings,
+            picketConvention: old.picketConvention)
     }
     private func correctedCoordinates() throws -> MappingCoordinates? {
         // A no-op edit must not invent provenance on legacy or unknown locations.

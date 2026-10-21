@@ -182,7 +182,7 @@ struct MappingWorkflow {
         guard let p = context.projectID, let h = context.horizonID, let e = context.excavationID else {
             throw MappingError.invalid("Выберите проект, горизонт и выработку.")
         }
-        let chainage = try PicketInput.meters(draft.picket)
+        let chainage = try draft.picketConvention.meters(draft.picket)
         let observed = draft.observedAtOverride ?? now
         guard let zone = TimeZone(identifier: draft.timeZoneID) else { throw StorageError.invalidRecord }
         let origin = draft.chainageOriginAndDirection.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -192,7 +192,7 @@ struct MappingWorkflow {
             observedAt: observed, observedTimeZoneID: zone.identifier,
             observedUTCOffsetSeconds: zone.secondsFromGMT(for: observed), createdAt: now, updatedAt: now,
             coordinates: try draft.coordinates(), measurementIDs: draft.measurements.map(\.id), notes: draft.notes,
-            geology: try draft.geology(now: now), ratings: try draft.ratings(now: now))
+            geology: try draft.geology(now: now), ratings: try draft.ratings(now: now), picketConvention: draft.picketConvention)
     }
     @discardableResult mutating func save(now: Date = Date(), preparedPhotos: [PhotoImportOperation] = []) throws -> MappingObservation {
         guard draft.photoSessions.isEmpty else { throw MappingError.invalid("Дождитесь завершения выбора и получения всех фотографий.") }

@@ -23,7 +23,7 @@ final class P32GeologyTests: XCTestCase {
     private func structure() -> TectonicStructureDraft {
         var value = TectonicStructureDraft()
         value.orientation = ManualOrientationInput(dipAngleText: "65", dipDirectionText: "120", reference: .trueNorth)
-        value.thickness = "0,5"; value.picket = "ПК 0+007"; value.position = "Left side"; value.description = "Fault trace"
+        value.thickness = "0,5"; value.picketConvention = .legacyMeters; value.picket = "ПК 0+007"; value.position = "Left side"; value.description = "Fault trace"
         return value
     }
     private func directory(_ body: (URL) throws -> Void) throws {
@@ -36,7 +36,7 @@ final class P32GeologyTests: XCTestCase {
         let (store, initial) = try P2MappingTests().configured(); var w = initial
         let first = try original(), second = try original(.trueNorth)
         try w.draft.addMeasurement(first); try w.draft.addMeasurement(second)
-        w.draft.picket = "ПК 0+005"; w.draft.startPicket = "5"; w.draft.endPicket = "10,125"; w.draft.observationPosition = .roof
+        w.draft.picket = "ПК 0+5"; w.draft.startPicketConvention = .legacyMeters; w.draft.endPicketConvention = .legacyMeters; w.draft.startPicket = "5"; w.draft.endPicket = "10,125"; w.draft.observationPosition = .roof
         w.draft.jointSets = JointSetIdentifier.allCases.map { set($0) }
         w.draft.jointSets[0].measurementIDs = [first.id, second.id]
         w.draft.jointSets[1].measurementIDs = [first.id] // Evidence may support several interpretations at the same point.
