@@ -1,5 +1,9 @@
 # Coordinate systems and orientation conventions
 
+## Third iPhone review contract
+
+[Third iPhone review](third-iphone-review.md) supersedes earlier capture/plan presentation: immutable editor and coordinate-selection requests, decimal canonical pickets with exact historical validation, owner-defined Q presentation, and qualified cross-revision overlays. Schema stays 8; the optional plan `frameConfirmation` records a predecessor UUID/time at import, with units/frame/axes, relationship, cycle and transitive-conflict validation. Missing declarations imply no confirmation. Original plans/coordinates/evidence and correction history remain immutable; no migration, reset or coordinate transformation is introduced.
+
 **P2 update:** [P2 mapping and DXF contract](p2-dxf.md) supersedes historical P1 statements about optional horizon elevations, mandatory per-point coordinate strings, absent plans and schema 1. P2 adds nominal Z provenance and immutable managed DXF revisions on the same graph; orientation/measurement conventions are unchanged.
 
 This document defines technical conventions for the three modules in the authoritative [product vision](product-vision.md). Plans/locations and wedge analysis below are future work; the implemented Phase 1/2 orientation conventions remain unchanged and will be shared by iPhone and native iPad.
