@@ -26,7 +26,7 @@ enum MappingFieldWorkbook {
         var observation = Table(name: "Наблюдения", columns: contextColumns + ["Дата", "X", "Y", "Z, м", "Единицы XY"] + JointSetIdentifier.allCases.flatMap { ["\($0.rawValue) азимут, °", "\($0.rawValue) падение, °", "\($0.rawValue) север"] } + ["Q", "Категория по Q · FieldForge", "RMR89 базовый", "Класс RMR89 базовый", "Примечания"])
         var joints = Table(name: "Системы трещин", columns: contextColumns + ["Система", "Азимут, °", "Падение, °", "Север", "Расстояние, м", "Протяжённость, м", "Раскрытие, мм", "Шероховатость", "Заполнитель", "Примечания"])
         var tectonics = Table(name: "Тектоника", columns: contextColumns + ["Структура", "Тип", "Азимут, °", "Падение, °", "Север", "Мощность, м", "Описание"])
-        var ratings = Table(name: "Рейтинги массива", columns: contextColumns + ["Метод", "Дата оценки", "Q", "Класс Q · NGI", "Категория по Q · FieldForge", "RMR89 базовый", "Класс RMR89 базовый", "RQD, %", "Jn", "Jr", "Ja", "Jw", "SRF", "UCS / Is(50)", "Прочность, МПа", "Расстояние, м", "RMR балл прочности", "RMR балл RQD", "RMR балл расстояния", "RMR балл состояния", "RMR балл воды", "Категории RMR", "Пропуски", "RMR с ориентацией"])
+        var ratings = Table(name: "Рейтинги массива", columns: contextColumns + ["Метод", "Дата оценки", "Q", "Класс Q · NGI", "Категория по Q · FieldForge", "RMR89 базовый", "Класс RMR89 базовый", "RQD, %", "Jn", "Jr", "Ja", "Jw", "SRF", "UCS / Is(50) / R0–R6", "Прочность, МПа", "Расстояние, м", "RMR балл прочности", "RMR балл RQD", "RMR балл расстояния", "RMR балл состояния", "RMR балл воды", "Категории RMR", "Пропуски", "RMR с ориентацией"])
         var photoTable = Table(name: "Фотографии", columns: contextColumns + ["Фото", "Название", "Номер", "Имя исходного файла", "Дата съёмки", "Дата импорта", "Описание", "Место съёмки", "Изображение в книге"])
         var links = Table(name: "field_links", columns: ["field_reference", "kind", "record_id", "point_id", "revision_id", "version"])
         for point in points {
@@ -66,7 +66,7 @@ enum MappingFieldWorkbook {
                     return "\(parameter.title): \(choice.title) (\(choice.rating))"
                 }.joined(separator: "; ")
                 var row = c + [text(rmr.method), .timestamp(rmr.assessedAt), .empty, .empty, .empty, .integer(calculation?.value), text(calculation?.rockClass), number(rmr.input.rqd)] + Array(repeating: Cell.empty, count: 5)
-                row += [text(rmr.input.strengthTest == .ucs ? "UCS" : rmr.input.strengthTest == .pointLoadIs50 ? "Is(50)" : nil), number(rmr.input.strengthMPa), number(rmr.input.spacingMeters)]
+                row += [text(rmr.input.strengthTest == .ucs ? "UCS" : rmr.input.strengthTest == .pointLoadIs50 ? "Is(50)" : rmr.input.fieldStrength.map { $0.grade.rawValue + " · полевая оценка" }), number(rmr.input.strengthMPa), number(rmr.input.spacingMeters)]
                 row += ["strength", "rqd", "spacing", "condition", "groundwater"].map { .integer(calculation?.components[$0]) }
                 row += [text(categories), text(rmr.missing.joined(separator: ", ")), text("Не рассчитан")]
                 ratings.rows.append(row)

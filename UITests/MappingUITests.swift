@@ -2,6 +2,82 @@ import XCTest
 import UIKit
 
 final class MappingUITests: XCTestCase {
+    @MainActor func testEnterpriseSDAndGSICategoricalWorkflow() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication(); app.launchArguments = ["--ui-testing"]
+        app.launchEnvironment["FIELD_FORGE_TEST_RUN_ID"] = UUID().uuidString; app.launch()
+        let project = "Геотех-\(UUID().uuidString.prefix(6))"
+        create("projectPicker", name: project, app: app); select("projectPicker", value: project, app: app)
+        create("horizonPicker", name: "+393 м", app: app); select("horizonPicker", value: "+393 м", app: app)
+        create("excavationPicker", name: "Штрек", app: app); select("excavationPicker", value: "Штрек", app: app)
+        fill(app.textFields["mappingPicket"], "5", app: app)
+        let q = disclosure("Barton Q", app: app); show(q, app: app); q.tap()
+        fill(multilineInput("qRQD", app: app), "70", app: app)
+        show(q, app: app, upward: false); q.tap()
+        for index in 1...2 {
+            show(app.buttons["addJointSet"], app: app, upward: false); app.buttons["addJointSet"].tap()
+            XCTAssertTrue(app.navigationBars["Система J\(index)"].waitForExistence(timeout: 5))
+            fill(app.textFields["geologyDirection"], "120", app: app)
+            fill(app.textFields["geologyDip"], "45", app: app)
+            let spacing = app.textFields["jointSpacing"]; show(spacing, app: app)
+            XCTAssertEqual(spacing.value as? String, "0,09")
+            if index == 1 {
+                spacing.tap()
+                let raw = spacing.value as? String ?? ""
+                spacing.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: raw.count))
+                spacing.typeText("0,20"); dismissKeyboard(app)
+            }
+            app.buttons["Принять"].tap()
+        }
+        show(app.buttons["editJointSet-J1"], app: app, upward: false); app.buttons["editJointSet-J1"].tap()
+        show(app.textFields["jointSpacing"], app: app)
+        XCTAssertEqual(app.textFields["jointSpacing"].value as? String, "0,2")
+        XCTAssertTrue(app.buttons["resetJointSpacing"].exists)
+        app.buttons["Принять"].tap()
+        let openGSI = app.buttons["openGSI"]; show(openGSI, app: app); openGSI.tap()
+        let invalid = app.buttons["gsiCell-massive-poor"]
+        XCTAssertTrue(invalid.waitForExistence(timeout: 5)); XCTAssertFalse(invalid.isEnabled)
+        let cell = app.buttons["gsiCell-veryBlocky-fair"]; show(cell, app: app); cell.tap()
+        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screenshot.name = "Enterprise GSI category matrix"; screenshot.lifetime = .keepAlways; add(screenshot)
+        fill(app.textFields["gsiLower"], "35", app: app); fill(app.textFields["gsiUpper"], "45", app: app)
+        fill(app.textFields["gsiFinal"], "40", app: app)
+        show(app.buttons["confirmGSI"], app: app); app.buttons["confirmGSI"].tap()
+        show(openGSI, app: app); openGSI.tap()
+        show(app.textFields["gsiLower"], app: app)
+        XCTAssertEqual(app.textFields["gsiLower"].value as? String, "35")
+        XCTAssertEqual(app.textFields["gsiUpper"].value as? String, "45")
+        back(app); save(app); saved(app); top(app)
+        app.buttons["mappingJournal"].tap(); app.buttons["mappingExportAction"].tap()
+        let kind = app.buttons["mappingExportKind"]; show(kind, app: app); kind.tap()
+        app.buttons["Геотехническое картирование — регламент"].tap()
+        let share = app.buttons["mappingExportShare"]; show(share, app: app)
+        XCTAssertEqual(share.label, "Экспортировать по регламенту"); share.tap()
+        XCTAssertTrue(app.otherElements["ActivityListView"].waitForExistence(timeout: 15))
+    }
+
+    @MainActor func testEnterpriseFieldStrengthAndJCondInsideRMR() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication(); app.launchArguments = ["--ui-testing"]
+        app.launchEnvironment["FIELD_FORGE_TEST_RUN_ID"] = UUID().uuidString; app.launch()
+        let rmr = disclosure("RMR89 ·", app: app); show(rmr, app: app); rmr.tap()
+        let basis = app.buttons["rmrStrengthBasis"]; show(basis, app: app); basis.tap()
+        app.buttons["Полевая оценка R0–R6"].tap()
+        let field = app.buttons["rmrFieldStrength"]; show(field, app: app); field.tap()
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "R4 ·")).firstMatch.tap()
+        for (key, option) in [("rqd", "50–75 · 13 балл."), ("spacing", "0,2–0,6 · 10 балл."),
+            ("persistence", "1–3 · 4 балл."), ("aperture", "0,1–1 · 4 балл."),
+            ("roughness", "Слегка шероховатая · 3 балл."), ("infill", "Нет · 6 балл."),
+            ("weathering", "Слабо выветрелые · 5 балл."), ("groundwater", "Мокро · 7 балл.")] {
+            let picker = app.buttons["rmrCategory-" + key]; show(picker, app: app); picker.tap(); app.buttons[option].tap()
+        }
+        let result = app.staticTexts["rmrBasicResult"]; show(result, app: app)
+        XCTAssertEqual(result.label, "RMR89 (базовый): 59")
+        let jcond = app.buttons["rmrJCond76"]; show(jcond, app: app); jcond.tap()
+        app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Очень шероховатые, прерывистые")).firstMatch.tap()
+        show(result, app: app, upward: false); XCTAssertEqual(result.label, "RMR89 (базовый): 59")
+    }
+
     @MainActor func testFinalPolishQuickRMRBasicWithoutRepeatedDescriptions() throws {
         continueAfterFailure = false
         let app = XCUIApplication(); app.launchArguments = ["--ui-testing"]

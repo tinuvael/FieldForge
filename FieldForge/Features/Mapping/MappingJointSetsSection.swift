@@ -29,7 +29,7 @@ struct MappingJointSetsSection: View {
             }
             Button("Добавить систему", systemImage: "plus") {
                 guard let identifier = JointSetIdentifier.allCases.first(where: { candidate in !sets.contains { $0.identifier == candidate } }) else { return }
-                if let workflow = mapping.workflow { edit(.joint(workflow.editorRequest(JointSetDraft(identifier: identifier)))) }
+                if let workflow = mapping.workflow { edit(.joint(workflow.editorRequest(workflow.draft.newJointSet(identifier: identifier)))) }
             }.disabled(sets.count >= 5).accessibilityIdentifier("addJointSet")
             Text("Тектоника").font(.subheadline).foregroundStyle(.secondary)
             ForEach(mapping.workflow?.draft.tectonicStructures ?? []) { structure in
@@ -71,7 +71,7 @@ struct MappingGeologyCaptureSheet: View {
                 try mapping.workflow!.acceptTectonic(updated, request: request)
             }.id(request.id)
         case .joint(let request):
-            JointSetCaptureSheet(initial: request.initial, measurements: request.measurements) { updated, originals in
+            JointSetCaptureSheet(initial: request.initial, measurements: request.measurements, rqd: mapping.workflow?.draft.spacingRQD ?? SpacingRQD(q: BartonQInput(), rmr: RMR89Input())) { updated, originals in
                 guard mapping.workflow != nil else { throw StorageError.writesBlocked }
                 try mapping.workflow!.acceptJointSet(updated, originals: originals, request: request)
             }.id(request.id)
@@ -82,6 +82,7 @@ struct MappingGeologyCaptureSheet: View {
 private struct JointSetCaptureSheet: View {
     let initial: JointSetDraft
     let measurements: [Measurement]
+    let rqd: SpacingRQD
     let apply: (JointSetDraft?, [Measurement]) throws -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var draft: JointSetDraft
@@ -94,8 +95,8 @@ private struct JointSetCaptureSheet: View {
     @FocusState private var focused: Bool
     @FocusState private var orientationFocus: OrientationField?
     private enum OrientationField { case direction, dip }
-    init(initial: JointSetDraft, measurements: [Measurement], apply: @escaping (JointSetDraft?, [Measurement]) throws -> Void) {
-        self.initial = initial; self.measurements = measurements; self.apply = apply
+    init(initial: JointSetDraft, measurements: [Measurement], rqd: SpacingRQD, apply: @escaping (JointSetDraft?, [Measurement]) throws -> Void) {
+        self.initial = initial; self.measurements = measurements; self.rqd = rqd; self.apply = apply
         _draft = State(initialValue: initial)
     }
     private var sensorRepresentative: ManualOrientationInput? {
@@ -131,8 +132,8 @@ private struct JointSetCaptureSheet: View {
                     }
                     if let message = validationMessage { Text(message).font(.caption).foregroundStyle(.orange) }
                 }
+                Section { JointSpacingField(draft: $draft, rqd: rqd) }
                 DisclosureGroup("Полевые характеристики") {
-                    TextField("Расстояние между трещинами, м", text: $draft.spacing).focused($focused).keyboardType(.decimalPad)
                     TextField("Протяжённость, м", text: $draft.persistence).focused($focused).keyboardType(.decimalPad)
                     TextField("Раскрытие, мм", text: $draft.aperture).focused($focused).keyboardType(.decimalPad)
                     TextField("Шероховатость", text: $draft.roughness).focused($focused)

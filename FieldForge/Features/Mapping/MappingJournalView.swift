@@ -223,6 +223,7 @@ struct MappingObservationDetail: View {
                     }.font(.caption).textSelection(.enabled)
                 } else { Text("Координаты не заданы") }
             }
+            if let rock = record.rock { Section("Литология") { LabeledContent("ROCK", value: rock.code); if let name = rock.name { Text(name) } } }
             if !historical { ObservationPhotosSection(pointID: record.id) }
             Section("Исходные замеры: \(record.measurementIDs.count)") {
                 ForEach(mapping.workflow?.journal.measurements(for: record) ?? []) { reading in

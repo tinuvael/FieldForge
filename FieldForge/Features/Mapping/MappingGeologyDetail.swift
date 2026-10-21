@@ -13,7 +13,8 @@ struct MappingGeologyDetail: View {
             ForEach(geology.jointSets) { set in
                 DisclosureGroup("\(set.identifier.rawValue) · интерпретация") {
                     GeologicalOrientationDetail(input: set.representative)
-                    number("Расстояние между трещинами, м", set.spacingMeters)
+                    number("SD, м", set.spacingMeters)
+                    Text((set.spacingProvenance?.source ?? .unknownLegacy).title).font(.caption).foregroundStyle(.secondary)
                     number("Протяжённость, м", set.persistenceMeters)
                     number("Раскрытие, мм", set.apertureMillimeters)
                     LabeledContent("Шероховатость", value: set.roughness.isEmpty ? "Не указана" : set.roughness)

@@ -47,7 +47,10 @@ struct InterpretedJointSet: Codable, Equatable, Identifiable {
     let infill: String
     let notes: String
 
+    var spacingProvenance: JointSpacingProvenance? = nil
+
     func validate(pointMeasurementIDs: [UUID]) throws {
+        try spacingProvenance?.validate(spacing: spacingMeters)
         _ = try representative.validated()
         guard revision >= 1, method == "user-interpretation-v1", interpretedAt.timeIntervalSinceReferenceDate.isFinite,
               author.map({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) ?? true,
@@ -96,7 +99,17 @@ struct JointSetDraft: Equatable, Identifiable {
     let identifier: JointSetIdentifier
     var representative = ManualOrientationInput()
     var measurementIDs: [UUID] = []
-    var spacing = "", persistence = "", aperture = ""
+    var spacing = "" { didSet { spacingProvenance = .manual } }
+    var spacingProvenance: JointSpacingProvenance? = JointSpacingProvenance(source: .estimatedFromRQD,
+        method: PriestHudsonSpacing.version, originalRQD: nil, rqdSource: nil, rqdEvidence: nil)
+    var persistence = "", aperture = ""
+    mutating func resetSpacingEstimate(_ rqd: SpacingRQD) {
+        spacing = PriestHudsonSpacing.estimate(rqd: rqd.value).map(ElevationInput.text) ?? ""
+        spacingProvenance = .estimate(rqd)
+    }
+    mutating func updateSpacingEstimate(_ rqd: SpacingRQD) {
+        if spacingProvenance?.source == .estimatedFromRQD { resetSpacingEstimate(rqd) }
+    }
     var roughness = "", infill = "", notes = "", author = ""
     init(identifier: JointSetIdentifier, id: UUID = UUID()) { self.identifier = identifier; self.id = id }
     func record(now: Date) throws -> InterpretedJointSet {
@@ -108,7 +121,7 @@ struct JointSetDraft: Equatable, Identifiable {
                 spacingMeters: try GeologyInput.optionalNonnegative(spacing, field: "Расстояние, м"),
                 persistenceMeters: try GeologyInput.optionalNonnegative(persistence, field: "Протяжённость, м"),
                 apertureMillimeters: try GeologyInput.optionalNonnegative(aperture, field: "Раскрытие, мм"),
-                roughness: roughness, infill: infill, notes: notes)
+                roughness: roughness, infill: infill, notes: notes, spacingProvenance: spacingProvenance)
         } catch { throw MappingError.invalid("\(identifier.rawValue): \(error.localizedDescription)") }
     }
 }
@@ -131,8 +144,16 @@ struct TectonicStructureDraft: Equatable, Identifiable {
 extension MappingDraft {
     mutating func addJointSet() {
         guard let identifier = JointSetIdentifier.allCases.first(where: { candidate in !jointSets.contains { $0.identifier == candidate } }) else { return }
-        jointSets.append(JointSetDraft(identifier: identifier))
+        jointSets.append(newJointSet(identifier: identifier))
         jointSets.sort { $0.identifier.rawValue < $1.identifier.rawValue }
+    }
+    var spacingRQD: SpacingRQD { SpacingRQD(q: bartonQ, rmr: rmr89) }
+    func newJointSet(identifier: JointSetIdentifier) -> JointSetDraft {
+        var set = JointSetDraft(identifier: identifier); set.resetSpacingEstimate(spacingRQD); return set
+    }
+    mutating func updateSpacingEstimates() {
+        let rqd = spacingRQD
+        for index in jointSets.indices { jointSets[index].updateSpacingEstimate(rqd) }
     }
     func geology(now: Date) throws -> MappingGeology? {
         let start = try GeologyInput.optionalPicket(startPicket, field: "Начало интервала", convention: startPicketConvention)
@@ -155,6 +176,7 @@ extension JointSetDraft {
         self.init(identifier: record.identifier, id: record.id)
         representative = record.representative; measurementIDs = record.measurementIDs
         spacing = record.spacingMeters.map(ElevationInput.text) ?? ""
+        spacingProvenance = record.spacingProvenance
         persistence = record.persistenceMeters.map(ElevationInput.text) ?? ""
         aperture = record.apertureMillimeters.map(ElevationInput.text) ?? ""
         roughness = record.roughness; infill = record.infill; notes = record.notes; author = record.author ?? ""
@@ -165,7 +187,7 @@ extension JointSetDraft {
         return InterpretedJointSet(id: value.id, identifier: value.identifier, revision: (previous?.revision ?? 0) + 1,
             interpretedAt: now, author: value.author, method: value.method, representative: value.representative,
             measurementIDs: value.measurementIDs, spacingMeters: value.spacingMeters, persistenceMeters: value.persistenceMeters,
-            apertureMillimeters: value.apertureMillimeters, roughness: value.roughness, infill: value.infill, notes: value.notes)
+            apertureMillimeters: value.apertureMillimeters, roughness: value.roughness, infill: value.infill, notes: value.notes, spacingProvenance: value.spacingProvenance)
     }
 }
 extension TectonicStructureDraft {

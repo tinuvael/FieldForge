@@ -261,11 +261,18 @@ struct BartonQAssessment: Codable, Equatable {
     }
 }
 
-enum RMRStrengthTest: String, Codable, CaseIterable { case ucs, pointLoadIs50 }
+enum RMRStrengthTest: String, Codable, CaseIterable {
+    case ucs, pointLoadIs50, fieldEstimate
+    var title: String {
+        switch self { case .ucs: return "UCS — одноосное сжатие"; case .pointLoadIs50: return "Is(50) — точечное нагружение"; case .fieldEstimate: return "Полевая оценка R0–R6" }
+    }
+}
 enum RMREngineeringApplication: String, Codable, CaseIterable { case tunnelsAndMines, foundations, slopes }
 /// Original free-text evidence remains intact; optional explicit selections enable basic-v1.
 struct RMR89Input: Codable, Equatable {
     var basicSelections: [String: String]? = nil
+    var fieldStrength: FieldStrengthAssessment? = nil
+    var jcond76: JCond76Assessment? = nil
     var strengthTest: RMRStrengthTest?
     var strengthMPa = "", strengthEvidence = "", rqd = "", rqdEvidence = "", spacingMeters = ""
     var persistenceMeters = "", apertureMillimeters = "", roughness = "", infill = "", weathering = ""
@@ -274,6 +281,11 @@ struct RMR89Input: Codable, Equatable {
     var orientationDescription = "", source = "", assessor = "", missingReason = ""
     var hasChanges: Bool { self != RMR89Input() }
     func validate() throws {
+        try fieldStrength?.validate(); try jcond76?.validate()
+        guard (fieldStrength == nil || strengthTest == .fieldEstimate),
+              strengthTest != .fieldEstimate || (strengthMPa.isEmpty && basicSelections?["strength"] == nil) else {
+            throw MappingError.invalid("Выберите один метод прочности: полевая категория или лабораторный результат.")
+        }
         for (name, text) in [("Прочность, МПа", strengthMPa), ("Расстояние, м", spacingMeters)] {
             if let number = try RatingNumber.optional(text, name: name), number <= 0 { throw MappingError.invalid("\(name): требуется значение >0.") }
         }
@@ -297,6 +309,7 @@ struct RMR89Input: Codable, Equatable {
 struct RMR89Assessment: Codable, Equatable {
     static let version = "Bieniawski-RMR89/input-only-v1"
     static let calculatedVersion = "Bieniawski-RMR89/basic-categories-v1"
+    static let fieldStrengthVersion = "Bieniawski-RMR89/basic-categories-field-strength-v2"
     static let reference = "Bieniawski, Z.T. (1989). Engineering Rock Mass Classifications. Wiley. ISBN 0-471-60172-1."
     let method: String
     let revision: Int
@@ -306,17 +319,18 @@ struct RMR89Assessment: Codable, Equatable {
     let calculation: RMR89BasicEvaluation?
     init(input: RMR89Input, now: Date) throws {
         try input.validate(); revision = 1; assessedAt = now; self.input = input
-        calculation = try input.basicSelections == nil ? nil : input.basicEvaluation()
-        method = calculation == nil ? Self.version : Self.calculatedVersion
+        calculation = try input.basicSelections == nil && input.strengthTest != .fieldEstimate ? nil : input.basicEvaluation()
+        method = input.strengthTest == .fieldEstimate ? Self.fieldStrengthVersion : calculation == nil ? Self.version : Self.calculatedVersion
         missing = calculation?.missing ?? input.missing
     }
     func validate() throws {
         try input.validate()
         guard revision == 1, assessedAt.timeIntervalSinceReferenceDate.isFinite else { throw StorageError.invalidRecord }
         if method == Self.version {
-            guard calculation == nil, input.basicSelections == nil, missing == input.missing else { throw StorageError.invalidRecord }
+            guard input.strengthTest != .fieldEstimate, calculation == nil, input.basicSelections == nil, missing == input.missing else { throw StorageError.invalidRecord }
         } else {
-            guard method == Self.calculatedVersion, input.basicSelections != nil,
+            guard method == (input.strengthTest == .fieldEstimate ? Self.fieldStrengthVersion : Self.calculatedVersion),
+                  input.basicSelections != nil || input.strengthTest == .fieldEstimate,
                   calculation == (try input.basicEvaluation()), missing == calculation?.missing else { throw StorageError.invalidRecord }
         }
     }
@@ -324,13 +338,14 @@ struct RMR89Assessment: Codable, Equatable {
 struct MappingRatings: Codable, Equatable {
     let bartonQ: BartonQAssessment?
     let rmr89: RMR89Assessment?
-    func validate() throws { try bartonQ?.validate(); try rmr89?.validate() }
+    var gsi: GSIAssessment? = nil
+    func validate() throws { try bartonQ?.validate(); try rmr89?.validate(); try gsi?.validate() }
 }
 extension MappingDraft {
     func ratings(now: Date) throws -> MappingRatings? {
-        guard bartonQ.hasChanges || rmr89.hasChanges else { return nil }
+        guard bartonQ.hasChanges || rmr89.hasChanges || gsi != nil else { return nil }
         return MappingRatings(bartonQ: try bartonQ.hasChanges ? BartonQAssessment(input: bartonQ, now: now) : nil,
-                              rmr89: try rmr89.hasChanges ? RMR89Assessment(input: rmr89, now: now) : nil)
+                              rmr89: try rmr89.hasChanges ? RMR89Assessment(input: rmr89, now: now) : nil, gsi: gsi)
     }
 }
 
