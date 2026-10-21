@@ -44,10 +44,13 @@ import Foundation
             }
             Task { @MainActor [weak self] in
                 guard let self, self.generation == token else { return }
+                if case .unavailable = event { self.stop() }
                 self.onEvent?(event)
             }
         }
     }
+
+    deinit { manager.stopDeviceMotionUpdates() }
 
     func stop() { generation = nil; manager.stopDeviceMotionUpdates() }
 

@@ -162,7 +162,7 @@ private struct JointSetCaptureSheet: View {
             .confirmationDialog("Отбросить изменения системы?", isPresented: $discard, titleVisibility: .visible) {
                 Button("Отбросить", role: .destructive) { dismiss() }
             }
-            .sheet(isPresented: $measuring) {
+            .fullScreenCover(isPresented: $measuring) {
                 MappingMeasurementSheet(automatic: true, addTitle: "Принять как \(draft.identifier.rawValue)",
                     representativeIssue: { JointRepresentativeInput.issue(for: $0) },
                     onKeepOriginal: { reading in

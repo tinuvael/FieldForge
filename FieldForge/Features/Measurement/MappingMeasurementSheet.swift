@@ -7,7 +7,10 @@ struct MappingMeasurementSheet: View {
     var representativeIssue: ((Measurement) -> String?)? = nil
     var onKeepOriginal: ((Measurement) throws -> Void)? = nil
     let onAdd: (Measurement) throws -> Void
-    @EnvironmentObject private var model: AppModel
+    // Each presentation owns its sensor session. Root/standalone views cannot restart it.
+    @StateObject private var model = AppModel(captureOnly: true)
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var captureActive = false
     @Environment(\.dismiss) private var dismiss
     @State private var input = ManualOrientationInput()
     @State private var notes = ""
@@ -15,7 +18,7 @@ struct MappingMeasurementSheet: View {
     @State private var added = false
     @FocusState private var notesFocused: Bool
     private var issue: String? { model.displayed.flatMap { representativeIssue?($0) } }
-    private var canRecord: Bool { !added && (automatic ? model.session.canSave : (try? input.validated()) != nil) }
+    private var canRecord: Bool { captureActive && !added && (automatic ? model.session.canSave : (try? input.validated()) != nil) }
     private var canAdd: Bool {
         canRecord && (!automatic || issue == nil)
     }
@@ -33,7 +36,7 @@ struct MappingMeasurementSheet: View {
             .navigationTitle(automatic ? "Измерить iPhone" : "Ручной ввод")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Закрыть") { notesFocused = false; dismiss() }.accessibilityIdentifier("closeMappingMeasurement") }
+                ToolbarItem(placement: .cancellationAction) { Button("Закрыть") { notesFocused = false; stopCapture(); dismiss() }.accessibilityIdentifier("closeMappingMeasurement") }
                 if automatic {
                     ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Готово") { notesFocused = false } }
                 }
@@ -57,11 +60,24 @@ struct MappingMeasurementSheet: View {
                 }.frame(maxWidth: .infinity).controlSize(.large).padding().background(.bar)
             }
         }
-        .onAppear { if automatic { model.beginMappingCapture() } }
-        .onDisappear { if automatic { model.endMappingCapture() } }
+         .onAppear {
+            captureActive = true
+            if automatic {
+                model.beginMappingCapture()
+                model.setLifecycle(measurementVisible: true, foreground: scenePhase == .active)
+            }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if automatic { model.setLifecycle(measurementVisible: captureActive, foreground: phase == .active) }
+        }
+        .onDisappear { stopCapture() }
         .alert("Замер не добавлен", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
             Button("Понятно", role: .cancel) { error = nil }
         } message: { Text(error ?? "") }
+    }
+    private func stopCapture() {
+        captureActive = false
+        if automatic { model.endMappingCapture() }
     }
     private var automaticContent: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -126,7 +142,7 @@ struct MappingMeasurementSheet: View {
             try accept(reading)
             added = true
             if automatic { model.session.markSaved() }
-            dismiss()
+            stopCapture(); dismiss()
         } catch { self.error = error.localizedDescription }
     }
 }
