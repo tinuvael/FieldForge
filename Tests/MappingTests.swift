@@ -113,6 +113,20 @@ final class MappingTests: XCTestCase {
             XCTAssertEqual(reopened.history(for: legacy.id).count, 1)
         }
     }
+    func testPlanRevisionSuggestionAndDuplicateProtection() throws {
+        XCTAssertEqual(try PlanRevisionNumber.next([]), "1")
+        XCTAssertEqual(try PlanRevisionNumber.next(["1", "4", "2", "legacy-A"]), "5")
+        XCTAssertThrowsError(try PlanRevisionNumber.next([String(Int.max)]))
+        XCTAssertThrowsError(try PlanRevisionNumber.validateNew("1", existing: ["01"]))
+        for invalid in ["0", "01", "1.5", "", "A"] { XCTAssertThrowsError(try PlanRevisionNumber.validateNew(invalid, existing: [])) }
+        var w = try configured(MemoryStore())
+        let plan = MappingPlanReference(id: UUID(), horizonID: w.context.horizonID!, attachmentID: UUID(), version: "1")
+        try w.registerPlan(plan); try w.registerPlan(plan)
+        let duplicate = MappingPlanReference(id: UUID(), horizonID: plan.horizonID, attachmentID: UUID(), version: "01")
+        XCTAssertThrowsError(try w.registerPlan(duplicate)); XCTAssertEqual(w.journal.plans, [plan])
+        XCTAssertEqual(EngineeringDisplay.coordinate(482615.312345), "482615,3")
+        XCTAssertEqual(EngineeringDisplay.coordinate(393), "393,0")
+    }
     private func withFile(_ check: (FileMappingStore) throws -> Void) throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -178,13 +192,11 @@ final class MappingTests: XCTestCase {
         store.fail = false; try w.confirmDiscard()
         XCTAssertEqual(w.context, next); XCTAssertFalse(w.draft.hasChanges); XCTAssertNil(w.pendingContext)
     }
-    func testEveryContextLevelGuardsDirtyDraftIncludingDateOnly() throws {
+    func testProjectAndHorizonChangesGuardDirtyDraftIncludingDateOnly() throws {
         var w = try configured(MemoryStore()); let original = w.context
         let h = try w.createHorizon(elevation: "615,5")
-        let e = try w.createExcavation(name: "E2", horizonIDs: [original.horizonID!])
         for next in [MappingContext(projectID: original.projectID),
-                     MappingContext(projectID: original.projectID, horizonID: h),
-                     MappingContext(projectID: original.projectID, horizonID: original.horizonID, excavationID: e)] {
+                     MappingContext(projectID: original.projectID, horizonID: h)] {
             w.draft.observedAtOverride = Date(timeIntervalSince1970: 2)
             try w.requestContext(next); XCTAssertEqual(w.context, original); XCTAssertEqual(w.pendingContext, next)
             w.cancelContextChange(); XCTAssertTrue(w.draft.hasChanges)

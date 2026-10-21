@@ -159,6 +159,9 @@ struct MappingWorkflow {
     mutating func registerPlan(_ plan: MappingPlanReference) throws {
         guard journal.horizons.contains(where: { $0.id == plan.horizonID }) else { throw StorageError.invalidRecord }
         if journal.plans.contains(plan) { return }
+        guard !journal.plans.contains(where: { $0.horizonID == plan.horizonID && PlanRevisionNumber.same($0.version, plan.version) }) else {
+            throw MappingError.invalid("Такая ревизия плана уже существует. Выберите другой номер.")
+        }
         var next = journal; next.plans.append(plan); try commit(next)
     }
     mutating func selectPlanPoint(_ point: PlanPoint, planID: UUID) throws {
@@ -211,5 +214,28 @@ struct MappingWorkflow {
         try commit(next)
         resetDraft(); pendingContext = nil
         return record
+    }
+}
+
+/// Revision identifiers remain strings for historical compatibility; new normal imports use integers.
+enum PlanRevisionNumber {
+    static func same(_ lhs: String, _ rhs: String) -> Bool {
+        let a = lhs.trimmingCharacters(in: .whitespacesAndNewlines)
+        let b = rhs.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let n = Int(a), let m = Int(b) { return n == m }
+        return a == b
+    }
+    static func next(_ versions: [String]) throws -> String {
+        let maximum = versions.compactMap { Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) }.filter { $0 > 0 }.max() ?? 0
+        guard maximum < Int.max else { throw MappingError.invalid("Невозможно предложить следующий номер ревизии.") }
+        return String(maximum + 1)
+    }
+    static func validateNew(_ text: String, existing: [String]) throws {
+        guard text.range(of: #"^[1-9][0-9]*$"#, options: .regularExpression) != nil, Int(text) != nil else {
+            throw MappingError.invalid("Номер ревизии — целое положительное число без ведущих нулей.")
+        }
+        guard !existing.contains(where: { same($0, text) }) else {
+            throw MappingError.invalid("Номер ревизии уже занят. Выберите следующий.")
+        }
     }
 }

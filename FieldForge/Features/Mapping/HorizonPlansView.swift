@@ -74,7 +74,7 @@ struct HorizonPlansView: View {
                     }
                 }
             }
-            Section {
+            DisclosureGroup("Помощь по DXF") {
                 Text("Текстовый DXF: LINE, LWPOLYLINE, 2D/3D POLYLINE (XY-проекция), ARC, CIRCLE, POINT, простые TEXT/MTEXT. BLOCK/INSERT и кривые bulge пропускаются с предупреждением. Не DWG.").font(.caption)
                 Text("Локальные координаты чертежа не подтверждают съёмочную точность. Z берётся из горизонта либо вводится вручную. GPS не используется.").font(.caption)
             }
@@ -86,8 +86,9 @@ struct HorizonPlansView: View {
                 }
             }
             .sheet(item: $prepared, onDismiss: refreshPending) { item in
-                PlanImportSetup(item: item, stage: { units, version, crs, axes in
+                PlanImportSetup(item: item, existingVersions: (plans + pending).filter { $0.horizonID == item.horizonID }.map(\.version), stage: { units, version, crs, axes in
                     guard let files = mapping.planStore else { throw StorageError.writesBlocked }
+                    try PlanRevisionNumber.validateNew(version, existing: ((mapping.workflow?.journal.plans ?? []) + pending).filter { $0.horizonID == item.horizonID }.map(\.version))
                     return try await Task.detached(priority: .userInitiated) {
                         try files.stage(data: item.data, filename: item.filename, horizonID: item.horizonID,
                                         version: version, units: units, crs: crs, axes: axes)
@@ -175,6 +176,7 @@ struct PreparedPlanImport: Identifiable {
 
 private struct PlanImportSetup: View {
     let item: PreparedPlanImport
+    let existingVersions: [String]
     let stage: (PlanUnits, String, String, String) async throws -> MappingPlanReference
     let register: (MappingPlanReference) throws -> Void
     @Environment(\.dismiss) private var dismiss
@@ -183,6 +185,7 @@ private struct PlanImportSetup: View {
     @State private var busy = false
     @State private var units = PlanUnits.unknown
     @State private var version = "1"
+    @State private var initializedVersion = false
     @State private var crs = ""
     @State private var axes = ""
     @State private var error: String?
@@ -191,18 +194,22 @@ private struct PlanImportSetup: View {
             Form {
                 Section("Импорт DXF") {
                     Text(item.filename)
-                    TextField("Версия / ревизия", text: $version).focused($inputFocused).accessibilityIdentifier("planVersion").disabled(staged != nil || busy)
+                    LabeledContent("Ревизия", value: version)
+                    DisclosureGroup("Изменить номер ревизии") {
+                        TextField("Номер ревизии", text: $version).keyboardType(.numberPad).focused($inputFocused)
+                            .accessibilityIdentifier("planVersion").disabled(staged != nil || busy)
+                    }
                     Picker("Единицы XY · подтвердите источник", selection: $units) {
                         ForEach(PlanUnits.allCases, id: \.self) { Text($0.label).tag($0) }
                     }.accessibilityIdentifier("planUnits").disabled(staged != nil || busy)
-                    Text("INSUNITS файла: \(item.drawing.insertionUnits.map(String.init) ?? "не указан"). Это настройка вставки CAD, а не подтверждение масштаба съёмки. Значения XY сохраняются без пересчёта; при неизвестных единицах — в единицах чертежа. Z всегда в метрах.")
+                    Text("XY сохраняются без пересчёта. Подтвердите единицы по источнику. Неизвестная СК не означает съёмочные координаты. Z — в метрах.")
                         .font(.caption)
                 }
                 DisclosureGroup("СК и направления осей · необязательно") {
                     TextField("СК / неизвестно", text: $crs).focused($inputFocused).disabled(staged != nil || busy)
                     TextField("Оси / неизвестно", text: $axes).focused($inputFocused).disabled(staged != nil || busy)
                 }
-                Section("Ограничения просмотра") {
+                DisclosureGroup("Ограничения просмотра · \(item.drawing.warnings.count)") {
                     ForEach(item.drawing.warnings, id: \.self) { Text($0).font(.caption) }
                 }
                 if let error { Text(error).foregroundStyle(.red) }
@@ -218,7 +225,13 @@ private struct PlanImportSetup: View {
                         } catch { self.error = error.localizedDescription }
                     }
                 }.disabled(busy).accessibilityIdentifier("savePlanImport")
-            }.navigationTitle("Свойства плана").interactiveDismissDisabled(busy)
+            }.navigationTitle("Импорт DXF").interactiveDismissDisabled(busy)
+                .onAppear {
+                    guard !initializedVersion else { return }
+                    initializedVersion = true
+                    do { version = try PlanRevisionNumber.next(existingVersions) }
+                    catch { self.error = error.localizedDescription }
+                }
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("Отмена") { dismiss() }.disabled(busy) }
                     ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Готово") { inputFocused = false } }
@@ -357,7 +370,7 @@ struct HorizonPlanView: View {
             }.buttonStyle(.bordered).padding(.horizontal)
             if let proposed {
                 VStack {
-                    Text("Новая: X \(EngineeringDisplay.number(proposed.x)), Y \(EngineeringDisplay.number(proposed.y))")
+                    Text("Новая: X \(EngineeringDisplay.coordinate(proposed.x)), Y \(EngineeringDisplay.coordinate(proposed.y))")
                         .font(.caption).accessibilityIdentifier("planProposedXY")
                     Button("Подтвердить X/Y") {
                         do {
