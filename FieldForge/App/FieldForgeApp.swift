@@ -15,7 +15,7 @@ struct RootView: View {
     var body: some View {
         TabView(selection: $selectedTab) {
             MappingView().tabItem { Label("Картирование", systemImage: "square.and.pencil") }.tag(0)
-            NavigationStack { HorizonPlansView() }
+            NavigationStack { ActiveHorizonPlanView() }
                 .tabItem { Label("План", systemImage: "map") }.tag(1)
             WedgesView()
                 .tabItem { Label("Клинья", systemImage: "triangle") }.tag(2)

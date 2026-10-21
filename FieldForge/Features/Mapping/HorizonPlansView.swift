@@ -5,6 +5,9 @@ struct HorizonPlansView: View {
     @EnvironmentObject private var mapping: MappingModel
     var selecting = false
     var onSelection: (() -> Void)?
+    var horizonID: UUID? = nil
+    private var effectiveHorizonID: UUID? { horizonID ?? mapping.workflow?.context.horizonID }
+    private var plans: [MappingPlanReference] { effectiveHorizonID.map { mapping.plans(for: $0) } ?? [] }
     @State private var importing = false
     @State private var prepared: PreparedPlanImport?
     @State private var error: String?
@@ -13,21 +16,25 @@ struct HorizonPlansView: View {
     var body: some View {
         List {
             Section {
-                Text(mapping.workflow?.selectedHorizon?.displayName ?? "Выберите горизонт в картировании")
+                Text(mapping.workflow?.journal.horizons.first { $0.id == effectiveHorizonID }?.displayName ?? "Выберите горизонт в картировании")
                     .font(.headline)
                 Text("Точки показываются только на исходной версии плана. Совместимость разных планов и ручных координат не предполагается.")
                     .font(.caption)
-                Button("Импортировать DXF из Файлов", systemImage: "square.and.arrow.down") { importing = true }
-                    .disabled(mapping.workflow?.context.horizonID == nil || busy || mapping.planStore == nil)
+                Button("Загрузить DXF", systemImage: "square.and.arrow.down") { importing = true }
+                    .disabled(effectiveHorizonID == nil || busy || mapping.planStore == nil)
                     .accessibilityIdentifier("importDXF")
                 if busy { ProgressView("Проверка DXF…") }
+                if let effectiveHorizonID, mapping.hasUnavailablePlanSelection(for: effectiveHorizonID) {
+                    Label("Прежний выбор недоступен. Выберите ревизию для просмотра.", systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(.orange)
+                }
             }
             #if DEBUG && targetEnvironment(simulator)
             if ProcessInfo.processInfo.arguments.contains("--ui-testing") {
                 ForEach(["P2_PLAN_A", "P2_PLAN_B"], id: \.self) { key in
                     if let text = ProcessInfo.processInfo.environment[key] {
                         Button("Тестовый DXF: \(key)") {
-                            guard let h = mapping.workflow?.context.horizonID else { return }
+                            guard let h = effectiveHorizonID else { return }
                             prepare(data: Data(text.utf8), filename: "\(key).dxf", horizonID: h)
                         }.accessibilityIdentifier(key)
                     }
@@ -35,18 +42,28 @@ struct HorizonPlansView: View {
             }
             #endif
             Section("Планы и версии") {
-                ForEach(mapping.workflow?.plans ?? []) { plan in
+                ForEach(plans) { plan in
                     NavigationLink {
                         HorizonPlanLoader(plan: plan, selecting: selecting, onSelection: onSelection)
                     } label: {
                         VStack(alignment: .leading) {
                             Text(plan.file?.originalFilename ?? "Старая ссылка без файла")
                             Text("Версия: \(plan.version)").font(.subheadline)
+                            if mapping.activePlan(for: plan.horizonID)?.id == plan.id {
+                                Text(mapping.hasExplicitPlan(for: plan.horizonID) ? "Активная для просмотра" : "Последний импорт · для просмотра").font(.caption).foregroundStyle(.secondary)
+                            }
+                            if selecting, mapping.workflow?.draft.planID == plan.id {
+                                Text("Источник координат черновика").font(.caption)
+                            }
                             Text(plan.file?.units.label ?? "Единицы неизвестны").font(.caption)
                         }
                     }.accessibilityIdentifier("plan-\(plan.id.uuidString)")
+                    if !selecting {
+                        Button("Показывать версию \(plan.version)") { mapping.selectActivePlan(plan) }
+                            .disabled(mapping.activePlan(for: plan.horizonID)?.id == plan.id && mapping.hasExplicitPlan(for: plan.horizonID))
+                    }
                 }
-                if mapping.workflow?.plans.isEmpty != false { Text("На этом горизонте пока нет DXF") }
+                if plans.isEmpty { Text("На этом горизонте пока нет DXF") }
             }
             if !pending.isEmpty {
                 Section("Незавершённые импорты · оригиналы сохранены") {
@@ -86,13 +103,14 @@ struct HorizonPlansView: View {
                 Button("Понятно", role: .cancel) { error = nil }
             } message: { Text(error ?? "") }
             .onAppear { refreshPending() }
+            .onChange(of: effectiveHorizonID) { _, _ in refreshPending() }
     }
     private func refreshPending() {
         do {
             let items = try mapping.planStore?.pending() ?? []
             for plan in items where mapping.workflow?.journal.plans.contains(plan) == true { mapping.planStore?.complete(plan) }
             pending = items.filter { plan in
-                plan.horizonID == mapping.workflow?.context.horizonID && mapping.workflow?.journal.plans.contains(plan) != true
+                plan.horizonID == effectiveHorizonID && mapping.workflow?.journal.plans.contains(plan) != true
             }
         } catch { self.error = "Не удалось прочитать журнал импорта: \(error.localizedDescription). Файлы сохранены." }
     }
@@ -120,7 +138,7 @@ struct HorizonPlansView: View {
         }
     }
     private func prepare(_ url: URL) {
-        guard let horizonID = mapping.workflow?.context.horizonID else { return }
+        guard let horizonID = effectiveHorizonID else { return }
         busy = true
         Task {
             do {
@@ -222,12 +240,14 @@ struct HorizonPlanLoader: View {
             if let drawing { HorizonPlanView(plan: plan, drawing: drawing, selecting: selecting, onSelection: onSelection, onPointSelection: onPointSelection) }
             else if let error { ContentUnavailableView("План недоступен", systemImage: "exclamationmark.triangle", description: Text(error)) }
             else { ProgressView("Проверка оригинала…") }
-        }.task {
-            guard drawing == nil else { return }
+        }.task(id: plan.id) {
+            drawing = nil; error = nil
             do {
                 guard let files = mapping.planStore else { throw StorageError.writesBlocked }
-                drawing = try await Task.detached(priority: .userInitiated) { try DXFDocument.parse(files.read(plan)) }.value
-            } catch { self.error = error.localizedDescription }
+                let parsed = try await Task.detached(priority: .userInitiated) { try DXFDocument.parse(files.read(plan)) }.value
+                guard !Task.isCancelled else { return }
+                drawing = parsed
+            } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
         }
     }
 }
@@ -248,7 +268,7 @@ struct HorizonPlanView: View {
     @State private var pointSelection: PlanPointSelection?
     @State private var properties = false
     @State private var error: String?
-    private var points: [MappingObservation] { mapping.workflow?.points(on: plan, excavationID: filter, restrictToSelection: onPointSelection == nil) ?? [] }
+    private var points: [MappingObservation] { mapping.workflow?.points(on: plan, excavationID: filter, restrictToSelection: selecting && onPointSelection == nil) ?? [] }
     private func canvasDescription(_ viewport: PlanViewport) -> String {
         let visibleMarkers = points.filter { record in
             guard let x = record.coordinates?.x, let y = record.coordinates?.y else { return false }
@@ -337,7 +357,7 @@ struct HorizonPlanView: View {
             }.buttonStyle(.bordered).padding(.horizontal)
             if let proposed {
                 VStack {
-                    Text("Новая: X \(CSVExporter.number(proposed.x)), Y \(CSVExporter.number(proposed.y))")
+                    Text("Новая: X \(EngineeringDisplay.number(proposed.x)), Y \(EngineeringDisplay.number(proposed.y))")
                         .font(.caption).accessibilityIdentifier("planProposedXY")
                     Button("Подтвердить X/Y") {
                         do {
@@ -363,9 +383,9 @@ struct HorizonPlanView: View {
                                 } }
                         } label: {
                             VStack(alignment: .leading) {
-                                Text(record.picket)
-                                Text(MappingDateText.format(record)).font(.caption)
-                                Text(record.id.uuidString).font(.caption2)
+                                Text(mapping.workflow?.journal.excavations.first { $0.id == record.excavationID }?.name ?? "Выработка").font(.headline)
+                                Text(record.picket).font(.subheadline)
+                                Text(MappingDateText.compact(record)).font(.caption)
                             }
                         }.accessibilityIdentifier("planPoint-\(record.id.uuidString)")
                     }.navigationTitle("Наблюдения: \(records.count)")

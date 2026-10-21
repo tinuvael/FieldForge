@@ -9,7 +9,7 @@ struct MappingRatingsForm: View {
             DisclosureGroup("Barton Q") {
                 BartonQForm(input: $q, focus: focus)
             }
-            DisclosureGroup("RMR") {
+            DisclosureGroup("RMR89 · исходные данные") {
                 RMR89Form(input: $rmr, focus: focus)
             }
         }
@@ -18,84 +18,216 @@ struct MappingRatingsForm: View {
 private struct BartonQForm: View {
     @Binding var input: BartonQInput
     let focus: FocusState<Bool>.Binding
-    var body: some View {
-        Text("NGI · апрель 2025").font(.subheadline)
-        Text("Оценка текущей точки/интервала. Коэффициенты выбирает инженер; J1–J5 и описания не назначают их автоматически.")
-            .font(.caption).foregroundStyle(.secondary)
-        RatingField("RQD исходное, %", text: $input.rqd, id: "qRQD", focus: focus)
-        Picker("Источник RQD", selection: $input.rqdSource) {
-            Text("Не указан").tag(nil as RQDSource?)
-            ForEach(RQDSource.allCases, id: \.self) { Text($0.title).tag(Optional($0)) }
-        }.accessibilityIdentifier("qRQDSource")
-        RatingField("RQD: замер, отчёт, описание", text: $input.rqdEvidence, id: "qRQDEvidence", focus: focus)
-        Text("Для Q при RQD ≤10% используется 10%; исходное значение сохраняется. Точность ввода не означает точность оценки.")
-            .font(.caption)
-        Picker("Положение для Jn", selection: $input.location) {
-            Text("Не указано").tag(nil as QLocation?)
-            ForEach(QLocation.allCases, id: \.self) { Text($0.title).tag(Optional($0)) }
-        }.accessibilityIdentifier("qLocation")
-        Picker("Контакт стенок Jr / Ja", selection: $input.contact) {
-            Text("Не указан").tag(nil as QContact?)
-            ForEach(QContact.allCases, id: \.self) { Text($0.title).tag(Optional($0)) }
-        }.accessibilityIdentifier("qContact")
-        Text("Jr и Ja относятся к наиболее неблагоприятной для сдвига системе в этой точке; её выбор и направление скольжения укажите в обосновании.")
-            .font(.caption)
-        ForEach(QParameter.allCases, id: \.self) { parameter in
-            DisclosureGroup(parameter.title) {
-                QCoefficientForm(parameter: parameter, input: Binding(get: { input[parameter] }, set: { input[parameter] = $0 }), focus: focus)
-            }
+    @State private var sourcesExpanded = false
+    @State private var conditionsExpanded = false
+    @State private var adjustmentsExpanded = false
+    private var evaluation: Result<QEvaluation, Error> { Result { try input.evaluate() } }
+    private var missing: [String] { (try? evaluation.get())?.missing ?? [] }
+    private func needs(_ destination: QCaptureDestination) -> [String] {
+        missing.filter { QCaptureDestination.destination(for: $0) == destination }
+    }
+    private func title(_ text: String, destination: QCaptureDestination) -> String {
+        let count = needs(destination).count
+        if count == 0, destination == .sources, case .failure = evaluation {
+            return "\(text) · источники обязательны"
         }
-        DisclosureGroup("Особые условия и поправки") {
+        return count == 0 ? text : "\(text) · обязательно: \(count)"
+    }
+    var body: some View {
+        coefficientInputs
+        calculationStatus
+        DisclosureGroup(isExpanded: $conditionsExpanded) {
+            Picker("Участок · Jn", selection: $input.location) {
+                Text("Выбрать участок").tag(nil as QLocation?)
+                ForEach(QLocation.allCases, id: \.self) { Text($0.title).tag(Optional($0)) }
+            }.accessibilityIdentifier("qLocation")
+            Picker("Контакт Jr / Ja", selection: $input.contact) {
+                Text("Выбрать контакт").tag(nil as QContact?)
+                ForEach(QContact.allCases, id: \.self) { Text($0.title).tag(Optional($0)) }
+            }.accessibilityIdentifier("qContact")
+        } label: { Text(title("Условия расчёта", destination: .conditions)) }
+        DisclosureGroup(isExpanded: $adjustmentsExpanded) {
             Picker("Поправка Jr", selection: $input.jrAdjustment) {
                 ForEach(JrAdjustment.allCases, id: \.self) { Text($0.title).tag($0) }
             }
-            if input.jrAdjustment == .spacingOver3m {
-                RatingField("Среднее расстояние, м (>3)", text: $input.relevantSpacingMeters, id: "qJrSpacing", focus: focus)
+            if input.jrAdjustment == .spacingOver3m || !input.relevantSpacingMeters.isEmpty {
+                RatingField("Среднее расстояние, м (>3)", text: $input.relevantSpacingMeters, id: "qJrSpacing", focus: focus, numeric: true)
             }
-            Text("Jr +1 требует оценки сечения выработки; поправка не применяется без контакта. Строка Jr G: штрихи должны совпадать с предполагаемым скольжением.").font(.caption)
             Picker("Поправка SRF", selection: $input.srfAdjustment) {
                 ForEach(SRFAdjustment.allCases, id: \.self) { Text($0.title).tag($0) }
             }
-            if input.srfAdjustment == .adjacentZone {
-                RatingField("Снижение SRF, % (25…50)", text: $input.srfReductionPercent, id: "qSRFReduction", focus: focus)
+            if input.srfAdjustment == .adjacentZone || !input.srfReductionPercent.isEmpty {
+                RatingField("Снижение SRF, % (25…50)", text: $input.srfReductionPercent, id: "qSRFReduction", focus: focus, numeric: true)
             }
-            RatingField("Обоснование поправок: геометрия, покрытие, зона", text: $input.correctionEvidence, id: "qCorrections", focus: focus)
-            Text("SRF: учитывайте время после проходки, напряжения, прочность и характер деформаций. Отношения напряжений из табл. 3-7 здесь не вычисляются. Для выдавливания и набухания нужна отдельная инженерная оценка. Jw C–F — приближённые оценки; после дренажа/инъекции пересмотрите строку и сохраните обоснование. Обледенение в Jw не учтено.").font(.caption)
+            if input.jrAdjustment != .none || input.srfAdjustment != .none || !input.correctionEvidence.isEmpty {
+                RatingField("Обоснование поправок и геометрии", text: $input.correctionEvidence, id: "qCorrections", focus: focus)
+            }
+            Text("Jr +1 требует оценки сечения; без контакта не применяется. SRF: подтвердите геометрию, покрытие и влияние зоны по методике.").font(.caption)
+        } label: { Text(title("Поправки Jr / SRF", destination: .adjustments)) }
+        DisclosureGroup(isExpanded: $sourcesExpanded) {
+            Picker("Источник RQD · нужен для расчёта", selection: $input.rqdSource) {
+                Text("Не указан").tag(nil as RQDSource?)
+                ForEach(RQDSource.allCases, id: \.self) { Text($0.title).tag(Optional($0)) }
+            }.accessibilityIdentifier("qRQDSource")
+            RatingField("RQD: замер, отчёт, описание", text: $input.rqdEvidence, id: "qRQDEvidence", focus: focus)
+            RatingField("Источник оценки · нужен для расчёта", text: $input.assessmentSource, id: "qAssessmentSource", focus: focus)
+            RatingField("Автор оценки Q", text: $input.assessor, id: "qAssessor", focus: focus)
+            RatingField("Геологическое описание", text: $input.geologicalDescription, id: "qDescription", focus: focus)
+            RatingField("Причина отсутствия данных", text: $input.missingReason, id: "qMissingReason", focus: focus)
+        } label: { Text(title("Дополнительные параметры", destination: .sources)) }
+        DisclosureGroup("Методика") {
+            Text("NGI · апрель 2025").font(.subheadline)
+            Text("Коэффициенты выбирает инженер; системы J1–J5 не назначают их автоматически. При RQD ≤10% используется 10%; исходное значение сохраняется.").font(.caption)
+            Text("Jr и Ja — для наиболее неблагоприятной системы с учётом направления скольжения. Для Jr G штрихи должны совпадать с предполагаемым скольжением. Jw C–F — приближённые оценки; после дренажа или инъекции нужна переоценка. Обледенение не учтено.").font(.caption)
+            Text("SRF учитывает напряжения, прочность и время после проходки. Отношения напряжений табл. 3-7 не вычисляются; выдавливание и набухание требуют инженерной оценки.").font(.caption)
+            if let evaluation = try? input.evaluate() { QCalculationText(evaluation: evaluation) }
+            Link("Методика NGI 2025", destination: URL(string: QMethod.url)!)
+            Text("Рекомендации по крепи не рассчитываются.").font(.caption)
         }
-        RatingField("Источник оценки Q / документ / условия", text: $input.assessmentSource, id: "qAssessmentSource", focus: focus)
-        RatingField("Автор оценки Q", text: $input.assessor, id: "qAssessor", focus: focus)
-        RatingField("Исходное геологическое описание Q", text: $input.geologicalDescription, id: "qDescription", focus: focus)
-        RatingField("Причина отсутствия данных Q", text: $input.missingReason, id: "qMissingReason", focus: focus)
-        QCalculationPreview(input: input)
-        Link("Методика NGI 2025", destination: URL(string: QMethod.url)!)
-        Text("Результат классифицирует массив; рекомендации по крепи не рассчитываются.").font(.caption)
+    }
+    private var coefficientInputs: some View {
+        Group {
+            RatingField("RQD, %", text: $input.rqd, id: "qRQD", focus: focus, numeric: true)
+            ForEach(QParameter.allCases, id: \.self) { parameter in
+                QCoefficientForm(parameter: parameter, input: Binding(get: { input[parameter] }, set: { input[parameter] = $0 }), focus: focus)
+            }
+        }
+    }
+    private var repairCoefficients: some View {
+        Form { coefficientInputs }
+            .navigationTitle("Параметры Q").navigationBarTitleDisplayMode(.inline)
+            .scrollDismissesKeyboard(.interactively)
+            .onAppear { focus.wrappedValue = false }
+            .toolbar { ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Готово") { focus.wrappedValue = false } } }
+    }
+    @ViewBuilder private var calculationStatus: some View {
+        switch evaluation {
+        case .success(let value):
+            if value.result != nil { QCalculationText(evaluation: value, compact: true) }
+            else {
+                Text("Q не рассчитан · заполните обязательные данные").font(.subheadline).accessibilityIdentifier("qMissingStatus")
+                ForEach(QCaptureDestination.allCases, id: \.self) { destination in
+                    let items = needs(destination)
+                    if !items.isEmpty {
+                        if destination == .numbers {
+                            NavigationLink { repairCoefficients } label: { missingLabel(destination, items: items) }
+                        } else {
+                            Button { reveal(destination) } label: { missingLabel(destination, items: items) }
+                        }
+                    }
+                }
+            }
+        case .failure(let error):
+            Label("Q не рассчитан · исправьте ввод или условия", systemImage: "exclamationmark.circle")
+                .font(.subheadline).foregroundStyle(.red).accessibilityIdentifier("qInvalidStatus")
+            Text(error.localizedDescription).font(.caption).foregroundStyle(.red)
+            NavigationLink("Проверить RQD и коэффициенты") { repairCoefficients }
+            Button("Показать условия, поправки и источники") {
+                focusedDismissal()
+                conditionsExpanded = true; adjustmentsExpanded = true; sourcesExpanded = true
+            }
+        }
+    }
+    private func missingLabel(_ destination: QCaptureDestination, items: [String]) -> some View {
+        Text("\(destination.title): \(items.joined(separator: ", ")) →")
+            .font(.caption).multilineTextAlignment(.leading).frame(minHeight: 44, alignment: .leading)
+    }
+    private func focusedDismissal() { focus.wrappedValue = false }
+    private func reveal(_ destination: QCaptureDestination) {
+        focusedDismissal()
+        switch destination {
+        case .conditions: conditionsExpanded = true
+        case .sources: sourcesExpanded = true
+        case .adjustments: adjustmentsExpanded = true
+        case .numbers: break
+        }
+    }
+
+}
+
+/// Routes actual evaluator messages to controls; this never decides calculation validity.
+private enum QCaptureDestination: CaseIterable, Hashable {
+    case numbers, conditions, sources, adjustments
+    var title: String {
+        switch self {
+        case .numbers: return "Числа и обоснования диапазонов"
+        case .conditions: return "Условия классификации"
+        case .sources: return "Обязательные источники"
+        case .adjustments: return "Данные для поправок"
+        }
+    }
+    static func destination(for missing: String) -> Self {
+        if ["RQD", "Jn", "Jr", "Ja", "Jw", "SRF"].contains(missing) || missing.hasPrefix("Обоснование значения диапазона ") { return .numbers }
+        if ["Положение выработки для Jn", "Контакт стенок для Jr/Ja"].contains(missing) { return .conditions }
+        if ["Среднее расстояние для Jr +1", "Процент снижения SRF", "Обоснование поправок и геометрии выработки"].contains(missing) { return .adjustments }
+        return .sources
     }
 }
+
 private struct QCoefficientForm: View {
     let parameter: QParameter
     @Binding var input: QCoefficientInput
     let focus: FocusState<Bool>.Binding
+    private var row: QTableRow? { QMethod.rows(parameter).first { $0.id == input.category } }
+    private var valueText: String {
+        do {
+            guard let value = try input.validated(parameter) else { return "Указать" }
+            return EngineeringDisplay.significant(value)
+        } catch { return "Исправить" }
+    }
     var body: some View {
-        Picker("Строка NGI \(parameter.rawValue)", selection: Binding(get: { input.category }, set: { input.select($0, parameter: parameter) })) {
-            Text("Не выбрана").tag(nil as String?)
-            ForEach(QMethod.rows(parameter)) { row in
-                Text("\(row.id) · \(row.description) · \(row.rangeText)").tag(Optional(row.id))
+        NavigationLink {
+            QCoefficientSelection(parameter: parameter, input: $input)
+        } label: {
+            LabeledContent(parameter.title, value: valueText)
+        }.accessibilityIdentifier("qCategory-\(parameter.rawValue)")
+        if let row {
+            if row.minimum != row.maximum {
+                RatingField("\(parameter.rawValue): выберите значение \(row.rangeText)", text: $input.value, id: "qValue-\(parameter.rawValue)", focus: focus, numeric: true)
+                RatingField("Обоснование значения диапазона", text: $input.evidence, id: "qEvidence-\(parameter.rawValue)", focus: focus)
             }
-        }.pickerStyle(.navigationLink).accessibilityIdentifier("qCategory-\(parameter.rawValue)")
-        if let row = QMethod.rows(parameter).first(where: { $0.id == input.category }) {
-            Text("\(row.id) · \(row.description)").font(.caption)
-            RatingField("\(parameter.rawValue): \(row.rangeText)", text: $input.value, id: "qValue-\(parameter.rawValue)", focus: focus)
-            Text(row.minimum == row.maximum ? "Ручное значение должно совпадать с выбранной строкой." : "Введите оценку в пределах строки; поясните выбор значения диапазона.")
-                .font(.caption).foregroundStyle(.secondary)
         }
-        RatingField("\(parameter.rawValue): исходное описание / источник / обоснование", text: $input.evidence, id: "qEvidence-\(parameter.rawValue)", focus: focus)
     }
 }
+
+private struct QCoefficientSelection: View {
+    let parameter: QParameter
+    @Binding var input: QCoefficientInput
+    @Environment(\.dismiss) private var dismiss
+    @FocusState private var focused: Bool
+    var body: some View {
+        List {
+            Button("Не выбрано") { input.select(nil, parameter: parameter); dismiss() }
+            ForEach(QMethod.rows(parameter)) { row in
+                Button { input.select(row.id, parameter: parameter); dismiss() } label: {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(row.description)
+                            Text("\(row.id) · \(row.rangeText)").font(.subheadline).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if row.id == input.category { Image(systemName: "checkmark") }
+                    }.padding(.vertical, 4)
+                }
+            }
+            if let row = QMethod.rows(parameter).first(where: { $0.id == input.category }), row.minimum == row.maximum {
+                DisclosureGroup("Дополнительно · выбранная категория") {
+                    Text(row.description).font(.caption)
+                    RatingField("\(parameter.rawValue): \(row.rangeText)", text: $input.value, id: "qValue-\(parameter.rawValue)", focus: $focused, numeric: true)
+                    RatingField("Источник / обоснование", text: $input.evidence, id: "qEvidence-\(parameter.rawValue)", focus: $focused)
+                }
+            }
+        }.navigationTitle(parameter.title).navigationBarTitleDisplayMode(.inline)
+            .scrollDismissesKeyboard(.interactively)
+            .toolbar { ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Готово") { focused = false } } }
+    }
+}
+
 struct QCalculationPreview: View {
     let input: BartonQInput
     var body: some View {
         if let evaluation = try? input.evaluate() {
-            QCalculationText(evaluation: evaluation)
+            QCalculationText(evaluation: evaluation, compact: true)
         } else {
             Text("Недостаточно данных для расчёта").accessibilityIdentifier("qMissingStatus")
             if case .failure(let error) = Result(catching: { try input.evaluate() }) {
@@ -106,13 +238,16 @@ struct QCalculationPreview: View {
 }
 struct QCalculationText: View {
     let evaluation: QEvaluation
+    var compact = false
     var body: some View {
         if let result = evaluation.result {
-            Text("Q ≈ \(String(format: "%.6g", locale: Locale(identifier: "ru_RU"), result.value))").font(.headline).accessibilityIdentifier("qResult")
+            Text("Q ≈ \(EngineeringDisplay.significant(result.value))").font(.headline).accessibilityIdentifier("qResult")
             Text(result.rockClass?.title ?? "Значение вне опубликованной шкалы классов 0,001…1000")
-            Text("RQD исходное: \(CSVExporter.engineeringNumber(result.measuredRQD))%; в расчёте: \(CSVExporter.engineeringNumber(result.calculationRQD))%")
-            Text("Q = (\(CSVExporter.engineeringNumber(result.calculationRQD)) / \(CSVExporter.engineeringNumber(result.jn))) × (\(CSVExporter.engineeringNumber(result.jr)) / \(CSVExporter.engineeringNumber(result.ja))) × (\(CSVExporter.engineeringNumber(result.jw)) / \(CSVExporter.engineeringNumber(result.srf)))")
+            if !compact {
+                Text("RQD исходное: \(EngineeringDisplay.significant(result.measuredRQD))%; в расчёте: \(EngineeringDisplay.significant(result.calculationRQD))%")
+                Text("Q = (\(EngineeringDisplay.significant(result.calculationRQD)) / \(EngineeringDisplay.significant(result.jn))) × (\(EngineeringDisplay.significant(result.jr)) / \(EngineeringDisplay.significant(result.ja))) × (\(EngineeringDisplay.significant(result.jw)) / \(EngineeringDisplay.significant(result.srf)))")
                 .font(.caption).textSelection(.enabled)
+            }
         } else {
             Text("Недостаточно данных для расчёта").accessibilityIdentifier("qMissingStatus")
             Text("Не указано: \(evaluation.missing.joined(separator: ", "))").font(.caption)
@@ -162,13 +297,15 @@ private struct RatingField: View {
     @Binding var text: String
     let id: String
     let focus: FocusState<Bool>.Binding
-    init(_ title: String, text: Binding<String>, id: String, focus: FocusState<Bool>.Binding) {
-        self.title = title; _text = text; self.id = id; self.focus = focus
+    var numeric = false
+    init(_ title: String, text: Binding<String>, id: String, focus: FocusState<Bool>.Binding, numeric: Bool = false) {
+        self.title = title; _text = text; self.id = id; self.focus = focus; self.numeric = numeric
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title).font(.caption).foregroundStyle(.secondary)
             TextField("Не указано", text: $text, axis: .vertical).focused(focus).accessibilityIdentifier(id).accessibilityLabel(title)
+                .keyboardType(numeric ? .decimalPad : .default)
         }
     }
 }

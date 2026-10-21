@@ -5,8 +5,8 @@ struct MappingGeologyDetail: View {
     let measurements: [Measurement]
     var body: some View {
         Section("Интервал и положение") {
-            LabeledContent("Начало", value: geology.start.map { "\($0.text) · \(CSVExporter.number($0.meters)) м" } ?? "Не указано")
-            LabeledContent("Конец", value: geology.end.map { "\($0.text) · \(CSVExporter.number($0.meters)) м" } ?? "Не указано")
+            LabeledContent("Начало", value: geology.start.map { "\($0.text) · \(EngineeringDisplay.number($0.meters)) м" } ?? "Не указано")
+            LabeledContent("Конец", value: geology.end.map { "\($0.text) · \(EngineeringDisplay.number($0.meters)) м" } ?? "Не указано")
             LabeledContent("Положение", value: geology.position?.title ?? "Не указано")
         }
         Section("Системы трещин · интерпретации: \(geology.jointSets.count)") {
@@ -39,7 +39,7 @@ struct MappingGeologyDetail: View {
                 DisclosureGroup("№\(index + 1) · \(structure.type.title)") {
                     GeologicalOrientationDetail(input: structure.orientation, permitsPartial: true)
                     number("Мощность, м", structure.thicknessMeters)
-                    LabeledContent("Пикет структуры", value: structure.picket.map { "\($0.text) · \(CSVExporter.number($0.meters)) м" } ?? "Не указан")
+                    LabeledContent("Пикет структуры", value: structure.picket.map { "\($0.text) · \(EngineeringDisplay.number($0.meters)) м" } ?? "Не указан")
                     LabeledContent("Положение структуры", value: structure.position.isEmpty ? "Не указано" : structure.position)
                     LabeledContent("Описание", value: structure.description.isEmpty ? "Нет" : structure.description)
                     Text(structure.id.uuidString).font(.caption).textSelection(.enabled)
@@ -49,7 +49,7 @@ struct MappingGeologyDetail: View {
         }
     }
     private func number(_ title: String, _ value: Double?) -> some View {
-        LabeledContent(title, value: value.map { CSVExporter.number($0) } ?? "Не указано")
+        LabeledContent(title, value: value.map { EngineeringDisplay.number($0) } ?? "Не указано")
     }
 }
 

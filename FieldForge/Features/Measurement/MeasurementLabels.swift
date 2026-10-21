@@ -97,8 +97,6 @@ extension MockCondition {
 }
 enum AngleText {
     static func format(_ value: Double?, azimuth: Bool = false) -> String {
-        guard var value, value.isFinite else { return "—" }
-        if azimuth { value = PlaneGeometry.normalizeAzimuth((value * 10).rounded() / 10) ?? value }
-        return String(format: "%.1f°", locale: Locale(identifier: "ru_RU"), value)
+        EngineeringDisplay.angle(value, azimuth: azimuth)
     }
 }

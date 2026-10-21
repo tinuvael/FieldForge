@@ -38,7 +38,6 @@ struct DraftPhotosSection: View {
                 }
                 #endif
                 if loading { ProgressView("Получение фотографий… Дождитесь завершения перед сохранением.") }
-                if photos.isEmpty { Text("Добавьте фото до сохранения точки. План и координаты не требуются.").font(.caption) }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 130))], spacing: 12) {
                     ForEach(photos) { operation in
                         VStack {
@@ -58,7 +57,11 @@ struct DraftPhotosSection: View {
                         }
                     }
                 }
-                Text("До успешного сохранения наблюдения фото принадлежат черновику. Незаписанные снимки в памяти потеряются при завершении приложения. Место съёмки неизвестно; XY точки и EXIF/GPS его не заменяют.").font(.caption).foregroundStyle(.secondary)
+                if !photos.isEmpty {
+                    DisclosureGroup("О фотографиях черновика") {
+                        Text("До успешного сохранения наблюдения фото принадлежат черновику. Незаписанные снимки в памяти потеряются при завершении приложения. Место съёмки неизвестно; XY точки и EXIF/GPS его не заменяют.").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
                 if !mapping.pendingPhotos.filter({ $0.photo.context.locationBasis == .unknownBeforeFirstSave &&
                     mapping.workflow?.journal.photos.contains($0.photo) != true && !photos.contains($0) }).isEmpty {
                     Text("Есть файлы незавершённых или удалённых черновиков. Они сохранены для проверенного восстановления. Форма после перезапуска не восстанавливается; файлы не назначаются новой точке.").font(.caption).foregroundStyle(.orange)

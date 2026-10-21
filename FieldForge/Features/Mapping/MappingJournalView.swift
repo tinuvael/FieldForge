@@ -39,13 +39,8 @@ struct MappingJournalView: View {
                     DatePicker("По включительно", selection: $throughDate, in: fromDate..., displayedComponents: .date)
                     Text("Даты: \(TimeZone.current.identifier)").font(.caption)
                 }
-                DisclosureGroup("Сортировка") {
-                    Picker("Порядок", selection: $query.byPicket) {
-                        Text("По дате").tag(false); Text("По пикету").tag(true)
-                    }.pickerStyle(.segmented).accessibilityIdentifier("journalSort")
-                }
                 Button("Сбросить фильтры") {
-                    let sort = query.byPicket; query = MappingJournalQuery(); query.byPicket = sort; datesEnabled = false
+                    query = MappingJournalQuery(); datesEnabled = false
                 }.accessibilityIdentifier("journalClearFilters")
             }
             Section("Наблюдения: \(observations.count) из \(mapping.workflow?.observations.count ?? 0)") {
@@ -53,18 +48,15 @@ struct MappingJournalView: View {
                 ForEach(observations) { record in
                     NavigationLink { MappingObservationDetail(record: record) } label: {
                         VStack(alignment: .leading, spacing: 6) {
-                            Text(record.picket).font(.headline)
+                            Text(name(excavation: record.excavationID)).font(.headline)
+                            Text(record.picket).font(.subheadline)
                             if let revision = mapping.workflow?.journal.history(for: record.id).last {
                                 Text("Версия \(revision.version) · исправлено \(MappingCorrectionDateText.format(revision.correctedAt))").font(.caption)
                             }
-                            Text(MappingDateText.format(record)).font(.subheadline)
-                            Text("\(name(horizon: record.horizonID)) · \(name(excavation: record.excavationID))").font(.caption)
+                            Text("\(MappingDateText.compact(record)) · \(name(horizon: record.horizonID))").font(.caption).foregroundStyle(.secondary)
                         }.padding(.vertical, 4)
                     }.accessibilityIdentifier("journalRecord-\(record.id.uuidString)")
                 }
-            }
-            Section("Независимые измерения") {
-                NavigationLink("Неназначенный журнал Phase 1/2", destination: JournalView())
             }
         }.accessibilityIdentifier("journalObservations")
             .navigationTitle("Журнал проекта")
@@ -152,6 +144,12 @@ private struct JournalSearchAccessibility: UIViewControllerRepresentable {
 }
 
 enum MappingDateText {
+    static func compact(_ record: MappingObservation) -> String {
+        let formatter = DateFormatter(); formatter.locale = Locale(identifier: "ru_RU")
+        formatter.timeZone = TimeZone(secondsFromGMT: record.observedUTCOffsetSeconds)
+        formatter.dateFormat = "dd.MM.yyyy HH:mm"
+        return formatter.string(from: record.observedAt)
+    }
     static func format(_ record: MappingObservation) -> String {
         let formatter = DateFormatter(); formatter.locale = Locale(identifier: "ru_RU")
         formatter.timeZone = TimeZone(secondsFromGMT: record.observedUTCOffsetSeconds)
@@ -170,9 +168,15 @@ struct MappingObservationDetail: View {
     init(record: MappingObservation, historical: Bool = false, historicalVersion: Int? = nil) {
         snapshot = record; self.historical = historical; self.historicalVersion = historicalVersion
     }
+    private var excavationName: String { mapping.workflow?.journal.excavations.first { $0.id == record.excavationID }?.name ?? "Выработка" }
     private var record: MappingObservation { historical ? snapshot : (mapping.workflow?.journal.effectiveObservation(id: snapshot.id) ?? snapshot) }
     var body: some View {
         List {
+            Section {
+                Text(excavationName).font(.title2.bold())
+                Text(record.picket).font(.subheadline)
+                Text(MappingDateText.compact(record)).font(.caption).foregroundStyle(.secondary)
+            }
             if historical, let historicalVersion { Text("Версия \(historicalVersion) · исторический снимок").font(.caption) }
             if !historical {
                 Section {
@@ -193,7 +197,7 @@ struct MappingObservationDetail: View {
                 LabeledContent("Горизонт", value: mapping.workflow?.journal.horizons.first { $0.id == record.horizonID }?.displayName ?? record.horizonID.uuidString)
                 LabeledContent("Выработка", value: mapping.workflow?.journal.excavations.first { $0.id == record.excavationID }?.name ?? record.excavationID.uuidString)
                 LabeledContent("Пикет", value: record.picket)
-                LabeledContent("Метры", value: CSVExporter.number(record.chainageMeters))
+                LabeledContent("Метры", value: EngineeringDisplay.number(record.chainageMeters))
                 LabeledContent("Начало / направление", value: record.chainageOriginAndDirection == "unknown" ? "Неизвестно" : record.chainageOriginAndDirection)
                 LabeledContent("Дата наблюдения", value: MappingDateText.format(record))
                 Text(record.observedTimeZoneID)
@@ -201,13 +205,18 @@ struct MappingObservationDetail: View {
             Section(record.coordinates.map { MappingCoordinateText.header(xyUnits: $0.units) } ?? "Координаты") {
                 if let c = record.coordinates {
                     let xyUnit = MappingCoordinateText.xyUnit(c.units)
-                    LabeledContent(c.units == "m" ? "X" : "X, \(xyUnit)", value: c.x.map { CSVExporter.number($0) } ?? "Неизвестно")
-                    LabeledContent(c.units == "m" ? "Y" : "Y, \(xyUnit)", value: c.y.map { CSVExporter.number($0) } ?? "Неизвестно")
-                    LabeledContent(c.units == "m" ? "Z" : "Z, м", value: c.z.map { CSVExporter.number($0) } ?? "Неизвестно")
+                    LabeledContent(c.units == "m" ? "X" : "X, \(xyUnit)", value: c.x.map { EngineeringDisplay.number($0) } ?? "Неизвестно")
+                    LabeledContent(c.units == "m" ? "Y" : "Y, \(xyUnit)", value: c.y.map { EngineeringDisplay.number($0) } ?? "Неизвестно")
+                    LabeledContent(c.units == "m" ? "Z" : "Z, м", value: c.z.map { EngineeringDisplay.number($0) } ?? "Неизвестно")
                     LabeledContent("СК", value: c.crs); LabeledContent("Оси / высоты", value: c.axes)
                     Text(c.provenance)
                     LabeledContent("Источник Z", value: c.zOrigin == .horizonDefault ? "По горизонту · не съёмка" : c.zOrigin == .manualOverride ? "Ручное значение" : "Не указан в исходной записи")
                     if let level = c.zHorizonElevation { Text("Исходная отметка: \(ElevationInput.label(level)); система: \(c.zDatum ?? "unknown")") }
+                    DisclosureGroup("Полная точность координат") {
+                        LabeledContent("X", value: c.x.map { CSVExporter.engineeringNumber($0) } ?? "Неизвестно")
+                        LabeledContent("Y", value: c.y.map { CSVExporter.engineeringNumber($0) } ?? "Неизвестно")
+                        LabeledContent("Z", value: c.z.map { CSVExporter.engineeringNumber($0) } ?? "Неизвестно")
+                    }.font(.caption).textSelection(.enabled)
                 } else { Text("Координаты не заданы") }
             }
             if !historical { ObservationPhotosSection(pointID: record.id) }
@@ -228,7 +237,7 @@ struct MappingObservationDetail: View {
                 Text(record.id.uuidString).textSelection(.enabled)
                 Text("UUID точки постоянный. Дата полевого наблюдения и время исправления хранятся отдельно. Исходные замеры неизменяемы.")
             }.font(.caption)
-        }.navigationTitle(record.picket).navigationBarTitleDisplayMode(.inline)
+        }.navigationTitle(excavationName).navigationBarTitleDisplayMode(.inline)
             .sheet(item: $correction) { draft in MappingCorrectionEditor(draft: draft) }
             .alert("Исправление", isPresented: Binding(get: { correctionError != nil }, set: { if !$0 { correctionError = nil } })) {
                 Button("Понятно", role: .cancel) { correctionError = nil }

@@ -51,11 +51,11 @@ struct WedgeHeadingSheet: View {
             Form {
                 Section("Направление оси") {
                     Text("Держите iPhone в портретной ориентации, почти горизонтально, экраном вверх. Направьте верхний край вдоль выработки в сторону увеличения пикетажа.")
-                    Text(model.heading.map { String(format: "%.1f°", $0) } ?? "—")
+                    Text(EngineeringDisplay.angle(model.heading, azimuth: true))
                         .font(.largeTitle.monospacedDigit()).frame(maxWidth: .infinity)
                     Text(model.message).font(.subheadline)
                     if let sample = model.sample {
-                        Text("Магнитное поле: \(sample.magneticField.length.formatted(.number.precision(.fractionLength(1)))) мкТл").font(.caption)
+                        Text("Магнитное поле: \(EngineeringDisplay.number(sample.magneticField.length, decimals: 1)) мкТл").font(.caption)
                     }
                     Button("Принять направление") {
                         if let capture = model.capture() { onCapture(capture); dismiss() }
