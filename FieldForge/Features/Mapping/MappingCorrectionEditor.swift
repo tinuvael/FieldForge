@@ -10,6 +10,7 @@ struct MappingCorrectionEditor: View {
     @State private var discard = false
     @State private var showPlans = false
     @FocusState private var focused: Bool
+    @FocusState private var coordinateFocus: String?
     init(draft: MappingCorrectionDraft) { _draft = State(initialValue: draft) }
     var body: some View {
         NavigationStack {
@@ -23,6 +24,11 @@ struct MappingCorrectionEditor: View {
                 }
                 Section("Пикет и полевая дата") {
                     TextField("Пикет", text: $draft.fields.picket).focused($focused).accessibilityIdentifier("correctionPicket")
+                    if draft.fields.picketConvention == .legacyMeters {
+                        Text("Прежний формат: метры или ПК км+метры. Значение в метрах сохраняется.").font(.caption)
+                    } else if let confirmation = FieldPicketInput.confirmation(draft.fields.picket) {
+                        Text(confirmation).font(.caption)
+                    }
                     TextField("Начало / направление пикетажа", text: $draft.fields.chainageOriginAndDirection).focused($focused)
                     DatePicker("Дата наблюдения", selection: Binding(get: { draft.fields.observedAtOverride ?? draft.baseline.observedAt },
                         set: { draft.fields.observedAtOverride = $0 }))
@@ -33,12 +39,13 @@ struct MappingCorrectionEditor: View {
                 }
                 Section {
                     MappingIntervalForm(start: $draft.fields.startPicket, end: $draft.fields.endPicket,
-                                        position: $draft.fields.observationPosition, focus: $focused)
+                                        position: $draft.fields.observationPosition, focus: $focused,
+                                        startConvention: draft.fields.startPicketConvention, endConvention: draft.fields.endPicketConvention)
                 }
                 Section(MappingCoordinateText.header(xyUnits: draft.fields.xyUnits)) {
-                    TextField("X · неизвестно", text: $draft.fields.x).focused($focused).keyboardType(.numbersAndPunctuation).accessibilityIdentifier("correctionX")
-                    TextField("Y · неизвестно", text: $draft.fields.y).focused($focused).keyboardType(.numbersAndPunctuation).accessibilityIdentifier("correctionY")
-                    TextField("Z, м · неизвестно", text: $draft.fields.z).focused($focused).keyboardType(.numbersAndPunctuation).accessibilityIdentifier("correctionZ")
+                    MappingCoordinateField(title: "X", text: $draft.fields.x, identifier: "correctionX", focus: $coordinateFocus)
+                    MappingCoordinateField(title: "Y", text: $draft.fields.y, identifier: "correctionY", focus: $coordinateFocus)
+                    MappingCoordinateField(title: "Z", text: $draft.fields.z, identifier: "correctionZ", focus: $coordinateFocus)
                     Text("Источник Z: \(draft.fields.zOrigin == .horizonDefault ? "по горизонту · не съёмка" : "ручное / неизвестно")").font(.caption)
                     Button("Выбрать X/Y на плане") { focused = false; showPlans = true }.accessibilityIdentifier("correctionSelectPlan")
                     DisclosureGroup("СК, оси и происхождение") {
@@ -72,7 +79,7 @@ struct MappingCorrectionEditor: View {
                     ToolbarItem(placement: .cancellationAction) {
                         Button("Отмена") { if draft.hasChanges { discard = true } else { dismiss() } }.accessibilityIdentifier("cancelMappingCorrection")
                     }
-                    ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Готово") { focused = false } }
+                    ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Готово") { focused = false; coordinateFocus = nil } }
                 }
                 .interactiveDismissDisabled(draft.hasChanges)
                 .alert("Отбросить несохранённое исправление?", isPresented: $discard) {

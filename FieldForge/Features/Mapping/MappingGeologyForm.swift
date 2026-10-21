@@ -16,13 +16,18 @@ struct MappingIntervalForm: View {
     @Binding var end: String
     @Binding var position: ObservationPosition?
     let focus: FocusState<Bool>.Binding
+    var startConvention = PicketConvention.tenMeters
+    var endConvention = PicketConvention.tenMeters
     var body: some View {
         DisclosureGroup("Интервал и положение · необязательно") {
-            GeologyField(title: "Начало интервала · пикет или м", text: $start, identifier: "mappingStartPicket",
-                         error: picketError(start, field: "Начало"), focus: focus)
-            GeologyField(title: "Конец интервала · пикет или м", text: $end, identifier: "mappingEndPicket",
-                         error: picketError(end, field: "Конец"), focus: focus)
-            if let a = try? PicketInput.meters(start), let b = try? PicketInput.meters(end), b < a {
+            GeologyField(title: "Начало интервала · пикет", text: $start, identifier: "mappingStartPicket",
+                         error: picketError(start, field: "Начало", convention: startConvention), focus: focus)
+            GeologyField(title: "Конец интервала · пикет", text: $end, identifier: "mappingEndPicket",
+                         error: picketError(end, field: "Конец", convention: endConvention), focus: focus)
+            if startConvention == .legacyMeters || endConvention == .legacyMeters {
+                Text("Прежний формат интервала: метры или ПК км+метры.").font(.caption).foregroundStyle(.secondary)
+            }
+            if let a = try? startConvention.meters(start), let b = try? endConvention.meters(end), b < a {
                 Text("Конец интервала должен быть не раньше начала.").font(.caption).foregroundStyle(.red)
             }
             Picker("Положение наблюдения", selection: $position) {
@@ -35,8 +40,8 @@ struct MappingIntervalForm: View {
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
-    private func picketError(_ text: String, field: String) -> String? {
-        do { _ = try GeologyInput.optionalPicket(text, field: field); return nil } catch { return error.localizedDescription }
+    private func picketError(_ text: String, field: String, convention: PicketConvention) -> String? {
+        do { _ = try GeologyInput.optionalPicket(text, field: field, convention: convention); return nil } catch { return error.localizedDescription }
     }
 }
 
@@ -130,7 +135,7 @@ private struct JointSetEditor: View {
     }
 }
 
-private struct TectonicStructureEditor: View {
+struct TectonicStructureEditor: View {
     @Binding var draft: TectonicStructureDraft
     @FocusState private var focused: Bool
     var body: some View {
@@ -144,8 +149,15 @@ private struct TectonicStructureEditor: View {
                 GeologyOrientationForm(input: $draft.orientation, focus: $focused, permitsPartial: true)
             }
             Section("Положение и описание") {
-                GeologyField(title: "Мощность, м · необязательно", text: $draft.thickness, identifier: "tectonicThickness", nonnegative: true, focus: $focused)
+                DisclosureGroup("Дополнительно") {
+                    GeologyField(title: "Мощность, м · необязательно", text: $draft.thickness, identifier: "tectonicThickness", nonnegative: true, focus: $focused)
+                }
                 GeologyField(title: "Пикет · необязательно", text: $draft.picket, identifier: "tectonicPicket", error: picketError, focus: $focused)
+                if draft.picketConvention == .legacyMeters {
+                    Text("Прежний формат пикета: метры или ПК км+метры.").font(.caption).foregroundStyle(.secondary)
+                } else if let confirmation = FieldPicketInput.confirmation(draft.picket) {
+                    Text(confirmation).font(.caption).foregroundStyle(.secondary)
+                }
                 TextField("Положение · необязательно", text: $draft.position, axis: .vertical).focused($focused).accessibilityIdentifier("tectonicPosition")
                 TextField("Описание", text: $draft.description, axis: .vertical).focused($focused).accessibilityIdentifier("tectonicDescription")
             }
@@ -154,7 +166,7 @@ private struct TectonicStructureEditor: View {
             .toolbar { ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Готово") { focused = false } } }
     }
     private var picketError: String? {
-        do { _ = try GeologyInput.optionalPicket(draft.picket, field: "Пикет структуры"); return nil } catch { return error.localizedDescription }
+        do { _ = try GeologyInput.optionalPicket(draft.picket, field: "Пикет структуры", convention: draft.picketConvention); return nil } catch { return error.localizedDescription }
     }
 }
 

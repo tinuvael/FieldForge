@@ -25,6 +25,29 @@ import XCTest
         model.endDraftPhotos(session)
         return try XCTUnwrap(model.workflow!.draft.photos.last)
     }
+    func testPhotoDraftSurvivesExcavationChangeAndParkedContextWithCaptureProvenance() async throws {
+        let (root, _, model, files) = try setup(); defer { try? FileManager.default.removeItem(at: root) }
+        let originalContext = model.workflow!.context, id = model.workflow!.draft.id
+        model.workflow!.draft.picket = "1+7"
+        let operation = try await add(model)
+        let nextExcavation = try model.workflow!.createExcavation(name: "Next", horizonIDs: [originalContext.horizonID!])
+        let expected = model.workflow!.draft
+        try model.workflow!.requestContext(MappingContext(projectID: originalContext.projectID, horizonID: originalContext.horizonID, excavationID: nextExcavation))
+        XCTAssertEqual(model.workflow!.draft, expected); XCTAssertNil(model.workflow!.pendingContext)
+        let other = try model.workflow!.createProject(name: "Other")
+        try model.workflow!.requestContext(MappingContext(projectID: other))
+        model.perform { try $0.preserveAndSwitch() }
+        XCTAssertNotNil(model.retainedPhotos[operation.id])
+        model.perform { try $0.requestContext(MappingContext(projectID: originalContext.projectID, horizonID: originalContext.horizonID)) }
+        XCTAssertEqual(model.workflow!.draft, expected)
+        await model.saveDraft(id: id)
+        XCTAssertNil(model.error); XCTAssertTrue(model.success)
+        XCTAssertEqual(model.workflow!.journal.observations.first?.excavationID, nextExcavation)
+        XCTAssertEqual(model.workflow!.journal.photos.first, operation.photo)
+        XCTAssertEqual(operation.photo.context.excavationID, originalContext.excavationID)
+        XCTAssertEqual(try files.read(operation.attachment), try received().data)
+        try model.workflow!.journal.validate()
+    }
     func testThreePhotosBeforeFirstSaveOneAtomicGraphAndRelaunchUnknownLocation() async throws {
         let (root, store, model, files) = try setup(); defer { try? FileManager.default.removeItem(at: root) }
         let before = model.workflow!.journal, context = model.workflow!.context, id = model.workflow!.draft.id

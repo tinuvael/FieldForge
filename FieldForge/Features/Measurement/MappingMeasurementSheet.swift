@@ -105,6 +105,8 @@ struct MappingMeasurementSheet: View {
                 }
             } else {
                 Label("Измерение недоступно", systemImage: "exclamationmark.triangle").foregroundStyle(.orange)
+                Button("Повторить получение данных") { model.acquisition.reset() }
+                    .disabled(scenePhase != .active)
             }
             Text(model.sensorStatus).font(.caption).accessibilityIdentifier("mappingSensorStatus")
             Text("Плоскость измерения — экран iPhone. Выступ камеры и чехол не гарантируют плоский контакт. Требуется проверка геологическим компасом.").font(.footnote).foregroundStyle(.secondary)
