@@ -117,7 +117,8 @@ struct MappingCorrectionDraft: Equatable {
         let unchangedTime = date == old.observedAt && fields.timeZoneID == old.observedTimeZoneID
         let origin = fields.chainageOriginAndDirection.trimmingCharacters(in: .whitespacesAndNewlines)
         return MappingObservation(id: old.id, projectID: old.projectID, horizonID: old.horizonID, excavationID: old.excavationID,
-            picket: fields.picket, chainageMeters: try fields.picketConvention.meters(fields.picket),
+            picket: fields.picket == initial.picket ? old.picket : try fields.picketConvention.storedText(fields.picket),
+            chainageMeters: fields.picket == initial.picket ? old.chainageMeters : try fields.picketConvention.meters(fields.picket),
             chainageOriginAndDirection: origin.isEmpty ? "unknown" : fields.chainageOriginAndDirection,
             observedAt: date, observedTimeZoneID: fields.timeZoneID,
             observedUTCOffsetSeconds: unchangedTime ? old.observedUTCOffsetSeconds : zone.secondsFromGMT(for: date),

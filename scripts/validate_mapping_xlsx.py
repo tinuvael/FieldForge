@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""Independent ZIP/OOXML + openpyxl validation of the synthetic P5.2 fixture.
+"""Independent ZIP/OOXML + openpyxl validation of synthetic mapping workbooks.
 
 P52_EXPORT_FIXTURE_DIR=/tmp/p52 swift test --filter MappingXLSXExportTests
 python3 scripts/validate_mapping_xlsx.py /tmp/p52
+FF_FINAL_EXPORT_FIXTURE_DIR=/tmp/final swift test --filter FinalFieldPolishTests
+python3 scripts/validate_mapping_xlsx.py /tmp/final
 Requires openpyxl for read-only validation; not an application dependency.
 """
 import json
+from datetime import datetime, timedelta
 import posixpath
 import sys
 import zipfile
@@ -20,7 +23,8 @@ ns = {'s': 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'}
 with zipfile.ZipFile(path) as archive:
     assert archive.testzip() is None, 'ZIP CRC mismatch'
     names = archive.namelist()
-    assert len(names) == len(set(names)) == 22
+    assert len(names) == len(set(names))
+    assert len(names) == len(parts_sheets := [n for n in names if n.startswith("xl/worksheets/")]) + 7
     assert not any('externalLink' in n or 'vba' in n for n in names)
     parts = {name: ET.fromstring(archive.read(name)) for name in names}
     for name, part in parts.items():
@@ -43,11 +47,16 @@ with zipfile.ZipFile(path) as archive:
             assert sheet.find('s:sheetViews/s:sheetView/s:pane', ns).attrib['state'] == 'frozen'
             assert sheet.find('s:mergeCells', ns) is None
             for cell in sheet.findall('.//s:c', ns):
-                assert int(cell.attrib['s']) < 3
+                assert int(cell.attrib['s']) < 6
                 assert cell.attrib.get('t') in (None, 'inlineStr', 'n')
 
 book = openpyxl.load_workbook(path, data_only=False, keep_links=False)
-assert book.sheetnames == ['Сводка', 'projects', 'horizons', 'excavations', 'excavation_horizons', 'plans', 'points', 'photo_point_contexts', 'measurements', 'joint_sets', 'interpretation_evidence', 'tectonic_structures', 'assessments', 'photos', 'photo_attachments']
+field_names = ['Наблюдения', 'Системы трещин', 'Тектоника', 'Рейтинги массива', 'Фотографии']
+raw_names = ['projects', 'horizons', 'excavations', 'excavation_horizons', 'plans', 'points', 'photo_point_contexts', 'measurements', 'joint_sets', 'interpretation_evidence', 'tectonic_structures', 'assessments', 'photos', 'photo_attachments']
+assert book.sheetnames == field_names + ['Сводка'] + raw_names + ['field_links']
+assert all(book[name].sheet_state == 'visible' for name in field_names + ['Сводка'])
+assert all(book[name].sheet_state == 'hidden' for name in raw_names + ['field_links'])
+
 checked = 0
 for name, table in expected.items():
     sheet = book[name]
@@ -63,11 +72,14 @@ for name, table in expected.items():
             cell = sheet.cell(i, j)
             if expected_cell['type'] == 'blank':
                 assert cell.value is None, (name, cell.coordinate, cell.value)
+            elif expected_cell['type'] == 'd':
+                expected_date = datetime(1970, 1, 1) + timedelta(seconds=expected_cell['value'])
+                assert cell.data_type == 'd' and abs((cell.value - expected_date).total_seconds()) < 0.0011, (name, cell.coordinate, cell.value, expected_date)
             else:
                 assert cell.data_type == expected_cell['type'], (name, cell.coordinate, cell.data_type)
                 assert cell.value == expected_cell['value'], (name, cell.coordinate, cell.value, expected_cell)
             checked += 1
-        if i % 2 == 1:
+        if name in raw_names and i % 2 == 1:
             assert sheet.cell(i, 1).fill.fgColor.rgb == 'FFF0F5F7'
 
 def records(name):
@@ -122,8 +134,42 @@ for row in tables['photos']:
     assert context['version'] == row['context_point_version']
     assert row['captured_at_utc'] is None and row['capture_location_basis'] == 'unknownBeforeFirstSave'
     assert row['original_integrity'] == 'notChecked; originalsNotIncluded'
-assert len(points) == 1 and len(measurements) == 2 and len(sets) == 2
-assert book['points'].cell(2, 20).data_type == 's'  # exact long decimal X
-assert tables['photos'][0]['name'] == '=1+1'
+assert len(measurements) == 2
+assert len(points) == (3 if 'Наблюдения' in expected else 1)
+assert len(sets) == (5 if 'Наблюдения' in expected else 2)
+assert any(r['x'] is not None for r in tables['points'])
+assert all(book['points'].cell(i, 20).data_type == 's' for i, r in enumerate(tables['points'], 2) if r['x'] is not None)  # exact long decimal X
+assert tables['photos'][0]['name'] in ('=1+1', '=1+1 Фото')
 assert all(r['stored_q'] is None for r in tables['assessments'] if r['kind'] == 'RMR89-input-only')
-print(f'PASS: ZIP CRC, 22 XML/relationship parts, 15 sheets, {checked} typed data cells, UUID joins, styles, nulls, formula safety and exact precision (openpyxl {openpyxl.__version__}).')
+if 'Наблюдения' in expected:
+    observations = records('Наблюдения')
+    assert len(observations) == 3
+    assert {r['Проект'] for r in observations} == {'Рудник Северный'}
+    assert {r['Выработка'] for r in observations} == {'Штрек Восточный № 3'}
+    assert 'ПК 12+1,8' in {r['Пикет'] for r in observations}
+    first = next(r for r in observations if r['RMR89 базовый'] is not None)
+    assert first['RMR89 базовый'] == 64 and first['Класс RMR89 базовый'] == 'II — хорошее качество'
+    assert first['X'] == 123456.12345678912 and first['Y'] == -0.123456789123456
+    assert all(first[f'J{i} падение, °'] is not None for i in range(1, 6))
+    assert all(symbol in first['Примечания'] for symbol in ['°', 'μ', 'µ', '≤'])
+    assert any(r['X'] is None for r in observations)
+    assert isinstance(first['Дата'], datetime)
+    assert len({r['Дата'] for r in observations}) == 3
+    assert book['Наблюдения']['G2'].number_format == '0.0'
+    for r in records('Рейтинги массива'):
+        if r['Метод'].startswith('Bieniawski-RMR89/basic'):
+            assert r['RMR89 базовый'] == 64 and r['RMR балл состояния'] == 22
+            assert [r[k] for k in ['RMR балл прочности', 'RMR балл RQD', 'RMR балл расстояния', 'RMR балл состояния', 'RMR балл воды']] == [12, 13, 10, 22, 7]
+    links = records('field_links')
+    refs = {r['Наблюдение'] for r in observations}
+    point_links = {r['field_reference']: r for r in links if r['kind'] == 'observation'}
+    assert set(point_links) == refs
+    assert {r['point_id'] for r in point_links.values()} == points
+    assert {r['record_id'] for r in links if r['kind'] == 'joint'} == sets
+    assert all(r['Наблюдение'] in refs for r in records('Системы трещин') + records('Тектоника') + records('Фотографии'))
+    assert all('Не включено' in r['Изображение в книге'] for r in records('Фотографии'))
+    advanced = openpyxl.load_workbook(root / 'FieldForge-Technical.xlsx', data_only=False)
+    assert advanced.sheetnames == book.sheetnames
+    assert all(s.sheet_state == 'visible' for s in advanced)
+    assert not any(suffix in str(path) for suffix in ['.csv', '.zip'])
+print(f'PASS: ZIP CRC, {len(names)} XML/relationship parts, {len(book.sheetnames)} sheets, {checked} typed cells, Russian Unicode, UUID joins, styles, dates, nulls and literal formula-like text (openpyxl {openpyxl.__version__}).')

@@ -18,7 +18,7 @@ struct MappingJournalQuery {
         return records.filter {
             $0.projectID == projectID && (horizonID == nil || $0.horizonID == horizonID)
                 && (excavationID == nil || $0.excavationID == excavationID)
-                && (search.isEmpty || $0.picket.localizedCaseInsensitiveContains(search)
+                && (search.isEmpty || $0.picket.localizedCaseInsensitiveContains(search) || $0.displayPicket.localizedCaseInsensitiveContains(search)
                     || CSVExporter.number($0.chainageMeters).contains(search))
                 && (start == nil || $0.observedAt >= start!) && (end == nil || $0.observedAt < end!)
         }.sorted {

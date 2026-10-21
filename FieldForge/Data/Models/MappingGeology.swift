@@ -25,7 +25,7 @@ struct MappingPicket: Codable, Equatable {
     let meters: Double
     var convention: PicketConvention? = nil
     func validate() throws {
-        guard meters.isFinite, meters >= 0, try (convention ?? .legacyMeters).meters(text) == meters else { throw StorageError.invalidRecord }
+        guard meters.isFinite, meters >= 0, (convention ?? .legacyMeters).matches(text, meters: meters) else { throw StorageError.invalidRecord }
     }
 }
 
@@ -175,5 +175,32 @@ extension TectonicStructureDraft {
         thickness = record.thicknessMeters.map(ElevationInput.text) ?? ""
         picketConvention = record.picket?.convention ?? .legacyMeters
         picket = record.picket?.text ?? ""; position = record.position; description = record.description
+    }
+}
+
+/// Adapts an explicit interpretation to the existing validator, without changing the original.
+enum JointRepresentativeInput {
+    static func make(from reading: Measurement) throws -> ManualOrientationInput {
+        guard reading.isSavable, reading.orientation.dipAngle != nil else {
+            throw MappingError.invalid("Замер неполный или недостоверный. Повторите фиксацию.")
+        }
+        guard GeographicReference.manualChoices.contains(reading.reference) else {
+            throw MappingError.invalid(reading.reference == .simulatedNorth
+                ? "Север DEMO нельзя назначить системе. Можно оставить исходный замер."
+                : "Опора на север недоступна. Можно оставить исходный замер.")
+        }
+        var input = ManualOrientationInput()
+        input.dipAngleText = reading.orientation.dipAngle.map(ElevationInput.text) ?? ""
+        input.dipDirectionText = reading.orientation.dipDirection.map(ElevationInput.text) ?? ""
+        input.reference = reading.reference
+        input.usesConventionalDipSide = reading.directionMeaning == .conventionalDipSide
+        do { _ = try input.validated() }
+        catch {
+            throw MappingError.invalid("Ориентация неполная или направление неоднозначно. Оставьте исходный замер; систему задайте явно.")
+        }
+        return input
+    }
+    static func issue(for reading: Measurement) -> String? {
+        do { _ = try make(from: reading); return nil } catch { return error.localizedDescription }
     }
 }

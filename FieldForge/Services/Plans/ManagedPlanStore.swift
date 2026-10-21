@@ -29,7 +29,7 @@ final class ManagedPlanStore {
     static func digest(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
 
     func stage(data: Data, filename: String, horizonID: UUID, version: String,
-               units: PlanUnits, crs: String, axes: String) throws -> MappingPlanReference {
+               units: PlanUnits, crs: String, axes: String, frameConfirmation: PlanFrameConfirmation? = nil) throws -> MappingPlanReference {
         let drawing = try DXFDocument.parse(data)
         guard !version.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw MappingError.invalid("Укажите версию плана.") }
         let plan = MappingPlanReference(id: UUID(), horizonID: horizonID, attachmentID: UUID(), version: version,
@@ -37,7 +37,8 @@ final class ManagedPlanStore {
                 sha256: Self.digest(data), byteCount: data.count, importedAt: Date(), units: units,
                 crs: crs.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "unknown" : crs,
                 axes: axes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "unknown" : axes,
-                unitDeclaration: "userConfirmedAtImport", insertionUnits: drawing.insertionUnits))
+                unitDeclaration: "userConfirmedAtImport", insertionUnits: drawing.insertionUnits),
+            frameConfirmation: frameConfirmation)
         try FileManager.default.createDirectory(at: root.appendingPathComponent("operations"), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: root.appendingPathComponent("originals"), withIntermediateDirectories: true)
         try JSONEncoder().encode(plan).write(to: operationURL(plan), options: .atomic)

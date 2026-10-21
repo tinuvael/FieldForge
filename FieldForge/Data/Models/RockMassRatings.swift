@@ -263,8 +263,9 @@ struct BartonQAssessment: Codable, Equatable {
 
 enum RMRStrengthTest: String, Codable, CaseIterable { case ucs, pointLoadIs50 }
 enum RMREngineeringApplication: String, Codable, CaseIterable { case tunnelsAndMines, foundations, slopes }
-/// RMR89 input-only record: deliberately has no numerical rating or orientation adjustment field.
+/// Original free-text evidence remains intact; optional explicit selections enable basic-v1.
 struct RMR89Input: Codable, Equatable {
+    var basicSelections: [String: String]? = nil
     var strengthTest: RMRStrengthTest?
     var strengthMPa = "", strengthEvidence = "", rqd = "", rqdEvidence = "", spacingMeters = ""
     var persistenceMeters = "", apertureMillimeters = "", roughness = "", infill = "", weathering = ""
@@ -295,19 +296,29 @@ struct RMR89Input: Codable, Equatable {
 }
 struct RMR89Assessment: Codable, Equatable {
     static let version = "Bieniawski-RMR89/input-only-v1"
+    static let calculatedVersion = "Bieniawski-RMR89/basic-categories-v1"
     static let reference = "Bieniawski, Z.T. (1989). Engineering Rock Mass Classifications. Wiley. ISBN 0-471-60172-1."
-    static let unavailable = "Расчёт не реализован — требуется проверка методики"
     let method: String
     let revision: Int
     let assessedAt: Date
     let input: RMR89Input
     let missing: [String]
+    let calculation: RMR89BasicEvaluation?
     init(input: RMR89Input, now: Date) throws {
-        try input.validate(); method = Self.version; revision = 1; assessedAt = now; self.input = input; missing = input.missing
+        try input.validate(); revision = 1; assessedAt = now; self.input = input
+        calculation = try input.basicSelections == nil ? nil : input.basicEvaluation()
+        method = calculation == nil ? Self.version : Self.calculatedVersion
+        missing = calculation?.missing ?? input.missing
     }
     func validate() throws {
         try input.validate()
-        guard method == Self.version, revision == 1, assessedAt.timeIntervalSinceReferenceDate.isFinite, missing == input.missing else { throw StorageError.invalidRecord }
+        guard revision == 1, assessedAt.timeIntervalSinceReferenceDate.isFinite else { throw StorageError.invalidRecord }
+        if method == Self.version {
+            guard calculation == nil, input.basicSelections == nil, missing == input.missing else { throw StorageError.invalidRecord }
+        } else {
+            guard method == Self.calculatedVersion, input.basicSelections != nil,
+                  calculation == (try input.basicEvaluation()), missing == calculation?.missing else { throw StorageError.invalidRecord }
+        }
     }
 }
 struct MappingRatings: Codable, Equatable {
@@ -320,5 +331,40 @@ extension MappingDraft {
         guard bartonQ.hasChanges || rmr89.hasChanges else { return nil }
         return MappingRatings(bartonQ: try bartonQ.hasChanges ? BartonQAssessment(input: bartonQ, now: now) : nil,
                               rmr89: try rmr89.hasChanges ? RMR89Assessment(input: rmr89, now: now) : nil)
+    }
+}
+
+/// Owner-defined field presentation (third iPhone review, 2026-10-21).
+/// Separate from published NGI classes and stored Q snapshots. No mechanical conclusion.
+enum FieldQCategory: Equatable {
+    case veryUnstable, unstable, medium, stable
+    init?(q: Double) {
+        guard q.isFinite, q >= 0 else { return nil }
+        if q < 1 { self = .veryUnstable }
+        else if q < 4 { self = .unstable }
+        else if q <= 10 { self = .medium }
+        else { self = .stable }
+    }
+    var title: String {
+        switch self {
+        case .veryUnstable: return "Весьма неустойчивые породы"
+        case .unstable: return "Неустойчивые породы"
+        case .medium: return "Средней устойчивости"
+        case .stable: return "Устойчивые породы"
+        }
+    }
+}
+
+extension QRockClass {
+    var title: String {
+        switch self {
+        case .exceptionallyPoor: return "G · Исключительно плохой (0,001 ≤ Q < 0,01)"
+        case .extremelyPoor: return "F · Крайне плохой (0,01 ≤ Q < 0,1)"
+        case .veryPoor: return "E · Очень плохой (0,1 ≤ Q < 1)"
+        case .poor: return "D · Плохой (1 ≤ Q < 4)"
+        case .fair: return "C · Средний (4 ≤ Q < 10)"
+        case .good: return "B · Хороший (10 ≤ Q < 40)"
+        case .veryGood: return "A · Очень хороший (40 ≤ Q ≤ 1000)"
+        }
     }
 }

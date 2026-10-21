@@ -12,7 +12,8 @@ struct MappingExportView: View {
     @State private var firstDay = Date()
     @State private var lastDay = Date()
     @State private var timeZoneID = TimeZone.current.identifier
-    @State private var format: MappingExportFormat = .csv
+    @State private var format: MappingExportFormat = .xlsx
+    @State private var showTechnicalSheets = false
     @State private var preview: MappingCSVExport?
     @State private var photoPreview: PhotoPackageExport?
     @State private var confirmIncomplete = false
@@ -48,25 +49,29 @@ struct MappingExportView: View {
                         Text($0.name).tag(Optional($0.id))
                     }
                 }
-                NavigationLink {
-                    ExportTimeZoneSelection(selection: $timeZoneID)
-                } label: { LabeledContent("Часовой пояс", value: timeZoneID) }
-                    .accessibilityIdentifier("mappingExportTimeZone")
                 DatePicker("Дата от", selection: $firstDay, displayedComponents: .date)
                     .accessibilityIdentifier("mappingExportFirstDay")
                 DatePicker("Дата до включительно", selection: $lastDay, displayedComponents: .date)
                     .accessibilityIdentifier("mappingExportLastDay")
-                Text("Григорианский календарь · \(timeZoneID). Отбор по дате наблюдения актуальной версии точки, включая весь последний день.")
-                    .font(.caption)
-            }.disabled(busy || sharing)
-            Section("Формат") {
-                Picker("Формат файла", selection: $format) {
-                    ForEach(MappingExportFormat.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                }.accessibilityIdentifier("mappingExportFormat")
             }.disabled(busy || sharing)
             Section {
-                Button("Предпросмотр") { prepare() }
-                    .disabled(busy || sharing || selection == nil).accessibilityIdentifier("mappingExportPreview")
+                DisclosureGroup("Дополнительные параметры") {
+                    NavigationLink {
+                        ExportTimeZoneSelection(selection: $timeZoneID)
+                    } label: { LabeledContent("Часовой пояс", value: timeZoneID) }
+                        .accessibilityIdentifier("mappingExportTimeZone")
+                    Picker("Формат файла", selection: $format) {
+                        ForEach(MappingExportFormat.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    }.accessibilityIdentifier("mappingExportFormat")
+                    Toggle("Показывать технические листы Excel", isOn: $showTechnicalSheets)
+                    Text("Отбор по дате наблюдения актуальной версии точки в поясе \(timeZoneID), включая весь последний день.").font(.caption)
+                }
+            }.disabled(busy || sharing)
+            Section {
+                Text("Наблюдений: \(selectedCount)").accessibilityIdentifier("mappingExportPointCount")
+                Button(format == .xlsx ? "Экспортировать Excel" : format == .csv ? "Экспортировать CSV" : "Экспортировать фотографии ZIP") {
+                    if let preview { shareOrConfirm(preview) } else { prepare(shareWhenReady: true) }
+                }.disabled(busy || sharing || selection == nil).accessibilityIdentifier("mappingExportShare")
                 if busy {
                     ProgressView("Подготовка выгрузки…")
                     Button("Отменить подготовку", role: .cancel) { operation?.cancel() }
@@ -74,16 +79,8 @@ struct MappingExportView: View {
                 }
                 if let message = errorMessage { Text(message).foregroundStyle(.red).accessibilityIdentifier("mappingExportError") }
             }
-            if let preview {
+            if photoPreview != nil {
                 Section("Снимок выгрузки") {
-                    Text("Точек: \(preview.pointCount)").accessibilityIdentifier("mappingExportPointCount")
-                    Text("Снимок: \(MappingCSVExport.iso(preview.snapshotAt))").font(.caption)
-                    Text("Снимок зафиксирован. Для обновления данных откройте «Выгрузку» заново.").font(.caption)
-                    DisclosureGroup("Связанные таблицы") {
-                        ForEach(preview.tables, id: \.name) { table in
-                            LabeledContent(table.name, value: String(table.rows.count))
-                        }
-                    }
                     if let photoPreview {
                         Text("Связанных фотографий: \(photoPreview.items.count)")
                         Text("Оригиналов доступно: \(photoPreview.availableCount)")
@@ -98,24 +95,22 @@ struct MappingExportView: View {
                             }
                         }
                     }
-                    Button {
-                        if format == .photoPackage && (photoPreview?.unavailableCount ?? 0) > 0 { confirmIncomplete = true }
-                        else { share(preview) }
-                    } label: { Label(format == .csv ? "Сохранить / поделиться CSV" : format == .xlsx ? "Сохранить / поделиться Excel" : "Сохранить / поделиться ZIP", systemImage: "square.and.arrow.up") }
-                        .disabled(busy || sharing).accessibilityIdentifier("mappingExportShare")
                 }
             }
-            Section("Состав и ограничения") {
-                if format == .photoPackage {
-                    Text("ZIP: оригиналы, FieldForge-Mapping.xlsx с реестром photo_register и manifest.json. Файлы проверяются по размеру и SHA-256. Путь и статус каждого оригинала указаны в реестре.")
-                    Text("Оригиналы сохраняют все исходные байты, включая личные EXIF/GPS и сведения об авторе. Передавайте архив только доверенным получателям. Неизвестное место и время съёмки остаются неизвестными.")
-                } else {
-                Text(format == .csv ? "Связанные CSV и manifest.json передаются вместе через меню iOS, в том числе «Сохранить в Файлы»." : "Одна книга Excel: «Сводка» и 14 связанных листов, закреплённые заголовки, фильтры и выделение строк. Передача через меню iOS, в том числе «Сохранить в Файлы».")
-                Text("Только метаданные фотографий. Оригиналы изображений не включены; их наличие и целостность не проверяются. Неизвестное место съёмки остаётся неизвестным.")
-                }
-                Text("Выгрузка для анализа, не полная резервная копия. Оценки сохранены без пересчёта; RMR — только исходные данные.")
-                Text(format == .csv ? "UTF-8 с BOM, запятая, CRLF. Excel может ограничивать числа 15 значащими цифрами. Исходный десятичный текст сохранён там, где он есть. Текст, похожий на формулу, защищён апострофом." : "В Excel значения более 15 значащих цифр сохраняются точным текстом. Отсутствующие значения — пустые ячейки. Пользовательские строки — текст, формулы не создаются.")
-            }.font(.caption)
+            Section {
+                Text("Одна книга Excel; оригиналы фото — отдельный ZIP. Выгрузка не является полной резервной копией.").font(.caption)
+                DisclosureGroup("Состав и ограничения") {
+                    if format == .photoPackage {
+                        Text("ZIP: оригиналы, FieldForge-Mapping.xlsx с реестром photo_register и manifest.json. Файлы проверяются по размеру и SHA-256. Путь и статус каждого оригинала указаны в реестре.")
+                        Text("Оригиналы сохраняют все исходные байты, включая личные EXIF/GPS и сведения об авторе. Передавайте архив только доверенным получателям. Неизвестное место и время съёмки остаются неизвестными.")
+                    } else {
+                    Text(format == .csv ? "Связанные CSV и manifest.json передаются вместе через меню iOS, в том числе «Сохранить в Файлы»." : "Одна книга Excel: пять полевых листов, сводка и скрытые технические листы. Закреплённые заголовки и фильтры. Передача через меню iOS, в том числе «Сохранить в Файлы».")
+                    Text("Только метаданные фотографий. Оригиналы изображений не включены; их наличие и целостность не проверяются. Неизвестное место съёмки остаётся неизвестным.")
+                    }
+                    Text("Выгрузка для анализа, не полная резервная копия. Оценки сохранены без пересчёта; базовый RMR — при наличии рассчитанной оценки.")
+                    Text(format == .csv ? "UTF-8 с BOM, запятая, CRLF. Excel может ограничивать числа 15 значащими цифрами. Исходный десятичный текст сохранён там, где он есть. Текст, похожий на формулу, защищён апострофом." : "Полевые листы содержат числа; Excel использует до 15 значащих цифр. На технических листах более точные значения сохраняются точным текстом. Отсутствующие значения — пустые ячейки. Пользовательские строки — текст, формулы не создаются.")
+                }.font(.caption)
+            }
         }
         .environment(\.timeZone, zone).environment(\.calendar, calendar)
         .navigationTitle("Выгрузка")
@@ -144,7 +139,18 @@ struct MappingExportView: View {
             if let files { MappingExportShareSheet(files: files) }
         }
     }
-    private func prepare() {
+    private var selectedCount: Int {
+        guard let selection, let bounds = try? selection.bounds() else { return 0 }
+        return journal.effectiveObservations.filter {
+            $0.projectID == selection.projectID && (horizonID == nil || $0.horizonID == horizonID) &&
+            (excavationID == nil || $0.excavationID == excavationID) && $0.observedAt >= bounds.start && $0.observedAt < bounds.end
+        }.count
+    }
+    private func shareOrConfirm(_ snapshot: MappingCSVExport) {
+        if format == .photoPackage && (photoPreview?.unavailableCount ?? 0) > 0 { confirmIncomplete = true }
+        else { share(snapshot) }
+    }
+    private func prepare(shareWhenReady: Bool = false) {
         guard !busy, !sharing, let selection else { return }
         let photoRoot = mapping.photoStore?.root
         let wantsPhotos = format == .photoPackage
@@ -160,17 +166,19 @@ struct MappingExportView: View {
                 }
                 return (snapshot, photos)
             }
-            defer { busy = false }
             do {
                 let result = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
+                busy = false
                 try Task.checkCancellation(); preview = result.0; photoPreview = result.1
-            } catch is CancellationError { /* A cancelled preview has no files or source side effects. */ }
-            catch { errorMessage = "Ошибка выгрузки: \(error.localizedDescription)" }
+                if shareWhenReady { shareOrConfirm(result.0) }
+            } catch is CancellationError { busy = false }
+            catch { busy = false; errorMessage = "Ошибка выгрузки: \(error.localizedDescription)" }
         }
     }
     private func share(_ preview: MappingCSVExport, allowIncomplete: Bool = false) {
         guard !busy, !sharing else { return }
         let format = format
+        let showTechnicalSheets = showTechnicalSheets
         let photos = photoPreview
         busy = true; errorMessage = nil
         operation = Task { @MainActor in
@@ -179,7 +187,7 @@ struct MappingExportView: View {
                     guard let photos else { throw MappingError.invalid("Обновите предпросмотр фотографий.") }
                     return try photos.write(allowIncomplete: allowIncomplete)
                 }
-                return try MappingExportFiles.write(preview, format: format)
+                return try MappingExportFiles.write(preview, format: format, showTechnicalSheets: showTechnicalSheets)
             }
             defer { busy = false }
             do {

@@ -10,11 +10,11 @@ struct ActiveHorizonPlanView: View {
             if let horizon {
                 VStack(spacing: 0) {
                     if let plan = mapping.activePlan(for: horizon.id) {
-                        VStack(spacing: 2) {
-                            Text(horizon.displayName).font(.headline)
-                            Text("Версия \(plan.version) · \(mapping.hasExplicitPlan(for: horizon.id) ? "выбрана для просмотра" : "последний импорт по умолчанию")")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }.padding(8)
+                        Picker("Ревизия", selection: Binding(get: { plan.id }, set: { id in
+                            if let selected = mapping.plans(for: horizon.id).first(where: { $0.id == id }) { mapping.selectActivePlan(selected) }
+                        })) {
+                            ForEach(mapping.plans(for: horizon.id)) { item in Text("Ревизия \(item.version)").tag(item.id) }
+                        }.pickerStyle(.menu).padding(.horizontal)
                         if mapping.hasUnavailablePlanSelection(for: horizon.id) {
                             VStack(alignment: .leading, spacing: 4) {
                                 Label("Прежний выбор недоступен. Открыт последний импорт.", systemImage: "exclamationmark.triangle")

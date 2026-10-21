@@ -36,11 +36,20 @@ struct MappingRatingsDetail: View {
                 }
             } else { Text("Barton Q: исходные данные не вводились. Недостаточно данных для расчёта.") }
             if let rmr = ratings?.rmr89 {
-                DisclosureGroup("RMR89 · исходные данные") {
+                DisclosureGroup("RMR89 · базовый рейтинг") {
                     Text(rmr.method).font(.caption)
                     Text(RMR89Assessment.reference).font(.caption)
                     Text("Оценено: \(MeasurementDateText.format(rmr.assessedAt, detailed: true)) · ревизия \(rmr.revision)").font(.caption)
-                    Text(RMR89Assessment.unavailable).accessibilityIdentifier("savedRMRUnavailable")
+                    if let calculation = rmr.calculation, let rating = calculation.value {
+                        Text("RMR89 (базовый): \(rating)").font(.headline)
+                        Text("Класс массива: \(calculation.rockClass ?? "—")")
+                    } else { Text("Базовый RMR: не рассчитан.").accessibilityIdentifier("savedRMRUnavailable") }
+                    ForEach(RMR89Parameter.allCases, id: \.self) { parameter in
+                        if let selected = rmr.input.basicSelections?[parameter.rawValue],
+                           let choice = parameter.choices(test: rmr.input.strengthTest).first(where: { $0.id == selected }) {
+                            value(parameter.title, "\(choice.title) · \(choice.rating) балл.")
+                        }
+                    }
                     value("Испытание прочности", rmr.input.strengthTest?.title ?? "")
                     value("Прочность, МПа", rmr.input.strengthMPa); value("Источник испытания", rmr.input.strengthEvidence)
                     value("RQD исходное, %", rmr.input.rqd); value("Источник RQD", rmr.input.rqdEvidence)
@@ -51,10 +60,10 @@ struct MappingRatingsDetail: View {
                     value("Давление воды / σ1", rmr.input.waterPressureRatio)
                     value("Инженерное применение", rmr.input.application?.title ?? ""); value("Ориентация", rmr.input.orientationDescription)
                     value("Источник оценки", rmr.input.source); value("Автор", rmr.input.assessor); value("Причина отсутствия данных", rmr.input.missingReason)
-                    Text("Базовый RMR: не рассчитан. RMR с поправкой на ориентацию: не рассчитан.")
+                    Text("RMR с поправкой на ориентацию: не рассчитан.")
                     Text("Отсутствуют: \(rmr.missing.joined(separator: ", "))").font(.caption)
                 }
-            } else { Text("RMR89: исходные данные не вводились. \(RMR89Assessment.unavailable).") }
+            } else { Text("RMR89: исходные данные не вводились.") }
         }
     }
     private func value(_ title: String, _ text: String) -> some View {

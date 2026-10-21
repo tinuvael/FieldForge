@@ -243,6 +243,6 @@ struct PhotoPackageExport {
         }
         let register = Table(name: "photo_register", columns: ["project_name", "horizon_name", "excavation_name", "current_point_picket", "field_observed_at_utc", "field_observed_at_reference_seconds", "field_observed_zone", "capture_time_status"] + photoTable.columns + attachmentColumns + extra, rows: registerRows)
         return MappingCSVExport(id: snapshot.id, snapshotAt: snapshot.snapshotAt, selection: snapshot.selection,
-                                tables: tables + [register], manifest: snapshot.manifest)
+                                tables: tables + [register], manifest: snapshot.manifest, fieldTables: snapshot.fieldTables)
     }
 }

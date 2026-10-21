@@ -1,5 +1,9 @@
 # Future geomechanical domain schema
 
+## Third iPhone review contract
+
+[Third iPhone review](third-iphone-review.md) supersedes earlier capture/plan presentation: immutable editor and coordinate-selection requests, decimal canonical pickets with exact historical validation, owner-defined Q presentation, and qualified cross-revision overlays. Schema stays 8; the optional plan `frameConfirmation` records a predecessor UUID/time at import, with units/frame/axes, relationship, cycle and transitive-conflict validation. Missing declarations imply no confirmation. Original plans/coordinates/evidence and correction history remain immutable; no migration, reset or coordinate transformation is introduced.
+
 ## Current schema-8 compatibility update
 
 [Second iPhone review](second-iphone-review.md) documents compatible excavation selection, volatile draft parking, isolated modal sensor sessions, tagged 10 m picket capture with legacy validation, and versioned Q numerical/documentation separation. Mapping stays on schema 8 with no migration/reset; original measurements, attachment bytes, source plans and correction history remain protected. Device crash root cause and physical qualification remain open. This current contract supersedes conflicting historical workflow descriptions below.

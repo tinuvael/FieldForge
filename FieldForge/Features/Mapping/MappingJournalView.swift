@@ -49,7 +49,7 @@ struct MappingJournalView: View {
                     NavigationLink { MappingObservationDetail(record: record) } label: {
                         VStack(alignment: .leading, spacing: 6) {
                             Text(name(excavation: record.excavationID)).font(.headline)
-                            Text(record.picket).font(.subheadline)
+                            Text(record.displayPicket).font(.subheadline)
                             if let revision = mapping.workflow?.journal.history(for: record.id).last {
                                 Text("Версия \(revision.version) · исправлено \(MappingCorrectionDateText.format(revision.correctedAt))").font(.caption)
                             }
@@ -174,7 +174,7 @@ struct MappingObservationDetail: View {
         List {
             Section {
                 Text(excavationName).font(.title2.bold())
-                Text(record.picket).font(.subheadline)
+                Text(record.displayPicket).font(.subheadline)
                 Text(MappingDateText.compact(record)).font(.caption).foregroundStyle(.secondary)
             }
             if historical, let historicalVersion { Text("Версия \(historicalVersion) · исторический снимок").font(.caption) }
@@ -196,7 +196,7 @@ struct MappingObservationDetail: View {
                 LabeledContent("Проект", value: mapping.workflow?.journal.projects.first { $0.id == record.projectID }?.name ?? record.projectID.uuidString)
                 LabeledContent("Горизонт", value: mapping.workflow?.journal.horizons.first { $0.id == record.horizonID }?.displayName ?? record.horizonID.uuidString)
                 LabeledContent("Выработка", value: mapping.workflow?.journal.excavations.first { $0.id == record.excavationID }?.name ?? record.excavationID.uuidString)
-                LabeledContent("Пикет", value: record.picket)
+                LabeledContent("Пикет", value: record.displayPicket)
                 LabeledContent("Метры", value: EngineeringDisplay.number(record.chainageMeters))
                 LabeledContent("Начало / направление", value: record.chainageOriginAndDirection == "unknown" ? "Неизвестно" : record.chainageOriginAndDirection)
                 LabeledContent("Дата наблюдения", value: MappingDateText.format(record))

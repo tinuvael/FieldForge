@@ -28,8 +28,6 @@ struct MappingMeasurementSheet: View {
                 VStack(alignment: .leading, spacing: 16) {
                     if automatic { automaticContent }
                     else { ManualOrientationForm(input: $input, notes: $notes) }
-                    Text("Замер будет добавлен в черновик точки. Сохраните точку кнопкой «Сохранить наблюдение».")
-                        .font(.footnote).foregroundStyle(.secondary)
                 }.padding().frame(maxWidth: 640).frame(maxWidth: .infinity)
             }
             .scrollDismissesKeyboard(.interactively)

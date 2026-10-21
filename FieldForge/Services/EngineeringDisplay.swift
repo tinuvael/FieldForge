@@ -13,6 +13,13 @@ enum EngineeringDisplay {
         return formatter.string(from: NSNumber(value: value == 0 ? 0 : value)) ?? "—"
     }
 
+    static func orientationInput(_ value: Double) -> String {
+        guard value.isFinite else { return "" }
+        let formatter = base()
+        formatter.maximumFractionDigits = 1
+        return formatter.string(from: NSNumber(value: value)) ?? ""
+    }
+
     static func coordinate(_ value: Double) -> String {
         guard value.isFinite else { return "—" }
         let formatter = base()
@@ -35,7 +42,7 @@ enum EngineeringDisplay {
     static func angle(_ value: Double?, azimuth: Bool = false) -> String {
         guard let value, value.isFinite else { return "—" }
         let displayed = azimuth ? (PlaneGeometry.normalizeAzimuth((value * 10).rounded() / 10) ?? value) : value
-        return number(displayed, decimals: 1) + "°"
+        return orientationInput(displayed) + "°"
     }
 
     private static func base() -> NumberFormatter {

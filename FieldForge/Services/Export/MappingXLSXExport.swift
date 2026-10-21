@@ -7,17 +7,21 @@ enum MappingExportFormat: String, CaseIterable {
 /// OOXML Transitional workbook over the SAME typed P5.1 value snapshot. No CSV parsing,
 /// persistence access, formula generation, rating evaluation or coordinate conversion.
 enum MappingXLSXExport {
-    static let version = "FieldForge-Mapping-XLSX/1"
+    static let version = "FieldForge-Mapping-XLSX/2"
     private static let main = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
     private static let relationships = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
     private static let declaration = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>"
 
     static func write(_ snapshot: MappingCSVExport, to url: URL,
                       photoPackageStatus: String? = nil,
+                      showTechnicalSheets: Bool = false,
                       append: @escaping (Data, FileHandle) throws -> Void = { try $1.write(contentsOf: $0) }) throws {
         try Task.checkCancellation()
         let summary = try summary(snapshot, photoPackageStatus: photoPackageStatus)
-        let sheets = [summary] + snapshot.tables
+        let fieldSheets = snapshot.fieldTables.filter { $0.name != "field_links" }
+        let sheets = fieldSheets + [summary] + snapshot.tables + snapshot.fieldTables.filter { $0.name == "field_links" }
+        let summaryIndex = fieldSheets.count
+        let technicalVisible = showTechnicalSheets || photoPackageStatus != nil
         let archive = try XLSXArchive(url: url, append: append)
         defer { archive.close() }
         func part(_ name: String, _ xml: String) throws { try archive.part(name) { try $0(declaration + xml) } }
@@ -51,7 +55,7 @@ enum MappingXLSXExport {
         """)
         try part("xl/workbook.xml", """
         <workbook xmlns="\(main)" xmlns:r="\(relationships)"><bookViews><workbookView activeTab="0"/></bookViews><sheets>
-        \(sheets.enumerated().map { "<sheet name=\"\($0.element.name)\" sheetId=\"\($0.offset + 1)\" r:id=\"rId\($0.offset + 1)\"/>" }.joined())
+        \(sheets.enumerated().map { "<sheet name=\"\($0.element.name)\" sheetId=\"\($0.offset + 1)\" r:id=\"rId\($0.offset + 1)\"\($0.offset > summaryIndex && !technicalVisible ? " state=\"hidden\"" : "")/>" }.joined())
         </sheets></workbook>
         """)
         try part("xl/_rels/workbook.xml.rels", """
@@ -73,7 +77,7 @@ enum MappingXLSXExport {
                 <sheetFormatPr defaultRowHeight="30"/><cols>
                 """)
                 for (i, name) in table.columns.enumerated() {
-                    let width = index == 0 ? (i == 0 ? 37 : 105) : columnWidth(name)
+                    let width = index == summaryIndex ? (i == 0 ? 37 : 105) : columnWidth(name)
                     try emit("<col min=\"\(i + 1)\" max=\"\(i + 1)\" width=\"\(width)\" customWidth=\"1\"/>")
                 }
                 try emit("</cols><sheetData><row r=\"1\" ht=\"36\" customHeight=\"1\">")
@@ -85,13 +89,36 @@ enum MappingXLSXExport {
                     try Task.checkCancellation()
                     guard row.count == table.columns.count else { throw StorageError.invalidRecord }
                     let r = i + 2
-                    try emit("<row r=\"\(r)\"\(index == 0 ? " ht=\"60\" customHeight=\"1\"" : "")>")
+                    let height: Int
+                    if index < summaryIndex {
+                        let lines = row.enumerated().map { column, value -> Int in
+                            guard case .text(let text) = value else { return 1 }
+                            let width = max(1, columnWidth(table.columns[column]) - 3)
+                            return text.split(separator: "\n", omittingEmptySubsequences: false).map { max(1, Int(ceil(Double($0.count) / Double(width)))) }.reduce(0, +)
+                        }.max() ?? 1
+                        height = min(300, max(30, lines * 15 + 6))
+                    } else { height = index == summaryIndex ? 60 : 30 }
+                    try emit("<row r=\"\(r)\" ht=\"\(height)\" customHeight=\"1\">")
                     for (j, value) in row.enumerated() {
-                        try emit(cell(value, reference: column(j + 1) + String(r), style: i % 2 == 0 ? 0 : 2))
+                        let reference = column(j + 1) + String(r)
+                        if index < summaryIndex {
+                            // Civil dates in the selected zone; exact UTC remains on raw sheets.
+                            if case .timestamp(let date) = value {
+                                let zone = TimeZone(identifier: snapshot.selection.timeZoneID) ?? .gmt
+                                let serial = date.map { ($0.timeIntervalSince1970 + Double(zone.secondsFromGMT(for: $0))) / 86400 + 25569 }
+                                try emit(cell(.number(serial), reference: reference, style: 3, fieldNumeric: true))
+                            } else {
+                                let name = table.columns[j]
+                                let oneDecimal = ["X", "Y", "Z, м"].contains(name) || name.lowercased().contains("азимут") || name.lowercased().contains("падение")
+                                try emit(cell(value, reference: reference, style: oneDecimal ? 4 : 5, fieldNumeric: true))
+                            }
+                        } else {
+                            try emit(cell(value, reference: reference, style: i % 2 == 0 ? 0 : 2))
+                        }
                     }
                     try emit("</row>")
                 }
-                try emit("</sheetData>" + (index == 0 ? "" : "<autoFilter ref=\"A1:\(last)\"/>") + "</worksheet>")
+                try emit("</sheetData>" + (index == summaryIndex ? "" : "<autoFilter ref=\"A1:\(last)\"/>") + "</worksheet>")
             }
         }
         try archive.finish()
@@ -109,7 +136,7 @@ enum MappingXLSXExport {
         return (text, digits > 15 || (value != 0 && abs(value) < Double.leastNormalMagnitude))
     }
 
-    static func cell(_ value: MappingCSVExport.Cell, reference: String, style: Int) throws -> String {
+    static func cell(_ value: MappingCSVExport.Cell, reference: String, style: Int, fieldNumeric: Bool = false) throws -> String {
         let prefix = "<c r=\"\(reference)\" s=\"\(style)\""
         func text(_ string: String) throws -> String {
             guard string.utf16.count <= 32_767 else {
@@ -123,7 +150,7 @@ enum MappingXLSXExport {
         case .number(let number):
             guard let number else { return prefix + "/>" }
             let encoded = try numericText(number)
-            return try encoded.isText ? text(encoded.value) : prefix + " t=\"n\"><v>\(encoded.value)</v></c>"
+            return try encoded.isText && !fieldNumeric ? text(encoded.value) : prefix + " t=\"n\"><v>\(encoded.value)</v></c>"
         case .integer(let number):
             guard let number else { return prefix + "/>" }
             return try String(number).filter(\.isNumber).count > 15 ? text(String(number)) : prefix + " t=\"n\"><v>\(number)</v></c>"
@@ -156,6 +183,8 @@ enum MappingXLSXExport {
         return result
     }
     private static func columnWidth(_ name: String) -> Int {
+        if ["Примечания", "Описание", "Категории RMR", "Пропуски"].contains(name) { return 56 }
+        if name.hasPrefix("Дата") { return 23 }
         if name.hasSuffix("_id") { return 39 }
         if name.hasSuffix("_json") || ["notes", "description", "coordinate_provenance"].contains(name) { return 56 }
         if name.hasSuffix("_utc") || name.hasSuffix("_reference_seconds") { return 29 }
@@ -211,26 +240,28 @@ enum MappingXLSXExport {
         note("Полнота", "Неполные записи сохранены. Наличие и целостность оригиналов фотографий не проверялись. original_integrity — notChecked; originalsNotIncluded.")
         note("Назначение", "Выгрузка для анализа, НЕ полная резервная копия. Нет оригиналов фото, миниатюр, файлов DXF и полной истории исправлений.")
         }
-        note("Точность Excel", "Числа до 15 значащих цифр — числовые ячейки. Более точные Double и большие целые — текст с точным исходным представлением. Очень малые subnormal Double — текст. Приблизительных столбцов нет.")
+        note("Точность Excel", "Полевые листы: числовые ячейки, координаты и углы показаны с одним знаком. Excel использует до 15 значащих цифр. Технические листы сохраняют более точные Double текстом без округления. Исходные записи не изменяются.")
+        note("Технические листы", "После Сводки: полный технический контракт и field_links (связи полевых ссылок с UUID). По умолчанию скрыты; включите их в дополнительных параметрах экспорта или откройте через «Показать лист» в табличном редакторе.")
         note("Исходный текст", "Десятичные строки, UUID, JSON, времена ISO UTC и строки с =, +, -, @ сохранены как текст без защитного CSV-апострофа. Пустые ячейки означают отсутствие значения, не ноль. Формул, макросов и внешних связей нет.")
         note("Единицы", "XY — xy_units (m, mm, drawing), CRS и axes сохранены. Z, высоты, пикетаж, интервалы, spacing, persistence, thickness — м. aperture — мм. Углы падения и направления — градусы.")
         note("Север и координаты", "magnetic/true/grid/unknown сохранены без преобразований. Источник координат, plan_id и версия плана явные. Подземный GPS не предполагается.")
         note("Измерения и диагностика", "Все исходные измерения и их source сохранены. sensor_sample_json: NWU, диагностика устройства g, µT, rad/s. Оригинальные строки углов и direction_meaning сохранены.")
-        note("Время", "Отбор только по observedAt актуальной точки в выбранном поясе, включая последний календарный день. ISO UTC — миллисекунды. *_reference_seconds и даты JSON — точные секунды от 2001-01-01T00:00:00Z.")
+        note("Время", "Отбор только по observedAt актуальной точки в выбранном поясе, включая последний календарный день. Полевые даты — числовые даты Excel в выбранном поясе. Технические ISO UTC — миллисекунды. *_reference_seconds и даты JSON — точные секунды от 2001-01-01T00:00:00Z.")
         note("Версии и связи", "Одна актуальная точка на UUID. revision_id/version идентифицируют версию. photo_point_contexts — историческая связь, не дополнительные точки; unknownBeforeFirstSave не задаёт координаты съёмки. Связанные измерения/фото могут быть вне периода.")
-        note("Оценки", "Barton Q, метод, входы, результат и пропуски — как сохранено, без пересчёта. RMR89 — только входы, без рейтинга и класса.")
+        note("Оценки", "Barton Q и RMR89: сохранённые входы, версия метода и результат без пересчёта. Старые RMR89 input-only остаются без числового результата. Класс RMR относится к базовому рейтингу; поправка на ориентацию не рассчитана. Категория FieldForge по Q — отдельная шкала владельца, не вывод о механической устойчивости.")
         note("Приватность", photoPackageStatus == nil ? "EXIF GPS и оригиналы не читаются. Имена файлов, заметки и другие пользовательские строки могут содержать личные сведения." : "Оригиналы переданы без изменения байтов, включая личные EXIF/GPS и сведения об авторе. Координаты EXIF не трактуются как место съёмки в шахте. Санитизированные копии не создаются.")
-        note("Столбцы и отношения", "Имена листов и столбцов совпадают с контрактом FieldForge-Mapping-CSV/1, включая *_reference_seconds. Связи по UUID, не по имени файла. JSON содержит полный сохранённый ввод и диагностику.")
+        note("Столбцы и отношения", "Технические листы сохраняют имена и столбцы FieldForge-Mapping-CSV/1, включая *_reference_seconds; добавлены необязательные результаты RMR. Связи по UUID, не по имени файла. JSON содержит полный сохранённый ввод и диагностику.")
         return table
     }
 
     private static let styles = """
     <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+    <numFmts count="2"><numFmt numFmtId="164" formatCode="dd.mm.yyyy hh:mm"/><numFmt numFmtId="165" formatCode="0.0"/></numFmts>
     <fonts count="2"><font><sz val="11"/><color rgb="FF243746"/><name val="Calibri"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font></fonts>
     <fills count="4"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF243746"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFF0F5F7"/><bgColor indexed="64"/></patternFill></fill></fills>
     <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
     <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-    <cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf><xf numFmtId="0" fontId="0" fillId="3" borderId="0" xfId="0" applyFill="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf></cellXfs>
+    <cellXfs count="6"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment vertical="center" wrapText="1"/></xf><xf numFmtId="0" fontId="0" fillId="3" borderId="0" xfId="0" applyFill="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf><xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf><xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf></cellXfs>
     <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
     </styleSheet>
     """

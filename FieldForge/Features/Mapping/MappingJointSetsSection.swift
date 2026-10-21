@@ -3,16 +3,14 @@ import SwiftUI
 /// Representatives are explicit interpretations; accepted readings remain separate originals.
 struct MappingJointSetsSection: View {
     @EnvironmentObject private var mapping: MappingModel
-    @State private var editorOwnerID: UUID?
-    @State private var editing: JointSetDraft?
-    @State private var editingTectonic: TectonicStructureDraft?
+    let edit: (MappingGeologyEditorRequest) -> Void
     private var sets: [JointSetDraft] { mapping.workflow?.draft.jointSets ?? [] }
     var body: some View {
         Section("Трещиноватость и тектоника") {
             Text("Системы трещин").font(.subheadline).foregroundStyle(.secondary)
             ForEach(sets) { set in
                 HStack {
-                    Button { editorOwnerID = mapping.workflow?.draft.id; editing = set } label: {
+                    Button { if let workflow = mapping.workflow { edit(.joint(workflow.editorRequest(set))) } } label: {
                         HStack {
                             Text(set.identifier.rawValue).font(.headline)
                             if let value = try? set.representative.validated() {
@@ -31,13 +29,12 @@ struct MappingJointSetsSection: View {
             }
             Button("Добавить систему", systemImage: "plus") {
                 guard let identifier = JointSetIdentifier.allCases.first(where: { candidate in !sets.contains { $0.identifier == candidate } }) else { return }
-                editorOwnerID = mapping.workflow?.draft.id
-                editing = JointSetDraft(identifier: identifier)
+                if let workflow = mapping.workflow { edit(.joint(workflow.editorRequest(JointSetDraft(identifier: identifier)))) }
             }.disabled(sets.count >= 5).accessibilityIdentifier("addJointSet")
             Text("Тектоника").font(.subheadline).foregroundStyle(.secondary)
             ForEach(mapping.workflow?.draft.tectonicStructures ?? []) { structure in
                 HStack {
-                    Button { editorOwnerID = mapping.workflow?.draft.id; editingTectonic = structure } label: {
+                    Button { if let workflow = mapping.workflow { edit(.tectonic(workflow.editorRequest(structure))) } } label: {
                         HStack { Text(structure.type.title); Spacer(); Image(systemName: "pencil") }.frame(minHeight: 44)
                     }.accessibilityIdentifier("editTectonic-\(structure.id.uuidString)")
                     Button(role: .destructive) {
@@ -47,41 +44,37 @@ struct MappingJointSetsSection: View {
                 }.buttonStyle(.borderless)
             }
             Button("Добавить структуру", systemImage: "plus") {
-                editorOwnerID = mapping.workflow?.draft.id; editingTectonic = TectonicStructureDraft()
+                if let workflow = mapping.workflow { edit(.tectonic(workflow.editorRequest(TectonicStructureDraft()))) }
             }
                 .accessibilityIdentifier("addTectonicStructure")
         }
-        .sheet(item: $editingTectonic) { structure in
-            let ownerID = editorOwnerID
-            TectonicCaptureSheet(initial: structure) { updated in
-                guard mapping.workflow?.draft.id == ownerID, mapping.workflow?.draft.saving == false else {
-                    throw MappingError.invalid("Черновик точки изменился. Откройте структуру заново.")
-                }
-                _ = try updated.record()
-                mapping.workflow!.draft.tectonicStructures.removeAll { $0.id == updated.id }
-                mapping.workflow!.draft.tectonicStructures.append(updated)
-            }
-        }
-        .sheet(item: $editing) { set in
-            let ownerID = editorOwnerID
-            JointSetCaptureSheet(initial: set, measurements: mapping.workflow?.draft.measurements ?? []) { updated, originals in
-                guard let workflow = mapping.workflow, workflow.draft.id == ownerID, !workflow.draft.saving else {
-                    throw MappingError.invalid("Черновик точки изменился. Откройте систему заново.")
-                }
-                // Validate a copy; any failure leaves both parent collections untouched.
-                var next = workflow.draft
-                for reading in originals { try next.addMeasurement(reading) }
-                if let updated {
-                    try updated.record(now: Date()).validate(pointMeasurementIDs: next.measurements.map(\.id))
-                    next.jointSets.removeAll { $0.id == updated.id }
-                    next.jointSets.append(updated)
-                    next.jointSets.sort { $0.identifier.rawValue < $1.identifier.rawValue }
-                }
-                guard next.jointSets.count <= 5,
-                      Set(next.jointSets.map(\.identifier)).count == next.jointSets.count,
-                      Set(next.jointSets.map(\.id)).count == next.jointSets.count else { throw StorageError.invalidRecord }
-                mapping.workflow!.draft = next
-            }
+    }
+}
+
+enum MappingGeologyEditorRequest: Identifiable {
+    case joint(MappingEditorRequest<JointSetDraft>)
+    case tectonic(MappingEditorRequest<TectonicStructureDraft>)
+    var id: UUID {
+        switch self { case .joint(let request): return request.id; case .tectonic(let request): return request.id }
+    }
+}
+
+/// Presented by MappingView, outside the lazy Form/Section host lifetime.
+struct MappingGeologyCaptureSheet: View {
+    let request: MappingGeologyEditorRequest
+    @EnvironmentObject private var mapping: MappingModel
+    var body: some View {
+        switch request {
+        case .tectonic(let request):
+            TectonicCaptureSheet(initial: request.initial) { updated in
+                guard mapping.workflow != nil else { throw StorageError.writesBlocked }
+                try mapping.workflow!.acceptTectonic(updated, request: request)
+            }.id(request.id)
+        case .joint(let request):
+            JointSetCaptureSheet(initial: request.initial, measurements: request.measurements) { updated, originals in
+                guard mapping.workflow != nil else { throw StorageError.writesBlocked }
+                try mapping.workflow!.acceptJointSet(updated, originals: originals, request: request)
+            }.id(request.id)
         }
     }
 }
@@ -99,6 +92,8 @@ private struct JointSetCaptureSheet: View {
     @State private var error: String?
     @State private var originalNotice: String?
     @FocusState private var focused: Bool
+    @FocusState private var orientationFocus: OrientationField?
+    private enum OrientationField { case direction, dip }
     init(initial: JointSetDraft, measurements: [Measurement], apply: @escaping (JointSetDraft?, [Measurement]) throws -> Void) {
         self.initial = initial; self.measurements = measurements; self.apply = apply
         _draft = State(initialValue: initial)
@@ -119,11 +114,11 @@ private struct JointSetCaptureSheet: View {
         NavigationStack {
             Form {
                 Section("Представительная ориентация") {
-                    TextField("Азимут падения, °", text: $draft.representative.dipDirectionText)
-                        .keyboardType(.decimalPad).focused($focused).accessibilityIdentifier("geologyDirection")
-                    TextField("Угол падения, °", text: $draft.representative.dipAngleText)
-                        .keyboardType(.decimalPad).focused($focused).accessibilityIdentifier("geologyDip")
-                    Button("Замерить iPhone", systemImage: "iphone.radiowaves.left.and.right") { focused = false; measuring = true }
+                    TextField("Азимут падения, °", text: orientationText(\.dipDirectionText, field: .direction))
+                        .keyboardType(.decimalPad).focused($orientationFocus, equals: .direction).accessibilityIdentifier("geologyDirection")
+                    TextField("Угол падения, °", text: orientationText(\.dipAngleText, field: .dip))
+                        .keyboardType(.decimalPad).focused($orientationFocus, equals: .dip).accessibilityIdentifier("geologyDip")
+                    Button("Замерить iPhone", systemImage: "iphone.radiowaves.left.and.right") { focused = false; orientationFocus = nil; measuring = true }
                     Picker("Север", selection: $draft.representative.reference) {
                         ForEach(GeographicReference.manualChoices, id: \.self) { Text($0.title).tag($0) }
                     }
@@ -133,51 +128,37 @@ private struct JointSetCaptureSheet: View {
                     if manuallyModified {
                         Label("Представительная ориентация изменена вручную", systemImage: "pencil")
                             .font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("jointManuallyModified")
-                    } else if sensorRepresentative != nil {
-                        Text("Принятая ориентация iPhone").font(.caption).foregroundStyle(.secondary)
-                    } else {
-                        Text("Ручной ввод · геологический компас").font(.caption).foregroundStyle(.secondary)
                     }
                     if let message = validationMessage { Text(message).font(.caption).foregroundStyle(.orange) }
                 }
-                DisclosureGroup("Дополнительно") {
-                    Text("J1–J5 — явные интерпретации. Исходные замеры сохраняются отдельно; усреднение и пересчёт севера не выполняются.").font(.caption)
+                DisclosureGroup("Полевые характеристики") {
                     TextField("Расстояние между трещинами, м", text: $draft.spacing).focused($focused).keyboardType(.decimalPad)
                     TextField("Протяжённость, м", text: $draft.persistence).focused($focused).keyboardType(.decimalPad)
                     TextField("Раскрытие, мм", text: $draft.aperture).focused($focused).keyboardType(.decimalPad)
                     TextField("Шероховатость", text: $draft.roughness).focused($focused)
                     TextField("Заполнитель", text: $draft.infill).focused($focused)
                     TextField("Примечания", text: $draft.notes, axis: .vertical).focused($focused)
-                    TextField("Автор интерпретации", text: $draft.author).focused($focused)
-                    ForEach(measurements + originals) { reading in
-                        Toggle(isOn: Binding(get: { draft.measurementIDs.contains(reading.id) }, set: { on in
-                            draft.measurementIDs.removeAll { $0 == reading.id }
-                            if on { draft.measurementIDs.append(reading.id) }
-                        })) { MeasurementSummary(reading: reading) }
-                    }
                 }
-                if !originals.isEmpty {
+                if let originalNotice {
                     Section {
-                        Text("Новых исходных замеров: \(originals.count)").font(.caption)
-                        if let originalNotice { Text(originalNotice).font(.caption).foregroundStyle(.secondary) }
-                        Button("Добавить только замеры в точку") {
-                            focused = false
+                        Text(originalNotice).font(.caption)
+                        Button("Сохранить отдельные замеры") {
                             do { try apply(nil, originals); dismiss() } catch { self.error = error.localizedDescription }
-                        }.accessibilityIdentifier("applyJointOriginalsOnly")
-                    } footer: { Text("Представительная система не изменится. Замеры сохранятся при сохранении точки.") }
+                        }
+                    }
                 }
                 if let error { Text(error).foregroundStyle(.red) }
             }
-            .navigationTitle(draft.identifier.rawValue).navigationBarTitleDisplayMode(.inline)
+            .navigationTitle("Система \(draft.identifier.rawValue)").navigationBarTitleDisplayMode(.inline)
             .scrollDismissesKeyboard(.interactively)
             .interactiveDismissDisabled(changed)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Отмена") { focused = false; if changed { discard = true } else { dismiss() } }
+                    Button("Отмена") { focused = false; orientationFocus = nil; if changed { discard = true } else { dismiss() } }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Принять \(draft.identifier.rawValue)") {
-                        focused = false
+                    Button("Принять") {
+                        focused = false; orientationFocus = nil
                         do {
                             var updated = draft, evidence = originals
                             if sensorRepresentative == nil && updated.representative != initial.representative {
@@ -188,7 +169,7 @@ private struct JointSetCaptureSheet: View {
                         } catch { self.error = error.localizedDescription }
                     }.disabled(!valid)
                 }
-                ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Готово") { focused = false } }
+                ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Готово") { focused = false; orientationFocus = nil } }
             }
             .confirmationDialog("Отбросить изменения системы?", isPresented: $discard, titleVisibility: .visible) {
                 Button("Отбросить", role: .destructive) { dismiss() }
@@ -210,6 +191,14 @@ private struct JointSetCaptureSheet: View {
             }
         }
     }
+    private func orientationText(_ key: WritableKeyPath<ManualOrientationInput, String>, field: OrientationField) -> Binding<String> {
+        Binding(get: {
+            let text = draft.representative[keyPath: key]
+            guard orientationFocus != field || sensorRepresentative?[keyPath: key] == text,
+                  let value = Double(text.replacingOccurrences(of: ",", with: ".")) else { return text }
+            return EngineeringDisplay.orientationInput(value)
+        }, set: { draft.representative[keyPath: key] = $0 })
+    }
     private func stageOriginal(_ reading: Measurement) throws {
         guard reading.isSavable, !(measurements + originals).contains(where: { $0.id == reading.id }) else {
             throw MappingError.invalid("Замер неполный или уже добавлен.")
@@ -218,33 +207,6 @@ private struct JointSetCaptureSheet: View {
     }
     private var validationMessage: String? {
         do { _ = try draft.record(now: Date()); return nil } catch { return error.localizedDescription }
-    }
-}
-
-/// Adapts an explicit interpretation to the existing validator, without changing the original.
-private enum JointRepresentativeInput {
-    static func make(from reading: Measurement) throws -> ManualOrientationInput {
-        guard reading.isSavable, reading.orientation.dipAngle != nil else {
-            throw MappingError.invalid("Замер неполный или недостоверный. Повторите фиксацию.")
-        }
-        guard GeographicReference.manualChoices.contains(reading.reference) else {
-            throw MappingError.invalid(reading.reference == .simulatedNorth
-                ? "Север DEMO нельзя назначить системе. Можно оставить исходный замер."
-                : "Опора на север недоступна. Можно оставить исходный замер.")
-        }
-        var input = ManualOrientationInput()
-        input.dipAngleText = reading.orientation.dipAngle.map(ElevationInput.text) ?? ""
-        input.dipDirectionText = reading.orientation.dipDirection.map(ElevationInput.text) ?? ""
-        input.reference = reading.reference
-        input.usesConventionalDipSide = reading.directionMeaning == .conventionalDipSide
-        do { _ = try input.validated() }
-        catch {
-            throw MappingError.invalid("Ориентация неполная или направление неоднозначно. Оставьте исходный замер; систему задайте явно.")
-        }
-        return input
-    }
-    static func issue(for reading: Measurement) -> String? {
-        do { _ = try make(from: reading); return nil } catch { return error.localizedDescription }
     }
 }
 

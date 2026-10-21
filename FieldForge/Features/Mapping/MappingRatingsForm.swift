@@ -9,7 +9,7 @@ struct MappingRatingsForm: View {
             DisclosureGroup("Barton Q") {
                 BartonQForm(input: $q, focus: focus)
             }
-            DisclosureGroup("RMR89 · исходные данные") {
+            DisclosureGroup("RMR89 · базовый рейтинг") {
                 RMR89Form(input: $rmr, focus: focus)
             }
         }
@@ -66,6 +66,7 @@ private struct BartonQForm: View {
                     }
                 }
                 Section("Методика") {
+                    Text("Категория по Q — упрощение FieldForge: Q < 1; 1 ≤ Q < 4; 4 ≤ Q ≤ 10; Q > 10. Не подтверждает механическую устойчивость или достаточность крепи.").font(.caption)
                     Text("NGI · апрель 2025. Коэффициенты выбирает инженер. При RQD ≤10% в расчёте используется 10%. Крепь не рассчитывается.").font(.caption)
                     Link("Руководство NGI 2025", destination: URL(string: QMethod.url)!)
                     if let strict = try? input.evaluate(), !strict.missing.isEmpty {
@@ -171,8 +172,11 @@ struct QCalculationText: View {
     var body: some View {
         if let result = evaluation.result {
             Text("Q ≈ \(EngineeringDisplay.significant(result.value))").font(.headline).accessibilityIdentifier("qResult")
-            Text(result.rockClass?.title ?? "Значение вне опубликованной шкалы классов 0,001…1000")
+            if let category = FieldQCategory(q: result.value) {
+                LabeledContent("Категория по Q", value: category.title)
+            }
             if !compact {
+                Text(result.rockClass?.title ?? "Значение вне опубликованной шкалы классов 0,001…1000")
                 Text("RQD исходное: \(EngineeringDisplay.significant(result.measuredRQD))%; в расчёте: \(EngineeringDisplay.significant(result.calculationRQD))%")
                 Text("Q = (\(EngineeringDisplay.significant(result.calculationRQD)) / \(EngineeringDisplay.significant(result.jn))) × (\(EngineeringDisplay.significant(result.jr)) / \(EngineeringDisplay.significant(result.ja))) × (\(EngineeringDisplay.significant(result.jw)) / \(EngineeringDisplay.significant(result.srf)))")
                 .font(.caption).textSelection(.enabled)
@@ -187,39 +191,77 @@ private struct RMR89Form: View {
     @Binding var input: RMR89Input
     let focus: FocusState<Bool>.Binding
     var body: some View {
-        Text("Bieniawski · RMR89 (1989)").font(.subheadline)
-        Text(RMR89Assessment.unavailable).accessibilityIdentifier("rmrUnavailable")
-        Picker("Испытание прочности", selection: $input.strengthTest) {
+        Picker("Испытание прочности", selection: Binding(get: { input.strengthTest }, set: {
+            input.strengthTest = $0
+            if input.basicSelections != nil { input.basicSelections?["strength"] = nil }
+        })) {
             Text("Не указано").tag(nil as RMRStrengthTest?)
             ForEach(RMRStrengthTest.allCases, id: \.self) { Text($0.title).tag(Optional($0)) }
+        }.accessibilityIdentifier("rmrStrengthBasis")
+        ForEach(RMR89Parameter.allCases.filter { $0 != .overallCondition }, id: \.self) { parameter in
+            category(parameter)
         }
-        RatingField("Прочность, МПа", text: $input.strengthMPa, id: "rmrStrength", focus: focus)
-        RatingField("Испытание: источник и применимость UCS / Is(50)", text: $input.strengthEvidence, id: "rmrStrengthEvidence", focus: focus)
-        Text("Is(50) сохраняется как результат точечного нагружения с приведением к 50 мм; преобразование в UCS и рейтинги не выполняется.").font(.caption)
-        RatingField("RMR: RQD исходное, %", text: $input.rqd, id: "rmrRQD", focus: focus)
-        RatingField("RMR: источник RQD", text: $input.rqdEvidence, id: "rmrRQDEvidence", focus: focus)
-        RatingField("Расстояние между трещинами, м", text: $input.spacingMeters, id: "rmrSpacing", focus: focus)
-        DisclosureGroup("Состояние трещин — исходные данные") {
-            RatingField("Протяжённость, м", text: $input.persistenceMeters, id: "rmrPersistence", focus: focus)
-            RatingField("Раскрытие, мм", text: $input.apertureMillimeters, id: "rmrAperture", focus: focus)
-            RatingField("Шероховатость — описание", text: $input.roughness, id: "rmrRoughness", focus: focus)
-            RatingField("Заполнитель — тип, мощность и свойства", text: $input.infill, id: "rmrInfill", focus: focus)
-            RatingField("Выветрелость стенок — описание", text: $input.weathering, id: "rmrWeathering", focus: focus)
+        if let infill = input.basicSelections?["infill"], infill != "infill-0" {
+            Text("Заполнитель влияет на шероховатость: выберите общее состояние по A.4.").font(.caption)
+            category(.overallCondition)
         }
-        RatingField("Подземные воды — описание условий", text: $input.groundwater, id: "rmrWater", focus: focus)
-        RatingField("Приток, л/мин на 10 м тоннеля", text: $input.inflowLitersPerMinutePer10m, id: "rmrInflow", focus: focus)
-        RatingField("Давление воды / главное напряжение σ1", text: $input.waterPressureRatio, id: "rmrWaterRatio", focus: focus)
-        Picker("Инженерное применение", selection: $input.application) {
-            Text("Не указано").tag(nil as RMREngineeringApplication?)
-            ForEach(RMREngineeringApplication.allCases, id: \.self) { Text($0.title).tag(Optional($0)) }
+        if input.strengthTest == .pointLoadIs50 {
+            Text("Is(50) <1 МПа: требуется UCS. Пересчёт Is(50) в UCS не выполняется.").font(.caption)
         }
-        RatingField("Ориентация: простирание, падение, ось и направление проходки, вид севера", text: $input.orientationDescription, id: "rmrOrientation", focus: focus)
-        RatingField("Источник оценки RMR", text: $input.source, id: "rmrSource", focus: focus)
-        RatingField("Автор оценки RMR", text: $input.assessor, id: "rmrAssessor", focus: focus)
-        RatingField("Причина отсутствия данных RMR", text: $input.missingReason, id: "rmrMissingReason", focus: focus)
-        Text("Базовый RMR: не рассчитан. RMR с поправкой на ориентацию: не рассчитан.").font(.caption)
-        Text("Отсутствуют: \(input.missing.joined(separator: ", "))").font(.caption)
+        switch Result(catching: { try input.basicEvaluation() }) {
+        case .success(let result):
+            if let value = result.value {
+                Text("RMR89 (базовый): \(value)").font(.headline).accessibilityIdentifier("rmrBasicResult")
+                Text("Класс массива: \(result.rockClass ?? "—")")
+            } else { Text("Для расчёта: \(result.missing.joined(separator: ", "))").font(.caption) }
+        case .failure(let error): Text(error.localizedDescription).font(.caption).foregroundStyle(.orange)
+        }
+        Text("RMR с поправкой на ориентацию: не рассчитан.").font(.caption)
+        DisclosureGroup("Измеренные значения и сведения об оценке") {
+            RatingField("Прочность, МПа", text: $input.strengthMPa, id: "rmrStrength", focus: focus)
+            RatingField("Испытание: источник и применимость UCS / Is(50)", text: $input.strengthEvidence, id: "rmrStrengthEvidence", focus: focus)
+            RatingField("RMR: RQD исходное, %", text: $input.rqd, id: "rmrRQD", focus: focus)
+            RatingField("RMR: источник RQD", text: $input.rqdEvidence, id: "rmrRQDEvidence", focus: focus)
+            RatingField("Расстояние между трещинами, м", text: $input.spacingMeters, id: "rmrSpacing", focus: focus)
+            DisclosureGroup("Состояние трещин — исходные данные") {
+                RatingField("Протяжённость, м", text: $input.persistenceMeters, id: "rmrPersistence", focus: focus)
+                RatingField("Раскрытие, мм", text: $input.apertureMillimeters, id: "rmrAperture", focus: focus)
+                RatingField("Шероховатость — описание", text: $input.roughness, id: "rmrRoughness", focus: focus)
+                RatingField("Заполнитель — тип, мощность и свойства", text: $input.infill, id: "rmrInfill", focus: focus)
+                RatingField("Выветрелость стенок — описание", text: $input.weathering, id: "rmrWeathering", focus: focus)
+            }
+            RatingField("Подземные воды — описание условий", text: $input.groundwater, id: "rmrWater", focus: focus)
+            RatingField("Приток, л/мин на 10 м тоннеля", text: $input.inflowLitersPerMinutePer10m, id: "rmrInflow", focus: focus)
+            RatingField("Давление воды / главное напряжение σ1", text: $input.waterPressureRatio, id: "rmrWaterRatio", focus: focus)
+            Picker("Инженерное применение", selection: $input.application) {
+                Text("Не указано").tag(nil as RMREngineeringApplication?)
+                ForEach(RMREngineeringApplication.allCases, id: \.self) { Text($0.title).tag(Optional($0)) }
+            }
+            RatingField("Ориентация: простирание, падение, ось и направление проходки, вид севера", text: $input.orientationDescription, id: "rmrOrientation", focus: focus)
+            RatingField("Источник оценки RMR", text: $input.source, id: "rmrSource", focus: focus)
+            RatingField("Автор оценки RMR", text: $input.assessor, id: "rmrAssessor", focus: focus)
+            RatingField("Причина отсутствия данных RMR", text: $input.missingReason, id: "rmrMissingReason", focus: focus)
+
+        }
+        DisclosureGroup("Методика RMR89") {
+            Text(RMR89Assessment.reference)
+            Text("Таблицы A, C, E. Предварительный базовый рейтинг: прочность + RQD + расстояние + состояние + вода. Категории выбираются явно; общая граница диапазонов требует выбора инженера. При заполнителе используется A.4 вместо суммы E. Для ровно 5 мм проверьте общее состояние по A.4.")
+            Text("Оценка состояния относится к определяющей системе трещин. Шероховатость породы и свойства заполнителя не взаимозаменяемы. Поправки для тоннелей, оснований и склонов не применяются. Рекомендации по крепи и механической устойчивости не рассчитываются.")
+        }.font(.caption)
     }
+    private func category(_ parameter: RMR89Parameter) -> some View {
+        Picker(parameter.title, selection: Binding(get: { input.basicSelections?[parameter.rawValue] ?? "" }, set: { value in
+            var selections = input.basicSelections ?? [:]
+            selections[parameter.rawValue] = value.isEmpty ? nil : value
+            input.basicSelections = selections
+        })) {
+            Text("Выберите").tag("")
+            ForEach(parameter.choices(test: input.strengthTest).filter { parameter != .overallCondition || $0.rating <= 10 }) { choice in
+                Text("\(choice.title) · \(choice.rating) балл.").tag(choice.id)
+            }
+        }.accessibilityIdentifier("rmrCategory-" + parameter.rawValue)
+    }
+
 }
 private struct RatingField: View {
     let title: String
@@ -263,19 +305,6 @@ extension JrAdjustment {
 }
 extension SRFAdjustment {
     var title: String { switch self { case .none: return "Без поправки"; case .adjacentZone: return "Снижение 25–50%: зона A–E влияет, не пересекает"; case .shallowCrown: return "F: покрытие свода меньше пролёта · SRF = 5" } }
-}
-extension QRockClass {
-    var title: String {
-        switch self {
-        case .exceptionallyPoor: return "G · Исключительно плохой (0,001 ≤ Q < 0,01)"
-        case .extremelyPoor: return "F · Крайне плохой (0,01 ≤ Q < 0,1)"
-        case .veryPoor: return "E · Очень плохой (0,1 ≤ Q < 1)"
-        case .poor: return "D · Плохой (1 ≤ Q < 4)"
-        case .fair: return "C · Средний (4 ≤ Q < 10)"
-        case .good: return "B · Хороший (10 ≤ Q < 40)"
-        case .veryGood: return "A · Очень хороший (40 ≤ Q ≤ 1000)"
-        }
-    }
 }
 extension RMRStrengthTest { var title: String { self == .ucs ? "UCS — одноосное сжатие" : "Is(50) — точечное нагружение" } }
 extension RMREngineeringApplication {

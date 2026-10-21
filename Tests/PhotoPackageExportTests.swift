@@ -112,7 +112,7 @@ final class PhotoPackageExportTests: XCTestCase {
         let entries = try package(files), m = try manifest(entries)
         let photos = try XCTUnwrap(m["photographs"] as? [[String: Any]])
         let xlsx = try unzip(XCTUnwrap(entries[PhotoPackageExport.prefix + "FieldForge-Mapping.xlsx"]))
-        let register = String(decoding: try XCTUnwrap(xlsx["xl/worksheets/sheet16.xml"]), as: UTF8.self)
+        let register = String(decoding: try XCTUnwrap(xlsx["xl/worksheets/sheet21.xml"]), as: UTF8.self)
         for item in export.items {
             let row = try XCTUnwrap(photos.first { $0["photo_id"] as? String == item.photo.id.uuidString })
             XCTAssertEqual(row["attachment_id"] as? String, item.attachment.id.uuidString)
