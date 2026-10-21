@@ -18,8 +18,6 @@ struct HorizonPlansView: View {
             Section {
                 Text(mapping.workflow?.journal.horizons.first { $0.id == effectiveHorizonID }?.displayName ?? "Выберите горизонт в картировании")
                     .font(.headline)
-                Text("Точки показываются только на исходной версии плана. Совместимость разных планов и ручных координат не предполагается.")
-                    .font(.caption)
                 Button("Загрузить DXF", systemImage: "square.and.arrow.down") { importing = true }
                     .disabled(effectiveHorizonID == nil || busy || mapping.planStore == nil)
                     .accessibilityIdentifier("importDXF")
@@ -86,12 +84,17 @@ struct HorizonPlansView: View {
                 }
             }
             .sheet(item: $prepared, onDismiss: refreshPending) { item in
-                PlanImportSetup(item: item, existingVersions: (plans + pending).filter { $0.horizonID == item.horizonID }.map(\.version), stage: { units, version, crs, axes in
+                PlanImportSetup(item: item, previousPlan: plans.last, existingVersions: (plans + pending).filter { $0.horizonID == item.horizonID }.map(\.version), stage: { units, version, crs, axes, confirmation in
                     guard let files = mapping.planStore else { throw StorageError.writesBlocked }
                     try PlanRevisionNumber.validateNew(version, existing: ((mapping.workflow?.journal.plans ?? []) + pending).filter { $0.horizonID == item.horizonID }.map(\.version))
+                    let preview = MappingPlanReference(id: UUID(), horizonID: item.horizonID, attachmentID: UUID(), version: version,
+                        file: ManagedPlanFile(originalFilename: item.filename, sha256: ManagedPlanStore.digest(item.data), byteCount: item.data.count,
+                            importedAt: Date(), units: units, crs: crs.isEmpty ? "unknown" : crs, axes: axes.isEmpty ? "unknown" : axes,
+                            unitDeclaration: "userConfirmedAtImport", insertionUnits: item.drawing.insertionUnits), frameConfirmation: confirmation)
+                    try PlanCoordinateCompatibility.validate((mapping.workflow?.journal.plans ?? []) + [preview])
                     return try await Task.detached(priority: .userInitiated) {
                         try files.stage(data: item.data, filename: item.filename, horizonID: item.horizonID,
-                                        version: version, units: units, crs: crs, axes: axes)
+                                        version: version, units: units, crs: crs, axes: axes, frameConfirmation: confirmation)
                     }.value
                 }, register: { plan in
                     // Import context was frozen at file selection, independent of subsequent navigation.
@@ -176,13 +179,15 @@ struct PreparedPlanImport: Identifiable {
 
 private struct PlanImportSetup: View {
     let item: PreparedPlanImport
+    let previousPlan: MappingPlanReference?
     let existingVersions: [String]
-    let stage: (PlanUnits, String, String, String) async throws -> MappingPlanReference
+    let stage: (PlanUnits, String, String, String, PlanFrameConfirmation?) async throws -> MappingPlanReference
     let register: (MappingPlanReference) throws -> Void
     @Environment(\.dismiss) private var dismiss
     @FocusState private var inputFocused: Bool
     @State private var staged: MappingPlanReference?
     @State private var busy = false
+    @State private var sameFrame = false
     @State private var units = PlanUnits.unknown
     @State private var version = "1"
     @State private var initializedVersion = false
@@ -205,7 +210,21 @@ private struct PlanImportSetup: View {
                     Text("XY сохраняются без пересчёта. Подтвердите единицы по источнику. Неизвестная СК не означает съёмочные координаты. Z — в метрах.")
                         .font(.caption)
                 }
-                DisclosureGroup("СК и направления осей · необязательно") {
+                if let previousPlan, let file = previousPlan.file {
+                    Section {
+                        Toggle("Система координат совпадает с предыдущей ревизией", isOn: $sameFrame)
+                            .disabled(staged != nil || busy || file.units == .unknown)
+                            .accessibilityIdentifier("planSameCoordinateFrame")
+                            .onChange(of: sameFrame) { _, on in
+                                if on { units = file.units; crs = file.crs; axes = file.axes }
+                            }
+                        Text("Предыдущая ревизия: \(previousPlan.version)").font(.caption)
+                        if file.units == .unknown {
+                            Text("У предыдущей ревизии неизвестны единицы. Для совместного показа импортируйте план с подтверждёнными единицами и СК.").font(.caption)
+                        }
+                    }
+                }
+                DisclosureGroup("СК и направления осей") {
                     TextField("СК / неизвестно", text: $crs).focused($inputFocused).disabled(staged != nil || busy)
                     TextField("Оси / неизвестно", text: $axes).focused($inputFocused).disabled(staged != nil || busy)
                 }
@@ -219,7 +238,10 @@ private struct PlanImportSetup: View {
                     Task {
                         defer { busy = false }
                         do {
-                            if staged == nil { staged = try await stage(units, version, crs, axes) }
+                            if staged == nil {
+                                let confirmation = sameFrame ? previousPlan.map { PlanFrameConfirmation(previousPlanID: $0.id, confirmedAt: Date()) } : nil
+                                staged = try await stage(units, version, crs, axes, confirmation)
+                            }
                             guard let staged else { throw StorageError.invalidRecord }
                             try register(staged); dismiss()
                         } catch { self.error = error.localizedDescription }
@@ -232,7 +254,7 @@ private struct PlanImportSetup: View {
                     do { version = try PlanRevisionNumber.next(existingVersions) }
                     catch { self.error = error.localizedDescription }
                 }
-                .toolbar {
+               .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("Отмена") { dismiss() }.disabled(busy) }
                     ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Готово") { inputFocused = false } }
                 }
@@ -293,15 +315,6 @@ struct HorizonPlanView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker("Выработка", selection: $filter) {
-                Text("Все выработки").tag(nil as UUID?)
-                ForEach(mapping.workflow?.journal.excavations.filter { $0.horizonIDs.contains(plan.horizonID) } ?? []) {
-                    Text($0.name).tag(Optional($0.id))
-                }
-            }.accessibilityIdentifier("planExcavationFilter")
-            Text("\(plan.file?.units.label ?? "Неизвестно") · Z из DXF не используется").font(.caption)
-            Button("Упрощённый 2D · ограничения: \(drawing.warnings.count)") { properties = true }
-                .font(.caption).foregroundStyle(.orange)
             GeometryReader { geometry in
                 let viewport = PlanViewport(bounds: drawing.bounds, width: geometry.size.width, height: geometry.size.height,
                     zoom: min(100, max(0.1, zoom * magnification)),
@@ -333,7 +346,7 @@ struct HorizonPlanView: View {
                             let p = viewport.screen(PlanPoint(x: x, y: y))
                             guard viewport.containsScreenPoint(p) else { continue }
                             context.fill(Path(ellipseIn: CGRect(x: p.x - 7, y: p.y - 7, width: 14, height: 14)), with: .color(.blue))
-                            context.draw(Text(record.picket).font(.caption).foregroundColor(.blue), at: CGPoint(x: p.x + 10, y: p.y - 12), anchor: .leading)
+                            context.draw(Text(record.displayPicket).font(.caption).foregroundColor(.blue), at: CGPoint(x: p.x + 10, y: p.y - 12), anchor: .leading)
                         }
                     }
                     if let proposed {
@@ -367,7 +380,7 @@ struct HorizonPlanView: View {
                 Button("+") { zoom = min(100, zoom * 1.5) }.accessibilityIdentifier("planZoomIn")
                 Spacer()
                 Button("Точки: \(points.count)") { pointSelection = PlanPointSelection(records: points) }.accessibilityIdentifier("planPoints")
-            }.buttonStyle(.bordered).padding(.horizontal)
+            }.buttonStyle(.bordered).controlSize(.regular).padding(.horizontal).padding(.top, 8).padding(.bottom, 16)
             if let proposed {
                 VStack {
                     Text("Новая: X \(EngineeringDisplay.coordinate(proposed.x)), Y \(EngineeringDisplay.coordinate(proposed.y))")
@@ -384,25 +397,35 @@ struct HorizonPlanView: View {
                 }.padding(8)
             }
         }.navigationTitle(plan.file?.originalFilename ?? "DXF").navigationBarTitleDisplayMode(.inline)
-            .toolbar { Button("Свойства", systemImage: "info.circle") { properties = true } }
+            .toolbar {
+                Menu {
+                    Button("Свойства и ограничения", systemImage: "info.circle") { properties = true }
+                    Picker("Выработка", selection: $filter) {
+                        Text("Все выработки").tag(nil as UUID?)
+                        ForEach(mapping.workflow?.journal.excavations.filter { $0.horizonIDs.contains(plan.horizonID) } ?? []) {
+                            Text($0.name).tag(Optional($0.id))
+                        }
+                    }
+                } label: { Label("Параметры плана", systemImage: "ellipsis.circle") }
+            }
             .sheet(item: $pointSelection) { selection in
                 let records = selection.records.compactMap { old in points.first { $0.id == old.id } }
                 NavigationStack {
                     List(records) { record in
                         NavigationLink {
                             MappingObservationDetail(record: record)
-                                .toolbar { ToolbarItem(placement: .cancellationAction) {
+                               .toolbar { ToolbarItem(placement: .cancellationAction) {
                                     Button("Закрыть") { pointSelection = nil }
                                 } }
                         } label: {
                             VStack(alignment: .leading) {
                                 Text(mapping.workflow?.journal.excavations.first { $0.id == record.excavationID }?.name ?? "Выработка").font(.headline)
-                                Text(record.picket).font(.subheadline)
+                                Text(record.displayPicket).font(.subheadline)
                                 Text(MappingDateText.compact(record)).font(.caption)
                             }
                         }.accessibilityIdentifier("planPoint-\(record.id.uuidString)")
                     }.navigationTitle("Наблюдения: \(records.count)")
-                        .toolbar { ToolbarItem(placement: .cancellationAction) {
+                       .toolbar { ToolbarItem(placement: .cancellationAction) {
                             Button("Закрыть") { pointSelection = nil }
                         } }
                 }
@@ -415,7 +438,11 @@ struct HorizonPlanView: View {
                         Text("Оси: \(plan.file?.axes ?? "unknown")")
                         Text("XY: \(plan.file?.units.label ?? "unknown"); без преобразования координат")
                         Text("Z: отдельная отметка в метрах; не получена из DXF")
-                        Text("Показываются только точки этой версии плана, проекта и горизонта. Ручные и точки других планов скрыты.")
+                        Text("Показаны точки исходной и совместимых ревизий в этом проекте и горизонте. Координаты и исходные ссылки не изменяются.")
+                        if let confirmation = plan.frameConfirmation {
+                            Text("Совпадение СК подтверждено при импорте: \(confirmation.confirmedAt.formatted())")
+                        }
+                        Text("Если прежних точек нет: при импорте новой ревизии подтвердите совпадение СК с предыдущей либо укажите одинаковые подтверждённые СК, оси и единицы. При противоречии исправьте метаданные источника и импортируйте новую ревизию.")
                         ForEach(drawing.warnings, id: \.self) { Text($0) }
                         Text("SHA-256: \(plan.file?.sha256 ?? "unknown")").textSelection(.enabled).font(.caption)
                     }.navigationTitle("Свойства и ограничения").toolbar { Button("Закрыть") { properties = false } }

@@ -64,7 +64,7 @@ struct PhotoDetailView: View {
                     Text(photo.context.pointRevisionID.uuidString).font(.caption)
                     if let point = mapping.workflow?.journal.photoPoint(photo.context) {
                         if photo.context.locationBasis == .pointRevision {
-                            Text("Пикет при импорте: \(point.picket)")
+                            Text("Пикет при импорте: \(point.displayPicket)")
                             Text(point.coordinates?.provenance ?? "Координаты неизвестны")
                         } else {
                             Text("Проект, горизонт и выработка зафиксированы до выбора фото. Расположение сохранённой точки не является местом съёмки.").font(.caption)

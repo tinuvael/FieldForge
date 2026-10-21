@@ -5,8 +5,15 @@ import Combine
     @Published var workflow: MappingWorkflow?
     @Published var error: String?
     @Published var success = false
+    @Published var selectedTab = 0
+    func beginCoordinateSelection() throws -> MappingPlanSelectionRequest? {
+        guard let workflow, let horizonID = workflow.context.horizonID else { throw StorageError.invalidRecord }
+        guard let plan = activePlan(for: horizonID) else { selectedTab = 1; return nil }
+        return try workflow.planSelectionRequest(plan)
+    }
     // Disposable UI preferences, outside the append-only mapping journal.
-    @Published private var activePlanIDs = UserDefaults.standard.dictionary(forKey: "FieldForge.activePlans.v1") as? [String: String] ?? [:]
+    private let preferences: UserDefaults
+    @Published private var activePlanIDs: [String: String]
     func plans(for horizonID: UUID) -> [MappingPlanReference] {
         guard let workflow, workflow.journal.horizons.contains(where: {
             $0.id == horizonID && $0.projectID == workflow.context.projectID
@@ -36,7 +43,7 @@ import Combine
     func selectActivePlan(_ plan: MappingPlanReference) {
         guard plans(for: plan.horizonID).contains(plan), let key = planKey(plan.horizonID) else { return }
         activePlanIDs[key] = plan.id.uuidString
-        UserDefaults.standard.set(activePlanIDs, forKey: "FieldForge.activePlans.v1")
+        preferences.set(activePlanIDs, forKey: "FieldForge.activePlans.v1")
     }
     private(set) var planStore: ManagedPlanStore?
     private(set) var photoStore: ManagedPhotoStore?
@@ -45,11 +52,15 @@ import Combine
     @Published var pendingPhotos: [PhotoImportOperation] = []
     @Published var photoRecoveryError: String?
     @Published var retainedPhotos: [UUID: RetainedPhotoImport] = [:]
-    init(workflow: MappingWorkflow, photoStore: ManagedPhotoStore) {
+    init(workflow: MappingWorkflow, photoStore: ManagedPhotoStore, preferences: UserDefaults = .standard) {
+        self.preferences = preferences
+        activePlanIDs = preferences.dictionary(forKey: "FieldForge.activePlans.v1") as? [String: String] ?? [:]
         self.workflow = workflow; self.photoStore = photoStore
         refreshPhotoRecovery()
     }
     init() {
+        preferences = .standard
+        activePlanIDs = preferences.dictionary(forKey: "FieldForge.activePlans.v1") as? [String: String] ?? [:]
         do {
             let directory = try FileMeasurementStore.applicationStore().url.deletingLastPathComponent()
             #if DEBUG

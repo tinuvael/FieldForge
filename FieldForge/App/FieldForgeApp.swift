@@ -11,9 +11,9 @@ import SwiftUI
 struct RootView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.scenePhase) private var scenePhase
-    @State private var selectedTab = 0
+    @EnvironmentObject private var mapping: MappingModel
     var body: some View {
-        TabView(selection: $selectedTab) {
+        TabView(selection: $mapping.selectedTab) {
             MappingView().tabItem { Label("Картирование", systemImage: "square.and.pencil") }.tag(0)
             NavigationStack { ActiveHorizonPlanView() }
                 .tabItem { Label("План", systemImage: "map") }.tag(1)
@@ -22,7 +22,7 @@ struct RootView: View {
         }
         .tint(Color("AccentColor"))
         .onAppear { updateLifecycle() }
-        .onChange(of: selectedTab) { _, _ in updateLifecycle() }
+        .onChange(of: mapping.selectedTab) { _, _ in updateLifecycle() }
         .onChange(of: scenePhase) { _, _ in updateLifecycle() }
         .alert("FieldForge", isPresented: Binding(get: { model.errorMessage != nil },
                                                   set: { if !$0 { model.errorMessage = nil } })) {
@@ -30,6 +30,6 @@ struct RootView: View {
         } message: { Text(model.errorMessage ?? "") }
     }
     private func updateLifecycle() {
-        model.setLifecycle(measurementVisible: model.measurementScreenVisible && selectedTab == 0, foreground: scenePhase == .active)
+        model.setLifecycle(measurementVisible: model.measurementScreenVisible && mapping.selectedTab == 0, foreground: scenePhase == .active)
     }
 }

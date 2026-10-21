@@ -28,6 +28,7 @@ struct MappingPlanReference: Codable, Equatable, Identifiable {
     let attachmentID: UUID
     let version: String
     var file: ManagedPlanFile? = nil
+    var frameConfirmation: PlanFrameConfirmation? = nil
 }
 
 struct MappingContext: Codable, Equatable {
@@ -168,6 +169,7 @@ struct MappingJournal: Codable, Equatable {
                       (1...10_000_000).contains(f.byteCount) && f.importedAt.timeIntervalSinceReferenceDate.isFinite &&
                       f.unitDeclaration == "userConfirmedAtImport" } ?? true) }),
               validContext(selection) else { throw StorageError.invalidRecord }
+        try PlanCoordinateCompatibility.validate(plans)
         let geologyIDs = observations.flatMap { observation in
             (observation.geology?.jointSets.map(\.id) ?? []) + (observation.geology?.tectonicStructures.map(\.id) ?? [])
         }
@@ -182,7 +184,7 @@ struct MappingJournal: Codable, Equatable {
             if includingRevisions, o.geology?.jointSets.contains(where: { $0.revision != 1 }) == true { throw StorageError.invalidRecord }
             guard validContext(MappingContext(projectID: o.projectID, horizonID: o.horizonID, excavationID: o.excavationID)),
                   o.chainageMeters.isFinite, o.chainageMeters >= 0,
-                  try (o.picketConvention ?? .legacyMeters).meters(o.picket) == o.chainageMeters,
+                  (o.picketConvention ?? .legacyMeters).matches(o.picket, meters: o.chainageMeters),
                   !o.chainageOriginAndDirection.isEmpty,
                   o.observedAt.timeIntervalSinceReferenceDate.isFinite,
                   o.createdAt.timeIntervalSinceReferenceDate.isFinite,
@@ -255,9 +257,49 @@ enum PicketConvention: String, Codable {
 }
 
 enum FieldPicketInput {
-    /// One picket = 10 m. Plus offsets have one integer digit (0...9), with optional decimals.
-    /// Leading-zero offsets such as 1+07 are rejected rather than guessed.
+    /// Decimal arithmetic avoids binary multiplication/subtraction artifacts in canonical labels.
+    private static func decimalMeters(_ text: String) throws -> Decimal {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: #"^ПК\s*"#, with: "", options: [.regularExpression, .caseInsensitive])
+            .replacingOccurrences(of: ",", with: ".")
+        let parts = value.split(separator: "+")
+        let plus = value.range(of: #"^[0-9]+\+[0-9](?:\.[0-9]+)?$"#, options: .regularExpression) != nil
+        let plain = value.range(of: #"^[0-9]+(?:\.[0-9]+)?$"#, options: .regularExpression) != nil
+        guard (plus || plain), value.filter(\.isNumber).count <= 28,
+              let first = Decimal(string: String(parts[0]), locale: Locale(identifier: "en_US_POSIX")) else {
+            throw MappingError.invalid("Введите пикет: 12,18 или 12+1,8. Один пикет — 10 м; остаток после + меньше 10 м, без ведущих нулей.")
+        }
+        var result = first * 10
+        if plus {
+            guard let offset = Decimal(string: String(parts[1]), locale: Locale(identifier: "en_US_POSIX")) else { throw StorageError.invalidRecord }
+            result += offset
+        }
+        guard result >= 0, result < Decimal(1_000_000_000_000_000) else { throw StorageError.invalidRecord }
+        return result
+    }
     static func meters(_ text: String) throws -> Double {
+        let value = try decimalMeters(text)
+        guard let result = Double(NSDecimalNumber(decimal: value).stringValue), result.isFinite else { throw StorageError.invalidRecord }
+        return result
+    }
+    private static func normalizedDecimal(_ meters: Decimal) -> String {
+        var pickets = meters / 10, whole = Decimal()
+        NSDecimalRound(&whole, &pickets, 0, .down)
+        let offset = meters - whole * 10
+        func text(_ value: Decimal) -> String { NSDecimalNumber(decimal: value).stringValue.replacingOccurrences(of: ".", with: ",") }
+        return "ПК " + text(whole) + (offset == 0 ? "" : "+" + text(offset))
+    }
+    static func canonical(_ text: String) throws -> String { normalizedDecimal(try decimalMeters(text)) }
+    static func normalized(_ meters: Double) -> String {
+        guard meters.isFinite, meters >= 0,
+              let decimal = Decimal(string: ElevationInput.text(meters), locale: Locale(identifier: "en_US_POSIX")) else { return "—" }
+        return normalizedDecimal(decimal)
+    }
+    static func confirmation(_ text: String) -> String? {
+        guard let canonical = try? canonical(text), let value = try? decimalMeters(text) else { return nil }
+        return "\(canonical) · \(NSDecimalNumber(decimal: value).stringValue.replacingOccurrences(of: ".", with: ",")) м"
+    }
+    fileprivate static func previousFloatingMeters(_ text: String) throws -> Double {
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
             .replacingOccurrences(of: #"^ПК\s*"#, with: "", options: [.regularExpression, .caseInsensitive])
         let result: Double?
@@ -274,13 +316,22 @@ enum FieldPicketInput {
         }
         return result
     }
-    static func normalized(_ meters: Double) -> String {
-        let whole = floor(meters / 10), offset = meters - whole * 10
-        return "ПК " + ElevationInput.text(whole) + (offset == 0 ? "" : "+" + EngineeringDisplay.number(offset, decimals: 9))
+}
+
+extension PicketConvention {
+    /// Accept the exact previous binary result as well, without rewriting old evidence.
+    func matches(_ text: String, meters value: Double) -> Bool {
+        if (try? meters(text)) == value { return true }
+        return self == .tenMeters && (try? FieldPicketInput.previousFloatingMeters(text)) == value
     }
-    static func confirmation(_ text: String) -> String? {
-        guard let meters = try? meters(text) else { return nil }
-        return "\(normalized(meters)) · \(EngineeringDisplay.number(meters, decimals: 6)) м"
+    func storedText(_ text: String) throws -> String {
+        self == .tenMeters ? try FieldPicketInput.canonical(text) : text
+    }
+}
+
+extension MappingObservation {
+    var displayPicket: String {
+        picketConvention == .tenMeters ? (try? FieldPicketInput.canonical(picket)) ?? picket : picket
     }
 }
 

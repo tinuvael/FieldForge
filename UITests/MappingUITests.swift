@@ -2,6 +2,47 @@ import XCTest
 import UIKit
 
 final class MappingUITests: XCTestCase {
+    /// Simulator DEMO north cannot become a geological representative. Exercise the real
+    /// nested presentation/cancel path, then manual acceptance; sensor conversion is a core test.
+    @MainActor func testThirdReviewEditorOwnershipAfterNestedMeasurementCancel() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["FIELD_FORGE_TEST_RUN_ID"] = UUID().uuidString
+        app.launchArguments = ["--ui-testing"]; app.launch()
+        let project = "Third-\(UUID().uuidString.prefix(8))"
+        create("projectPicker", name: project, app: app); select("projectPicker", value: project, app: app)
+        app.buttons["manage-horizonPicker"].tap()
+        fill(app.textFields["contextElevation"], "393", app: app)
+        app.buttons["saveContext"].tap()
+        app.buttons["Закрыть"].tap()
+        select("horizonPicker", value: "+393 м", app: app)
+        create("excavationPicker", name: "Штрек", app: app); select("excavationPicker", value: "Штрек", app: app)
+        fill(app.textFields["mappingPicket"], "12,18", app: app)
+        for index in 1...5 {
+            show(app.buttons["addJointSet"], app: app); app.buttons["addJointSet"].tap()
+            XCTAssertTrue(app.navigationBars["Система J\(index)"].waitForExistence(timeout: 5), app.debugDescription)
+            if index == 1 {
+                app.buttons["Замерить iPhone"].tap()
+                XCTAssertTrue(app.buttons["mappingHold"].waitForExistence(timeout: 5))
+                app.buttons["mappingHold"].tap()
+                XCTAssertTrue(app.buttons["closeMappingMeasurement"].isHittable)
+                app.buttons["closeMappingMeasurement"].tap()
+                XCTAssertTrue(app.navigationBars["Система J1"].waitForExistence(timeout: 5))
+            }
+            fill(app.textFields["geologyDirection"], "132,4", app: app)
+            fill(app.textFields["geologyDip"], "48,1", app: app)
+            app.buttons["Принять"].tap()
+            XCTAssertTrue(app.buttons["editJointSet-J\(index)"].waitForExistence(timeout: 5))
+            XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Черновик точки изменился")).firstMatch.exists)
+        }
+        save(app); saved(app); top(app)
+        app.buttons["mappingJournal"].tap()
+        XCTAssertTrue(app.staticTexts["ПК 12+1,8"].firstMatch.waitForExistence(timeout: 5))
+        app.terminate(); app.launch()
+        app.buttons["mappingJournal"].tap()
+        XCTAssertTrue(app.staticTexts["ПК 12+1,8"].firstMatch.waitForExistence(timeout: 5))
+    }
+
     @MainActor func testP61DistanceUnsupportedClosePreservesMappingDraft() throws {
         continueAfterFailure = false
         defer { XCUIDevice.shared.orientation = .portrait }

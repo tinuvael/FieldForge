@@ -38,7 +38,7 @@ struct WedgeMappingSource: Equatable, Identifiable {
         }.map { observation in
             let revision = workflow.journal.history(for: observation.id).last
             return Self(context: c, pointID: observation.id, revisionID: revision?.id, version: revision?.version ?? 1,
-                        title: "\(observation.picket) · версия \(revision?.version ?? 1) · \(observation.id.uuidString.prefix(8))",
+                        title: "\(observation.displayPicket) · версия \(revision?.version ?? 1) · \(observation.id.uuidString.prefix(8))",
                         joints: (observation.geology?.jointSets ?? []).map { WedgeJoint(origin: .saved($0)) })
         }
     }

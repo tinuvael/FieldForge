@@ -148,10 +148,11 @@ struct TectonicStructureEditor: View {
             Section("Ориентировка · известные параметры") {
                 GeologyOrientationForm(input: $draft.orientation, focus: $focused, permitsPartial: true)
             }
-            Section("Положение и описание") {
-                DisclosureGroup("Дополнительно") {
-                    GeologyField(title: "Мощность, м · необязательно", text: $draft.thickness, identifier: "tectonicThickness", nonnegative: true, focus: $focused)
-                }
+            Section {
+                GeologyField(title: "Мощность, м", text: $draft.thickness, identifier: "tectonicThickness", nonnegative: true, focus: $focused)
+                TextField("Описание · необязательно", text: $draft.description, axis: .vertical).focused($focused).accessibilityIdentifier("tectonicDescription")
+            }
+            DisclosureGroup("Отдельное положение структуры") {
                 GeologyField(title: "Пикет · необязательно", text: $draft.picket, identifier: "tectonicPicket", error: picketError, focus: $focused)
                 if draft.picketConvention == .legacyMeters {
                     Text("Прежний формат пикета: метры или ПК км+метры.").font(.caption).foregroundStyle(.secondary)
@@ -159,10 +160,8 @@ struct TectonicStructureEditor: View {
                     Text(confirmation).font(.caption).foregroundStyle(.secondary)
                 }
                 TextField("Положение · необязательно", text: $draft.position, axis: .vertical).focused($focused).accessibilityIdentifier("tectonicPosition")
-                TextField("Описание", text: $draft.description, axis: .vertical).focused($focused).accessibilityIdentifier("tectonicDescription")
             }
-            Section { Text("Черновик структуры сохранится только вместе с точкой.").font(.footnote) }
-        }.navigationTitle("Тектоника").navigationBarTitleDisplayMode(.inline)
+        }.navigationTitle("Тектоническая структура").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Готово") { focused = false } } }
     }
     private var picketError: String? {
@@ -176,19 +175,14 @@ private struct GeologyOrientationForm: View {
     var permitsPartial = false
     var body: some View {
         if permitsPartial, let error { orientationError(error) }
-        GeologyField(title: "Угол падения, ° · 0–90", text: $input.dipAngleText, identifier: "geologyDip", focus: focus)
-        GeologyField(title: "Азимут падения, ° · 0–360", text: $input.dipDirectionText, identifier: "geologyDirection", focus: focus)
-        Picker("Вид севера", selection: $input.reference) {
+        GeologyField(title: "Азимут падения, °", text: $input.dipDirectionText, identifier: "geologyDirection", focus: focus)
+        GeologyField(title: "Угол падения, °", text: $input.dipAngleText, identifier: "geologyDip", focus: focus)
+        Picker("Север", selection: $input.reference) {
             ForEach(GeographicReference.manualChoices, id: \.self) { Text($0.title).tag($0) }
         }.accessibilityIdentifier("geologyNorth")
-        if permitsPartial {
-            Text("Укажите только известные угол и азимут. Пустое поле означает неизвестный параметр, оба поля можно оставить пустыми.")
-                .font(.caption).foregroundStyle(.secondary)
-            TectonicOrientationStatus(input: input)
+        if input.usesConventionalDipSide || Double(input.dipAngleText.replacingOccurrences(of: ",", with: ".")) == 90 {
+            Toggle("Условная сторона вертикальной плоскости", isOn: $input.usesConventionalDipSide).accessibilityIdentifier("geologyConvention")
         }
-        Toggle("Условная сторона вертикальной плоскости", isOn: $input.usesConventionalDipSide).accessibilityIdentifier("geologyConvention")
-        Text("Азимут по часовой стрелке от выбранного севера: 0° — север, 90° — восток. При 0° падения азимут пустой. При 90° — пустой или явно подтверждённая условная сторона.")
-            .font(.caption).foregroundStyle(.secondary)
         if !permitsPartial, let error { orientationError(error) }
     }
     private func orientationError(_ error: String) -> some View {

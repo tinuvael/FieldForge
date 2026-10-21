@@ -66,6 +66,7 @@ private struct BartonQForm: View {
                     }
                 }
                 Section("Методика") {
+                    Text("Категория по Q — упрощение FieldForge: Q < 1; 1 ≤ Q < 4; 4 ≤ Q ≤ 10; Q > 10. Не подтверждает механическую устойчивость или достаточность крепи.").font(.caption)
                     Text("NGI · апрель 2025. Коэффициенты выбирает инженер. При RQD ≤10% в расчёте используется 10%. Крепь не рассчитывается.").font(.caption)
                     Link("Руководство NGI 2025", destination: URL(string: QMethod.url)!)
                     if let strict = try? input.evaluate(), !strict.missing.isEmpty {
@@ -171,8 +172,11 @@ struct QCalculationText: View {
     var body: some View {
         if let result = evaluation.result {
             Text("Q ≈ \(EngineeringDisplay.significant(result.value))").font(.headline).accessibilityIdentifier("qResult")
-            Text(result.rockClass?.title ?? "Значение вне опубликованной шкалы классов 0,001…1000")
+            if let category = FieldQCategory(q: result.value) {
+                LabeledContent("Категория по Q", value: category.title)
+            }
             if !compact {
+                Text(result.rockClass?.title ?? "Значение вне опубликованной шкалы классов 0,001…1000")
                 Text("RQD исходное: \(EngineeringDisplay.significant(result.measuredRQD))%; в расчёте: \(EngineeringDisplay.significant(result.calculationRQD))%")
                 Text("Q = (\(EngineeringDisplay.significant(result.calculationRQD)) / \(EngineeringDisplay.significant(result.jn))) × (\(EngineeringDisplay.significant(result.jr)) / \(EngineeringDisplay.significant(result.ja))) × (\(EngineeringDisplay.significant(result.jw)) / \(EngineeringDisplay.significant(result.srf)))")
                 .font(.caption).textSelection(.enabled)

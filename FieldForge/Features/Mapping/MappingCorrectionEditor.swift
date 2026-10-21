@@ -23,7 +23,7 @@ struct MappingCorrectionEditor: View {
                         .focused($focused).accessibilityIdentifier("correctionAuthor")
                 }
                 Section("Пикет и полевая дата") {
-                    TextField("Пикет", text: $draft.fields.picket).focused($focused).accessibilityIdentifier("correctionPicket")
+                    TextField("Пикет", text: $draft.fields.picket).keyboardType(.numbersAndPunctuation).focused($focused).accessibilityIdentifier("correctionPicket")
                     if draft.fields.picketConvention == .legacyMeters {
                         Text("Прежний формат: метры или ПК км+метры. Значение в метрах сохраняется.").font(.caption)
                     } else if let confirmation = FieldPicketInput.confirmation(draft.fields.picket) {

@@ -35,10 +35,6 @@ struct WedgesView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section {
-                    Text("W1 · параметры и модель не сохраняются").font(.subheadline)
-                    Text("Прямая горизонтальная выработка. Схема ориентировок, без оценки устойчивости.").font(.caption).foregroundStyle(.secondary)
-                }
                 geometrySection
                 jointsSection
                 sceneSection
@@ -85,21 +81,17 @@ struct WedgesView: View {
             if axisNorth == .gridNorth {
                 Text("Проверьте, что ось и системы заданы в одной сетке координат. Идентификатор сетки отсутствует в исходных ориентировках.").font(.caption).foregroundStyle(.orange)
             }
-            Text(axisEdited ? "Ось: ручной ввод · 0–360°, по ходу увеличения пикетажа" : "Ось: датчики iPhone · магнитный север · точность не проверена")
-                .font(.caption).foregroundStyle(.secondary)
             if let capture = axisCapture {
                 DisclosureGroup(axisEdited ? "Исходный замер оси · изменён вручную" : "Сведения о замере оси") {
                     Text("\(capture.sample.timestamp.formatted()) · \(EngineeringDisplay.number(capture.azimuth, decimals: 1))° · калибровка высокая")
                     Text("Поле \(EngineeringDisplay.number(capture.sample.magneticField.length, decimals: 1)) мкТл. Магнитные помехи не исключены.")
                 }.font(.caption)
             }
-            if WedgeInput.azimuth(axisText) == nil { Text("Укажите азимут оси от 0 до 360°.").font(.caption).foregroundStyle(.orange) }
+            if !axisText.isEmpty, WedgeInput.azimuth(axisText) == nil { Text("Азимут: 0–360°").font(.caption).foregroundStyle(.orange) }
             dimensionRow("Ширина B, м", input: $width, target: .width)
             dimensionRow("Полная высота H, м", input: $height, target: .height)
             TextField("Длина L, м · вручную", text: $length).keyboardType(.decimalPad)
                 .focused($focusedField, equals: .length)
-            Text("H — от почвы до вершины свода. Временно: f ≤ 12, подъём B/3. f — коэффициент Протодъяконова, не UCS и не RMR.")
-                .font(.caption).foregroundStyle(.secondary)
             switch dimensions {
             case .success(let value):
                 Text("Свод: \(DistanceMath.text(value.archHeight)); стенка: \(DistanceMath.text(value.wallHeight))").font(.caption)
@@ -124,7 +116,7 @@ struct WedgesView: View {
             if let result = input.wrappedValue.measurement {
                 Text("\(result.text)\(input.wrappedValue.manuallyEdited ? " · исправлено вручную" : " · измерено"). Приблизительно, точность не проверена.")
                     .font(.caption).foregroundStyle(.secondary)
-            } else { Text("Ручной ввод").font(.caption).foregroundStyle(.secondary) }
+            }
         }
     }
     private var jointsSection: some View {
@@ -132,7 +124,7 @@ struct WedgesView: View {
             if let workflow = mapping.workflow {
                 Text(contextTitle(workflow)).font(.caption).foregroundStyle(.secondary)
             }
-            Picker("Источник Mapping", selection: $sourceID) {
+            Picker("Наблюдение картирования", selection: $sourceID) {
                 Text("Выберите наблюдение").tag(nil as UUID?)
                 ForEach(sources) { item in Text(item.title).tag(Optional(item.id)) }
             }
@@ -158,7 +150,7 @@ struct WedgesView: View {
                         }.contentShape(Rectangle())
                     }.buttonStyle(.plain).disabled(!joint.orientationValid)
                 }
-                Text("Выбрано: \(selected.count) из 3. Только интерпретированные системы, исходные замеры не подставляются.").font(.caption)
+                Text("Выбрано: \(selected.count) из 3").font(.caption)
             }
             if case .failure(let error) = jointResult { Text(error.localizedDescription).font(.caption).foregroundStyle(.orange) }
         }
@@ -170,10 +162,11 @@ struct WedgesView: View {
                     .frame(height: 350).listRowInsets(EdgeInsets())
                     .accessibilityLabel("Трёхцентровая выработка и схематические плоскости. Вращение пальцем, масштаб двумя пальцами.")
                 Text("Вращение пальцем · масштаб двумя пальцами").font(.caption)
-                Text("X — вправо, Y — вдоль оси, Z — вверх; метры. Азимуты по часовой стрелке от указанного севера.").font(.caption)
-                if !scenePlanes.isEmpty {
-                    Text("Все плоскости проходят через условный центр модели. Линии — их схематические пересечения; положения, протяжённость и окончания трещин неизвестны. Реальный конечный клин не определён.").font(.caption)
-                }
+                DisclosureGroup("Допущения модели") {
+                    Text("W1: прямая горизонтальная выработка; параметры не сохраняются. H — от почвы до вершины свода; временно f ≤ 12, подъём B/3. f — коэффициент Протодъяконова.")
+                    Text("X — вправо, Y — вдоль оси, Z — вверх; метры. Ось направлена по возрастанию пикетажа. Азимуты по часовой стрелке от выбранного севера.")
+                    Text("Плоскости проходят через условный центр. Положение, протяжённость и окончания трещин неизвестны. Конечный клин и механическая устойчивость не определены.")
+                }.font(.caption)
             } else { Text("Заполните допустимые B, H и L для построения выработки.") }
         }
     }

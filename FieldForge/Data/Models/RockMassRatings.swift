@@ -322,3 +322,24 @@ extension MappingDraft {
                               rmr89: try rmr89.hasChanges ? RMR89Assessment(input: rmr89, now: now) : nil)
     }
 }
+
+/// Owner-defined field presentation (third iPhone review, 2026-10-21).
+/// Separate from published NGI classes and stored Q snapshots. No mechanical conclusion.
+enum FieldQCategory: Equatable {
+    case veryUnstable, unstable, medium, stable
+    init?(q: Double) {
+        guard q.isFinite, q >= 0 else { return nil }
+        if q < 1 { self = .veryUnstable }
+        else if q < 4 { self = .unstable }
+        else if q <= 10 { self = .medium }
+        else { self = .stable }
+    }
+    var title: String {
+        switch self {
+        case .veryUnstable: return "Весьма неустойчивые породы"
+        case .unstable: return "Неустойчивые породы"
+        case .medium: return "Средней устойчивости"
+        case .stable: return "Устойчивые породы"
+        }
+    }
+}

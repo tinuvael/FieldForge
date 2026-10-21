@@ -172,9 +172,15 @@ struct MappingWorkflow {
     }
     func points(on plan: MappingPlanReference, excavationID: UUID? = nil, restrictToSelection: Bool = true) -> [MappingObservation] {
         guard journal.plans.contains(plan), !restrictToSelection || plans.contains(plan) else { return [] }
-        // No inferred compatibility between different revisions/CRSs, including manual P1 coordinates.
-        return journal.effectiveObservations.filter { $0.horizonID == plan.horizonID && $0.coordinates?.planID == plan.id &&
-            $0.coordinates?.x != nil && $0.coordinates?.y != nil && (excavationID == nil || $0.excavationID == excavationID) }
+        guard let horizon = journal.horizons.first(where: { $0.id == plan.horizonID }) else { return [] }
+        return journal.effectiveObservations.filter { point in
+            guard point.projectID == horizon.projectID, point.horizonID == plan.horizonID,
+                  point.coordinates?.x != nil, point.coordinates?.y != nil,
+                  excavationID == nil || point.excavationID == excavationID,
+                  let sourceID = point.coordinates?.planID,
+                  let source = journal.plans.first(where: { $0.id == sourceID }) else { return false }
+            return PlanCoordinateCompatibility.compatible(source, plan, plans: journal.plans)
+        }
     }
     private func validName(_ text: String) throws -> String {
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -190,7 +196,7 @@ struct MappingWorkflow {
         guard let zone = TimeZone(identifier: draft.timeZoneID) else { throw StorageError.invalidRecord }
         let origin = draft.chainageOriginAndDirection.trimmingCharacters(in: .whitespacesAndNewlines)
         return MappingObservation(id: draft.id, projectID: p, horizonID: h, excavationID: e,
-            picket: draft.picket, chainageMeters: chainage,
+            picket: try draft.picketConvention.storedText(draft.picket), chainageMeters: chainage,
             chainageOriginAndDirection: origin.isEmpty ? "unknown" : origin,
             observedAt: observed, observedTimeZoneID: zone.identifier,
             observedUTCOffsetSeconds: zone.secondsFromGMT(for: observed), createdAt: now, updatedAt: now,
@@ -237,5 +243,49 @@ enum PlanRevisionNumber {
         guard !existing.contains(where: { same($0, text) }) else {
             throw MappingError.invalid("Номер ревизии уже занят. Выберите следующий.")
         }
+    }
+}
+
+/// Presentation and callback carry this same immutable value, including the draft owner.
+struct MappingEditorRequest<Value>: Identifiable {
+    let id = UUID()
+    let draftID: UUID
+    let context: MappingContext
+    let initial: Value
+    let measurements: [Measurement]
+}
+
+extension MappingWorkflow {
+    func editorRequest<Value>(_ initial: Value) -> MappingEditorRequest<Value> {
+        MappingEditorRequest(draftID: draft.id, context: context, initial: initial, measurements: draft.measurements)
+    }
+    private func validateOwner<Value>(_ request: MappingEditorRequest<Value>) throws {
+        guard draft.id == request.draftID, context == request.context, pendingContext == nil, !draft.saving else {
+            throw MappingError.invalid("Черновик точки изменился. Откройте редактор заново.")
+        }
+    }
+    mutating func acceptJointSet(_ updated: JointSetDraft?, originals: [Measurement], request: MappingEditorRequest<JointSetDraft>) throws {
+        try validateOwner(request)
+        var next = draft
+        for reading in originals { try next.addMeasurement(reading) }
+        if let updated {
+            guard updated.id == request.initial.id, updated.identifier == request.initial.identifier else { throw StorageError.invalidRecord }
+            try updated.record(now: Date()).validate(pointMeasurementIDs: next.measurements.map(\.id))
+            next.jointSets.removeAll { $0.id == updated.id }
+            next.jointSets.append(updated)
+            next.jointSets.sort { $0.identifier.rawValue < $1.identifier.rawValue }
+        }
+        _ = try next.geology(now: Date())
+        draft = next
+    }
+    mutating func acceptTectonic(_ updated: TectonicStructureDraft, request: MappingEditorRequest<TectonicStructureDraft>) throws {
+        try validateOwner(request)
+        guard updated.id == request.initial.id else { throw StorageError.invalidRecord }
+        try updated.record().validate()
+        var next = draft
+        next.tectonicStructures.removeAll { $0.id == updated.id }
+        next.tectonicStructures.append(updated)
+        _ = try next.geology(now: Date())
+        draft = next
     }
 }
