@@ -3,6 +3,9 @@
 Developer-only dependency, not required by generator, Swift tests or the app.
 python3 -m venv /tmp/ff-dxf && /tmp/ff-dxf/bin/pip install ezdxf==1.4.4
 /tmp/ff-dxf/bin/python scripts/audit_underground_surveys.py
+
+Optional developer tool: run only for fixture changes, a specific failure,
+or explicitly requested validation; not a routine feature/PR gate.
 """
 import argparse
 import csv

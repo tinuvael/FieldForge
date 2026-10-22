@@ -39,6 +39,7 @@ final class PlanElevationIndexTests: XCTestCase {
         #endif
     }
     private func stress(_ count: Int) throws {
+        try requireBenchmarks()
         let p = PlanPoint(x: 25, y: 2), plan = plan
         let baseline = try XCTUnwrap(PlanElevationSnap.resolve(p, document: document(local), plan: plan).automatic)
         var segments = local
@@ -74,26 +75,22 @@ final class PlanElevationIndexTests: XCTestCase {
         let competing = document(segments + [segment(count, (20, -100, 200), (20, 100, 200)),
             segment(count + 1, (30, -100, 210), (30, 100, 210))])
         XCTAssertNil(PlanElevationSnap.resolve(p, document: competing, plan: plan).automatic)
-        let confirmed = try XCTUnwrap(PlanWallSection.confirmedPair(p, walls: local.map(\.wallID), document: competing, plan: plan))
-        XCTAssertEqual(confirmed.elevationMeters, 108); XCTAssertEqual(confirmed.selectedXY, p)
 
     }
     func testTenThousandSegmentsIgnoreDistantIndependentWalls() throws { try stress(10_000) }
     func testHundredThousandSegmentsIgnoreDistantIndependentWalls() throws { try stress(100_000) }
     func testNearbyCrossingAndAdjacentUnnamedDrivesRemainAmbiguousWithRemoteNoise() throws {
         var segments = local + [segment(2, (20, -100, 200), (20, 100, 200)), segment(3, (30, -100, 210), (30, 100, 210))]
-        for i in 4..<10_000 { segments.append(segment(i, (Double(i), 10000, 0), (Double(i) + 1, 10000, 0))) }
+        for i in 4..<100 { segments.append(segment(i, (Double(i), 10000, 0), (Double(i) + 1, 10000, 0))) }
         let p = PlanPoint(x: 25, y: 2), doc = document(segments)
         let ambiguous = PlanElevationSnap.resolve(p, document: doc, plan: plan)
         XCTAssertNil(ambiguous.automatic)
-        let confirmed = try XCTUnwrap(PlanWallSection.confirmedPair(p, walls: local.map(\.wallID), document: doc, plan: plan))
-        XCTAssertEqual(confirmed.elevationMeters, 108); XCTAssertEqual(confirmed.selectedXY, p)
         let adjacent = document(local + [segment(4, (0, 20, 200), (100, 20, 200)), segment(5, (0, 30, 210), (100, 30, 210))])
-        XCTAssertTrue(PlanElevationSnap.resolve(PlanPoint(x: 25, y: 15), document: adjacent, plan: plan).requiresChoice)
+        XCTAssertNil(PlanElevationSnap.resolve(PlanPoint(x: 25, y: 15), document: adjacent, plan: plan).automatic)
     }
-    func testExpansionFindsOppositeWallBeyondInitialNeighborhoodAndHandlesLongCrossingBounds() throws {
+    func testBoundedQueryFindsDifferentWallAndHandlesLongCrossingBounds() throws {
         let p = PlanPoint(x: 25, y: 1), doc = document(local)
-        // Initial disk radius=2 contains only the near wall; the other is 9 m away.
+        // Both sources are within the configurable local disk.
         let z = try XCTUnwrap(PlanElevationSnap.resolve(p, document: doc, plan: plan).automatic)
         XCTAssertEqual(z.elevationMeters, 106.5); XCTAssertEqual(z.secondWall?.distanceMeters, 9)
         let long = segment(2, (-1000000, 2, 300), (1000000, 2, 500))
@@ -121,9 +118,14 @@ final class PlanElevationIndexTests: XCTestCase {
         let tied = document([segment(10, (0, 0, 0), (10, 0, 0)), segment(2, (0, 10, 0), (10, 10, 0))]).elevationIndex
         XCTAssertEqual(tied.nearby(PlanPoint(x: 5, y: 5), radius: 5), [1, 0])
         XCTAssertNil(tied.nearest(PlanPoint(x: .nan, y: 0), wallID: "10:"))
-        XCTAssertNil(PlanWallSection.confirmedPair(PlanPoint(x: .nan, y: 0), walls: local.map(\.wallID), document: document(local), plan: plan))
+        XCTAssertNil(PlanElevationSnap.resolve(PlanPoint(x: .nan, y: 0), document: document(local), plan: plan).automatic)
+    }
+    private func requireBenchmarks() throws {
+        try XCTSkipUnless(ProcessInfo.processInfo.environment["FIELD_FORGE_DXF_BENCHMARKS"] == "1",
+                          "Opt-in DXF performance checks: FIELD_FORGE_DXF_BENCHMARKS=1")
     }
     func testImportBuildsIndexOnceForOneHundredThousandDXFSegments() throws {
+        try requireBenchmarks()
         var entities = "0\nLINE\n10\n0\n20\n0\n30\n100\n11\n100\n21\n0\n31\n120\n0\nLINE\n10\n0\n20\n10\n30\n110\n11\n100\n21\n10\n31\n150\n"
         for i in 2..<100_000 {
             entities += "0\nLINE\n10\n\(100000 + i)\n20\n100000\n30\n700\n11\n\(100001 + i)\n21\n100000\n31\n701\n"

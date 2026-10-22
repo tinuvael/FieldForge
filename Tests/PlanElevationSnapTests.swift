@@ -28,9 +28,9 @@ final class PlanElevationSnapTests: XCTestCase {
         XCTAssertEqual(c.selectedXY, PlanPoint(x: 2.5, y: 1)); XCTAssertEqual(c.segment.handle, "AB")
         XCTAssertEqual(try resolve(line(-20, 20), point: PlanPoint(x: -1, y: 0)).automatic?.elevationMeters, -20)
         XCTAssertEqual(try resolve(line(-20, 20), point: PlanPoint(x: 11, y: 0)).automatic?.elevationMeters, 20)
-        // Distance is XY: opposing walls contribute even when their elevations differ greatly.
+        // Different underground levels must not be averaged.
         let closest = try resolve(line(10000, 10000) + line(0, 0, y: 2), point: PlanPoint(x: 5, y: 0.2))
-        XCTAssertEqual(closest.automatic?.elevationMeters, 9000)
+        XCTAssertNil(closest.automatic)
     }
     func testConstantZeroIsExplicitButMissingOneOrBothCodesAreIneligible() throws {
         XCTAssertEqual(try resolve(line(393, 393)).automatic?.elevationMeters, 393)
@@ -41,14 +41,14 @@ final class PlanElevationSnapTests: XCTestCase {
         }
     }
     func testToleranceAndAmbiguityAreExplicitPolicies() throws {
-        XCTAssertNotNil(try resolve(line(0, 0), point: PlanPoint(x: 5, y: 2)).automatic)
-        XCTAssertTrue(try resolve(line(0, 0), point: PlanPoint(x: 5, y: 2.000001)).candidates.isEmpty)
-        XCTAssertTrue(try resolve(line(0, 0), policy: PlanElevationSnapPolicy(toleranceMeters: 0.5)).candidates.isEmpty)
+        XCTAssertNotNil(try resolve(line(0, 0), point: PlanPoint(x: 5, y: 25)).automatic)
+        XCTAssertTrue(try resolve(line(0, 0), point: PlanPoint(x: 5, y: 25.000001)).candidates.isEmpty)
+        XCTAssertTrue(try resolve(line(0, 0), policy: PlanElevationSnapPolicy(searchRadiusMeters: 0.5)).candidates.isEmpty)
         let ambiguous = try resolve(line(100, 100) + line(200, 200, y: 0.05))
-        XCTAssertTrue(ambiguous.requiresChoice); XCTAssertNil(ambiguous.automatic); XCTAssertEqual(ambiguous.candidates.count, 2)
-        XCTAssertTrue(try resolve(line(100, 100) + line(100.1, 100.1)).requiresChoice)
+        XCTAssertNil(ambiguous.automatic); XCTAssertTrue(ambiguous.candidates.isEmpty)
+        XCTAssertNotNil(try resolve(line(100, 100) + line(100.1, 100.1)).automatic)
         let extremes = try resolve(line(100, 100) + line(100.4, 100.4) + line(99.6, 99.6))
-        XCTAssertTrue(extremes.requiresChoice) // Compare the full range, not just each candidate with the first.
+        XCTAssertNil(extremes.automatic) // Compare the full range, not just each candidate with the first.
         XCTAssertTrue(try resolve(line(0, 0), policy: PlanElevationSnapPolicy(toleranceMeters: .nan)).candidates.isEmpty)
     }
     func testMillimetersAndUnconfirmedOrConflictingUnits() throws {
@@ -109,7 +109,9 @@ final class PlanElevationSnapTests: XCTestCase {
         XCTAssertEqual(reopened.draft.z, "-12")
         // Explicitly choosing the suggestion replaces a manual override.
         let zb = try XCTUnwrap(PlanElevationSnap.resolve(xy, document: document, plan: b).automatic)
-        try reopened.selectPlanPoint(xy, planID: b.id, elevation: zb)
+        XCTAssertThrowsError(try reopened.selectPlanPoint(xy, planID: b.id, elevation: zb))
+        XCTAssertEqual(reopened.draft.z, "-12")
+        try reopened.selectPlanPoint(xy, planID: b.id, elevation: zb.confirmed())
         XCTAssertEqual(reopened.draft.zPlanGeometry?.planRevision, "B")
         // Old revision suggestions cannot be applied to a newly chosen plan/XY.
         let unchanged = reopened.draft

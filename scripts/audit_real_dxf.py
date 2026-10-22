@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Independent developer audit; requires ezdxf==1.4.4 in a temporary venv.
 Not an app/runtime/test-suite dependency. Literal controls live in DXFRealTests.swift.
+
+Optional developer tool: run only for fixture changes, a specific failure,
+or explicitly requested validation; not a routine feature/PR gate.
 """
 from collections import Counter
 import hashlib

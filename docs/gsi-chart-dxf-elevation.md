@@ -1,4 +1,4 @@
-> Current two-wall elevation and plan-tap behavior: [algorithm and verification](two-wall-elevation.md). The nearest-wall/radius and nominal-horizon plan-tap descriptions below are historical. Original fixtures and projection audits are preserved.
+> Current automatic elevation: [nearest-segment algorithm](two-wall-elevation.md). The verification commands/results below are historical and optional reproduction instructions, not routine PR gates; follow [AGENTS.md](../AGENTS.md). Original fixtures and projection controls remain available.
 
 > DXF parsing, unit review, inline Z and plan-management details are superseded by [DXF elevation and plan revisions](dxf-elevation-plan-revisions.md). GSI is unchanged.
 

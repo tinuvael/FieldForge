@@ -97,15 +97,11 @@ final class DXFElevationAuditTests: XCTestCase {
             let near = try XCTUnwrap(PlanElevationSnap.resolve(control.first.xy, document: doc, plan: oldReference).automatic)
             XCTAssertEqual(near.elevationMeters, control.first.z)
             let center = PlanElevationSnap.resolve(control.bounds.center, document: doc, plan: oldReference)
-            if control.level != 400 {
-                XCTAssertNil(center.automatic); XCTAssertEqual(try XCTUnwrap(center.nearestDistanceMeters), 8.5, accuracy: 1e-8)
-                XCTAssertNotNil(center.failureReason)
-            } else {
-                // The fitted bounding-box centre is outside a validated transverse section.
-                XCTAssertNil(center.automatic); XCTAssertTrue(center.candidates.isEmpty)
-                XCTAssertEqual(try XCTUnwrap(center.nearestDistanceMeters), 0.7073080051541791, accuracy: 1e-8)
-                XCTAssertNotNil(center.failureReason)
-            }
+            let estimate = try XCTUnwrap(center.automatic)
+            try estimate.validate(plan: oldReference)
+            XCTAssertEqual(estimate.selectedXY, control.bounds.center)
+            XCTAssertEqual(try XCTUnwrap(center.nearestDistanceMeters), control.level == 400 ? 0.7073080051541791 : 8.5, accuracy: 1e-8)
+            XCTAssertEqual(estimate.method, PlanGeometryElevation.nearestVersion)
             XCTAssertEqual(try files.read(oldReference), bytes)
         }
     }

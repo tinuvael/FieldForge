@@ -6,6 +6,9 @@ Z up; unknown horizontal/vertical datum. Seeded deviations are illustrative.
 Run from any directory; --check verifies committed resources without writing.
 DXFs are written only with --dxf-dir; normal generation keeps them out of Git.
 See docs/underground-survey-z-verification.md for controls and references.
+
+Optional developer tool: run only for fixture changes, a specific failure,
+or explicitly requested validation; not a routine feature/PR gate.
 """
 import argparse
 import csv

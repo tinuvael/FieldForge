@@ -418,7 +418,8 @@ struct MappingDraft: Equatable {
         guard let file = plan.file, point.x.isFinite, point.y.isFinite else { throw StorageError.invalidRecord }
         if let elevation {
             try elevation.validate(plan: plan)
-            guard elevation.selectedXY == point else { throw StorageError.invalidRecord }
+            guard elevation.selectedXY == point,
+                  !preservesElevationOnPlanSelection || elevation.confirmedByUser == true else { throw StorageError.invalidRecord }
         }
         if zOrigin == .planGeometry || zOrigin == .horizonDefault {
             // A horizon identifies the plan, never the actual floor at a tapped location.
