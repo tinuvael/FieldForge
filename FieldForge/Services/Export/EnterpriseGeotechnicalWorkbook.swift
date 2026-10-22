@@ -24,7 +24,7 @@ enum EnterpriseGeotechnicalWorkbook {
         if faultCount > 0 {
             for i in 1...faultCount { columns += ["Тектоника \(i) · тип", "Тектоника \(i) · азимут, °", "Тектоника \(i) · падение, °", "Тектоника \(i) · север", "Тектоника \(i) · мощность, м", "Тектоника \(i) · описание"] }
         }
-        columns += ["Описание Q", "RMR · прочность, источник", "RMR · состояние трещин", "Примечания", "UUID наблюдения", "UUID ревизии", "Версия наблюдения", "Метод Q", "Метод RMR89", "Метод GSI", "Дата GSI", "Jn · в расчёте Q", "Jr · в расчёте Q", "Ja · в расчёте Q", "Jw · в расчёте Q", "SRF · в расчёте Q"]
+        columns += ["Описание Q", "RMR · прочность, источник", "RMR · состояние трещин", "Примечания", "UUID наблюдения", "UUID ревизии", "Версия наблюдения", "Метод Q", "Метод RMR89", "Метод GSI", "Дата GSI", "Jn · в расчёте Q", "Jr · в расчёте Q", "Ja · в расчёте Q", "Jw · в расчёте Q", "SRF · в расчёте Q", "GSI X", "GSI Y", "Источник Z", "План Z · ревизия", "Метод Z", "Z · привязка, м", "Z · коэффициент в м", "Z · высотная система"]
         var report = Table(name: "Геотех картирование", columns: columns)
         for point in points {
             try Task.checkCancellation()
@@ -62,7 +62,9 @@ enum EnterpriseGeotechnicalWorkbook {
             }
             row += [t(q?.input.geologicalDescription), t(rmr?.input.strengthEvidence), t(rmr.map { [$0.input.roughness, $0.input.infill, $0.input.weathering].joined(separator: "; ") }), t(point.notes), t(point.id.uuidString), t(revision?.id.uuidString ?? point.id.uuidString), .integer(revision?.version ?? 1)]
             let qResult = q?.evaluation.result
-            row += [t(q?.method), t(rmr?.method), t(gsi?.method), .timestamp(gsi?.assessedAt), .number(qResult?.jn), .number(qResult?.jr), .number(qResult?.ja), .number(qResult?.jw), .number(qResult?.srf)]
+            row += [t(q?.method), t(rmr?.method), t(gsi?.method), .timestamp(gsi?.assessedAt), .number(qResult?.jn), .number(qResult?.jr), .number(qResult?.ja), .number(qResult?.jw), .number(qResult?.srf), .number(gsi?.chartPosition?.x), .number(gsi?.chartPosition?.y)]
+            let z = point.coordinates?.zPlanGeometry
+            row += [t(point.coordinates?.zOrigin?.title), t(z?.planRevision), t(z?.method), .number(z?.distanceMeters), .number(z?.metersPerDrawingUnit), t(z?.verticalDatum ?? point.coordinates?.zDatum)]
             report.rows.append(row)
         }
         var references = Table(name: "Справочники", columns: ["Параметр", "Код / категория", "Описание / диапазон", "Балл", "Метод / версия / источник"])
@@ -75,7 +77,7 @@ enum EnterpriseGeotechnicalWorkbook {
         for category in JCond76Category.allCases { reference("JCond76", category.rawValue, category.title, category.rating, JCond76Category.version + "; Hoek, Carter & Diederichs (2013), Table 2; https://www.rocscience.com/assets/resources/learning/hoek/Quantification-of-the-GSI-Chart-2013.pdf") }
         for category in GSIStructure.allCases { reference("GSI · структура", category.rawValue, category.title + ": " + category.detail, nil, GSIAssessment.reference + "; " + GSIAssessment.version) }
         for category in GSISurface.allCases { reference("GSI · поверхность", category.rawValue, category.title + ": " + category.detail, nil, GSIAssessment.reference) }
-        reference("GSI", "неприменимость", "Массивный × плохое / очень плохое; слоистый/рассланцованный × очень хорошее / хорошее. Числовые контуры не оцифрованы: интервал явно выбирает инженер. " + GSIAssessment.limitation, nil, GSIAssessment.version)
+        reference("GSI", "неприменимость", "Массивный × плохое / очень плохое; слоистый/рассланцованный × очень хорошее / хорошее. Числовые линии 5…95 оцифрованы из табл. 5.34; локальная интерполяция между соседними контурами. Крайние зоны не экстраполируются. " + GSIAssessment.limitation, nil, GSIChart.version)
         for source in [JointSpacingSource.estimatedFromRQD, .manual, .unknownLegacy] { reference("SD · источник", source.rawValue, source.title, nil, source == .estimatedFromRQD ? PriestHudsonSpacing.version : "joint-spacing-entry-v1; отсутствующие метаданные = unknownLegacy") }
         reference("SD среднее, м", "среднее арифметическое", "Только положительные конечные SD сохранённых J1–J5. Пустые значения исключаются. Число использованных систем указано отдельно. Смесь оценок и ручного ввода не считается измеренным средним.", nil, version)
         reference("Оценка SD", "RQD = 100 exp(−0.1λ)(1+0.1λ); SD = 1/λ", "Бисекция для 0<RQD<100; без подстановки RQD=10%. Требуется отрицательно-экспоненциальное распределение. RQD не определяет истинное расстояние отдельной системы. При расхождении Q/RMR оценка недоступна.", nil, PriestHudsonSpacing.version + "; Priest & Hudson (1976), DOI 10.1016/0148-9062(76)90818-4; Brady & Brown (2004), 3.3–3.4")

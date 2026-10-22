@@ -2,7 +2,28 @@ import XCTest
 import UIKit
 
 final class MappingUITests: XCTestCase {
-    @MainActor func testEnterpriseSDAndGSICategoricalWorkflow() throws {
+    @MainActor func testGSIChartTapDragRestore() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication(); app.launchArguments = ["--ui-testing"]
+        app.launchEnvironment["FIELD_FORGE_TEST_RUN_ID"] = UUID().uuidString; app.launch()
+        let open = app.buttons["openGSI"]; show(open, app: app); open.tap()
+        let chart = app.otherElements["gsiChart"]
+        XCTAssertTrue(chart.waitForExistence(timeout: 5))
+        chart.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.05)).tap()
+        XCTAssertFalse(app.buttons["confirmGSI"].isEnabled)
+        chart.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45)).tap()
+        chart.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45)).press(forDuration: 0.1,
+            thenDragTo: chart.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.55)))
+        XCTAssertTrue(app.buttons["confirmGSI"].isEnabled)
+        let marker = chart.value as? String, value = app.staticTexts["gsiSelectedValue"].label
+        let shot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        shot.name = "GSI iPhone chart"; shot.lifetime = .keepAlways; add(shot)
+        app.buttons["confirmGSI"].tap(); show(open, app: app); open.tap()
+        XCTAssertTrue(chart.waitForExistence(timeout: 5))
+        XCTAssertEqual(chart.value as? String, marker); XCTAssertEqual(app.staticTexts["gsiSelectedValue"].label, value)
+    }
+
+    @MainActor func testEnterpriseSDAndGSIInteractiveChartWorkflow() throws {
         continueAfterFailure = false
         let app = XCUIApplication(); app.launchArguments = ["--ui-testing"]
         app.launchEnvironment["FIELD_FORGE_TEST_RUN_ID"] = UUID().uuidString; app.launch()
@@ -41,25 +62,24 @@ final class MappingUITests: XCTestCase {
         XCTAssertTrue(app.buttons["resetJointSpacing"].exists)
         app.buttons["Принять"].tap()
         let openGSI = app.buttons["openGSI"]; show(openGSI, app: app); openGSI.tap()
-        XCTAssertTrue(app.staticTexts["gsiChartLimitation"].waitForExistence(timeout: 5))
-        let invalid = app.buttons["gsiCell-massive-poor"]
-        XCTAssertTrue(invalid.waitForExistence(timeout: 5)); XCTAssertFalse(invalid.isEnabled)
-        let cell = app.buttons["gsiCell-veryBlocky-fair"]; show(cell, app: app); cell.tap()
-        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
-        screenshot.name = "Enterprise GSI category matrix"; screenshot.lifetime = .keepAlways; add(screenshot)
-        fill(app.textFields["gsiLower"], "35", app: app); fill(app.textFields["gsiUpper"], "45", app: app)
-        fill(app.textFields["gsiFinal"], "46", app: app)
-        show(app.buttons["confirmGSI"], app: app)
+        let chart = app.otherElements["gsiChart"]
+        XCTAssertTrue(chart.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.textFields["gsiLower"].exists)
+        chart.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.05)).tap()
         XCTAssertFalse(app.buttons["confirmGSI"].isEnabled)
-        XCTAssertTrue(app.staticTexts["gsiValidationError"].exists)
-        show(app.textFields["gsiFinal"], app: app, upward: false)
-        fill(app.textFields["gsiFinal"], "40", app: app)
-        show(app.buttons["confirmGSI"], app: app); XCTAssertTrue(app.buttons["confirmGSI"].isEnabled)
-        app.buttons["confirmGSI"].tap()
+        chart.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45)).tap()
+        let tapped = chart.value as? String
+        chart.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.45)).press(forDuration: 0.1,
+            thenDragTo: chart.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.55)))
+        XCTAssertNotEqual(chart.value as? String, tapped)
+        let marker = chart.value as? String, gsi = app.staticTexts["gsiSelectedValue"].label
+        let screenshot = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        screenshot.name = "Interactive GSI iPhone"; screenshot.lifetime = .keepAlways; add(screenshot)
+        XCTAssertTrue(app.buttons["confirmGSI"].isEnabled); app.buttons["confirmGSI"].tap()
         show(openGSI, app: app); openGSI.tap()
-        show(app.textFields["gsiLower"], app: app)
-        XCTAssertEqual(app.textFields["gsiLower"].value as? String, "35")
-        XCTAssertEqual(app.textFields["gsiUpper"].value as? String, "45")
+        XCTAssertTrue(chart.waitForExistence(timeout: 5))
+        XCTAssertEqual(chart.value as? String, marker)
+        XCTAssertEqual(app.staticTexts["gsiSelectedValue"].label, gsi)
         back(app); save(app); saved(app); top(app)
         app.buttons["mappingJournal"].tap(); app.buttons["mappingExportAction"].tap()
         let kind = app.buttons["mappingExportKind"]; show(kind, app: app); kind.tap()

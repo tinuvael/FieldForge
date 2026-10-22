@@ -126,7 +126,7 @@ private typealias RevisionReading = FieldForge.Measurement
         let r = try w.saveCorrection(draft, now: correctionTime)
         XCTAssertEqual(original.ratings?.bartonQ?.evaluation.result?.value ?? 0, 40.0 / 3, accuracy: 1e-14)
         XCTAssertEqual(r.snapshot.ratings?.bartonQ?.evaluation.result?.value, 10)
-        XCTAssertEqual(r.snapshot.ratings?.bartonQ?.method, QMethod.version)
+        XCTAssertEqual(r.snapshot.ratings?.bartonQ?.method, original.ratings?.bartonQ?.method)
         XCTAssertEqual(r.snapshot.ratings?.bartonQ?.assessedAt, correctionTime)
         XCTAssertEqual(r.snapshot.ratings?.rmr89?.input.source, "Corrected source notes")
         try r.snapshot.ratings?.rmr89?.validate()

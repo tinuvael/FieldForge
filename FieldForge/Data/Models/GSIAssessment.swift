@@ -1,7 +1,7 @@
 import Foundation
 
 /// Read & Stacey (2009), Table 5.34, Hoek–Brown 2000 / Marinos & Hoek (2000).
-/// Category matrix only: curved numerical contours have NOT been digitised.
+/// Qualitative axes retain their published order; legacy categorical selections remain evidence.
 enum GSIStructure: String, Codable, CaseIterable {
     case massive, blocky, veryBlocky, disturbed, disintegrated, laminatedSheared
     var title: String {
@@ -62,7 +62,6 @@ struct GSIChartSelection: Codable, Equatable {
 struct GSIAssessment: Codable, Equatable {
     static let version = "Read-Stacey-2009/table5.34-HoekBrown2000/categorical-explicit-interval-v1"
     static let reference = "Read & Stacey (2009), Guidelines for Open Pit Slope Design, §5.4.4, Table 5.34; Marinos & Hoek (2000)."
-    static let chartLimitation = "Это выбор категорий, а не полная диаграмма Read & Stacey, табл. 5.34. Числовые контуры и соответствие точки интервалу GSI не верифицированы; графическое определение GSI недоступно. Диапазон задаёт инженер вручную."
     static let limitation = "GSI может быть неприменим, если разрушение определяет ориентированная слабость, например неблагоприятные протяжённые трещины."
     let selection: GSIChartSelection
     let lower: Double
@@ -70,9 +69,27 @@ struct GSIAssessment: Codable, Equatable {
     let finalValue: Double?
     let assessedAt: Date
     var method = Self.version
+    /// Absent for categorical v1 records. Never reinterprets their stored cell centres.
+    var chartPosition: GSIChartPosition? = nil
+    init(selection: GSIChartSelection, lower: Double, upper: Double, finalValue: Double?, assessedAt: Date) {
+        self.selection = selection; self.lower = lower; self.upper = upper
+        self.finalValue = finalValue; self.assessedAt = assessedAt
+    }
+    init(position: GSIChartPosition, assessedAt: Date) throws {
+        guard let selection = GSIChart.categories(position), let estimate = GSIChart.estimate(position) else { throw StorageError.invalidRecord }
+        self.selection = selection; lower = Double(estimate.lower); upper = Double(estimate.upper)
+        finalValue = Double(estimate.value); self.assessedAt = assessedAt
+        method = GSIChart.version; chartPosition = position
+    }
     func validate() throws {
         try selection.validate()
-        guard method == Self.version, lower.isFinite, upper.isFinite,
+        if method == GSIChart.version {
+            guard let p = chartPosition, let estimate = GSIChart.estimate(p), selection == GSIChart.categories(p),
+                  lower == Double(estimate.lower), upper == Double(estimate.upper), finalValue == Double(estimate.value),
+                  assessedAt.timeIntervalSinceReferenceDate.isFinite else { throw StorageError.invalidRecord }
+            return
+        }
+        guard method == Self.version, chartPosition == nil, lower.isFinite, upper.isFinite,
               (0...100).contains(lower), (lower...100).contains(upper),
               assessedAt.timeIntervalSinceReferenceDate.isFinite else { throw StorageError.invalidRecord }
         guard finalValue.map({ $0.isFinite && (lower...upper).contains($0) }) ?? true else {

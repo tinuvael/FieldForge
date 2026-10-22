@@ -1,6 +1,8 @@
 # Import/export and spatial integration boundaries
 
-Current enterprise geotechnical extension: see [versioned SD, ROCK, field strength, JCond76, categorical GSI and three-sheet workbook](enterprise-geotechnical.md). Optional fields extend the shared schema-8 graph; no migration/reset or original-measurement journal change.
+Current chart/DXF elevation model: [exact graphical GSI positions and computed Z provenance](gsi-chart-dxf-elevation.md).
+
+Current enterprise geotechnical extension: see [versioned SD, ROCK, field strength, JCond76, versioned GSI and three-sheet workbook](enterprise-geotechnical.md). Optional fields extend the shared schema-8 graph; no migration/reset or original-measurement journal change.
 
 **Current update (2026-10-21):** [Final field polish](final-field-polish.md) supersedes the historical default-export, sheet-order and input-only RMR descriptions below. Excel is the default, with five Russian field sheets and preserved technical sheets. Verified preliminary RMRbasic categories are available under a separate method version; legacy inputs stay unchanged.
 

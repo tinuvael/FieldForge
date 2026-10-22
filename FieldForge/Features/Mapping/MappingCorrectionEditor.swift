@@ -48,7 +48,7 @@ struct MappingCorrectionEditor: View {
                     MappingCoordinateField(title: "Z", text: $draft.fields.z, identifier: "correctionZ", focus: $coordinateFocus)
                     Button("Выбрать на плане") { focused = false; coordinateFocus = nil; showPlans = true }.accessibilityIdentifier("correctionSelectPlan")
                     DisclosureGroup("СК, оси и происхождение") {
-                        Text("Источник Z: \(draft.fields.zOrigin == .horizonDefault ? "по горизонту · не съёмка" : "ручное / неизвестно")").font(.caption)
+                        Text("Источник Z: \(draft.fields.zOrigin?.title ?? "неизвестно")").font(.caption)
                         TextField("СК", text: $draft.fields.crs).focused($focused).disabled(draft.fields.planID != nil)
                         TextField("Оси", text: $draft.fields.axes).focused($focused).disabled(draft.fields.planID != nil)
                         TextField("Происхождение координат", text: $draft.fields.coordinateProvenance, axis: .vertical)
@@ -93,9 +93,10 @@ struct MappingCorrectionEditor: View {
                             Text("Только сохранённые версии планов исходного горизонта. XY сохраняются в единицах выбранного чертежа без пересчёта; Z отдельно, в метрах.").font(.caption)
                             ForEach(mapping.workflow?.journal.plans.filter { $0.horizonID == draft.baseline.horizonID && $0.file != nil } ?? []) { plan in
                                 NavigationLink {
-                                    HorizonPlanLoader(plan: plan, selecting: true, onSelection: { showPlans = false }, onPointSelection: { point, plan in
-                                        try draft.fields.selectPlanPoint(point, plan: plan)
-                                    })
+                                    HorizonPlanLoader(plan: plan, selecting: true, onSelection: { showPlans = false }, onPointSelection: { point, plan, elevation in
+                                        try draft.fields.selectPlanPoint(point, plan: plan, elevation: elevation,
+                                            fallback: mapping.workflow?.journal.horizons.first { $0.id == draft.baseline.horizonID })
+                                    }, preserveManualElevation: draft.fields.preservesElevationOnPlanSelection)
                                 } label: {
                                     VStack(alignment: .leading) {
                                         Text(plan.file?.originalFilename ?? "DXF")

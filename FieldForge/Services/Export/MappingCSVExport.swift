@@ -106,24 +106,25 @@ struct MappingCSVExport {
         table("excavations", ["excavation_id", "project_id", "name"], excavations.map { [u($0.id), u($0.projectID), t($0.name)] })
         table("excavation_horizons", ["excavation_id", "horizon_id"], excavations.flatMap { e in e.horizonIDs.sorted { $0.uuidString < $1.uuidString }.map { [u(e.id), u($0)] } })
         table("plans", ["plan_id", "horizon_id", "attachment_id", "version", "file_metadata_json"], try journal.plans.filter { planIDs.contains($0.id) }.map { [u($0.id), u($0.horizonID), u($0.attachmentID), t($0.version), try json($0.file)] })
-        let pointColumns = ["point_id", "revision_id", "version", "project_id", "horizon_id", "excavation_id", "picket", "chainage_m", "chainage_origin_direction", "observed_at_utc", "observed_zone", "observed_offset_seconds", "created_at_utc", "corrected_at_utc", "interval_start_text", "interval_start_m", "interval_end_text", "interval_end_m", "position", "x", "y", "z_m", "xy_units", "crs", "axes", "coordinate_source", "coordinate_provenance", "z_origin", "z_horizon_id", "z_horizon_elevation_m", "z_datum", "plan_id", "notes"]
-        func pointRow(_ p: MappingObservation, revisionID: UUID, version: Int) -> [Cell] {
+        let pointColumns = ["point_id", "revision_id", "version", "project_id", "horizon_id", "excavation_id", "picket", "chainage_m", "chainage_origin_direction", "observed_at_utc", "observed_zone", "observed_offset_seconds", "created_at_utc", "corrected_at_utc", "interval_start_text", "interval_start_m", "interval_end_text", "interval_end_m", "position", "x", "y", "z_m", "xy_units", "crs", "axes", "coordinate_source", "coordinate_provenance", "z_origin", "z_horizon_id", "z_horizon_elevation_m", "z_datum", "plan_id", "notes", "z_plan_geometry_json"]
+        func pointRow(_ p: MappingObservation, revisionID: UUID, version: Int) throws -> [Cell] {
             let c = p.coordinates, g = p.geology
             let correction = journal.revisions.first { $0.id == revisionID }
             var row: [Cell] = [u(p.id), u(revisionID), .integer(version), u(p.projectID), u(p.horizonID), u(p.excavationID), t(p.picket), .number(p.chainageMeters), t(p.chainageOriginAndDirection), d(p.observedAt), t(p.observedTimeZoneID), .integer(p.observedUTCOffsetSeconds), d(p.createdAt), d(correction?.correctedAt)]
             row += [t(g?.start?.text), .number(g?.start?.meters), t(g?.end?.text), .number(g?.end?.meters), t(g?.position?.rawValue)]
             row += [.number(c?.x), .number(c?.y), .number(c?.z), t(c?.units), t(c?.crs), t(c?.axes), t(c?.source), t(c?.provenance), t(c?.zOrigin?.rawValue), u(c?.zHorizonID), .number(c?.zHorizonElevation), t(c?.zDatum), u(c?.planID), t(p.notes)]
+            row.append(try json(c?.zPlanGeometry))
             return row
         }
-        table("points", pointColumns, points.map { p in
+        table("points", pointColumns, try points.map { p in
             let r = journal.history(for: p.id).last
-            return pointRow(p, revisionID: r?.id ?? p.id, version: r?.version ?? 1)
+            return try pointRow(p, revisionID: r?.id ?? p.id, version: r?.version ?? 1)
         })
         // Historical rows are context only, never additional current observations or capture coordinates.
         var seen = Set<UUID>()
-        table("photo_point_contexts", pointColumns, zip(photos, historical).compactMap { photo, point in
+        table("photo_point_contexts", pointColumns, try zip(photos, historical).compactMap { photo, point in
             guard seen.insert(photo.context.pointRevisionID).inserted else { return nil }
-            return pointRow(point, revisionID: photo.context.pointRevisionID, version: photo.context.pointVersion)
+            return try pointRow(point, revisionID: photo.context.pointRevisionID, version: photo.context.pointVersion)
         })
         var measurementRows: [[Cell]] = [], sets: [[Cell]] = [], links: [[Cell]] = [], faults: [[Cell]] = [], ratings: [[Cell]] = []
         for p in points {
@@ -153,6 +154,13 @@ struct MappingCSVExport {
         table("joint_sets", ["joint_set_id", "point_id", "revision", "identifier", "interpreted_at_utc", "author", "method", "dip_direction_deg", "dip_angle_deg", "north", "direction_meaning", "original_direction_text", "original_dip_text", "spacing_m", "persistence_m", "aperture_mm", "roughness", "infill", "notes"], sets)
         table("interpretation_evidence", ["joint_set_id", "joint_set_revision", "point_id", "measurement_id", "role"], links)
         table("tectonic_structures", ["structure_id", "point_id", "type", "dip_direction_deg", "dip_angle_deg", "north", "original_direction_text", "original_dip_text", "conventional_dip_side", "thickness_m", "picket_text", "chainage_m", "position", "description"], faults)
+        // GSI is a distinct assessment. Its exact versioned input is retained in input_json.
+        for point in points {
+            if let gsi = point.ratings?.gsi {
+                ratings.append([u(point.id), t("GSI"), t(gsi.method), .integer(1), d(gsi.assessedAt)] +
+                    Array(repeating: Cell.empty, count: 8) + [try json(gsi)] + Array(repeating: Cell.empty, count: 24))
+            }
+        }
         table("assessments", ["point_id", "kind", "method", "revision", "assessed_at_utc", "stored_q", "stored_q_class", "rqd_text", "jn_text", "jr_text", "ja_text", "jw_text", "srf_text", "input_json", "stored_evaluation_json", "missing_json", "rmr_strength_test", "rmr_strength_mpa_text", "rmr_strength_evidence", "rmr_rqd_evidence", "rmr_spacing_m_text", "rmr_persistence_m_text", "rmr_aperture_mm_text", "rmr_roughness", "rmr_infill", "rmr_weathering", "rmr_groundwater", "rmr_inflow_l_min_per_10m_text", "rmr_water_pressure_ratio_text", "rmr_application", "rmr_orientation_description", "rmr_source", "rmr_assessor", "rmr_missing_reason", "rmr_status", "stored_rmr_basic", "stored_rmr_class", "stored_rmr_calculation_json"], ratings)
         table("photos", ["photo_id", "point_id", "project_id", "horizon_id", "excavation_id", "context_revision_id", "context_point_version", "capture_location_basis", "name", "number", "description", "category", "metadata_revision_id", "metadata_version", "metadata_corrected_at_utc", "source", "captured_at_utc", "capture_time_text", "capture_time_provenance", "imported_at_utc", "attachment_id", "original_integrity"], photos.map { photo in
             let m = journal.metadata(for: photo), r = journal.photoRevisions.last { $0.photoID == photo.id }, c = photo.context

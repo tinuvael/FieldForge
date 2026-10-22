@@ -39,13 +39,22 @@ Optional `RMR89Input.jcond76` stores category, rating and `Bieniawski-1976/JCond
 
 Enterprise A1 is exported from the explicitly selected field grade only. A42/A43 map from verified explicit RMR89 persistence/aperture categories, retaining the engineer's choice at shared endpoints. A45 maps only the first four corresponding weathering categories. Enterprise A45=0 describes crushed walls, whereas RMR89's last category means decomposed: that mapping is intentionally absent. Free text, raw dimensions and Q categories are not guessed into enterprise categories.
 
-## GSI interaction and verification boundary
+## GSI interaction and compatibility
 
-The order is Barton Q → RMR89 (including JCond76) → GSI. GSI has an original SwiftUI **categorical** matrix with six readable structure labels, five surface categories and at least 44-point buttons. A tap selects the category cell centre; explicit confirmation commits it to the owning observation draft. The sheet stages changes locally. Returning without confirmation retains the existing assessment.
+The order remains Barton Q → RMR89 (including JCond76) → GSI. The current GSI
+Canvas replaces the categorical matrix and manual interval input. It uses digitized
+source contours with direct taps/drags, integer estimates, exact marker restoration
+and secondary attribution. See [source calibration and verification](gsi-chart-dxf-elevation.md).
 
-`Read-Stacey-2009/table5.34-HoekBrown2000/categorical-explicit-interval-v1` preserves structure, surface, normalised categorical centre `(x,y)`, an explicitly entered lower/upper GSI interval, optional refined final GSI and assessment timestamp. No number is inferred from a tap, Q, RMR89 or JCond76. Contours have **not** been numerically digitised. The categorical fallback is **not a replacement for the full Table 5.34 chart**; its limitation is displayed immediately on opening GSI, before the category controls. The engineer must choose an interval (0–100, lower ≤ upper). The optional final value must satisfy **lower ≤ finalValue ≤ upper**, inclusively; it does not erase the chart selection or interval. Out-of-range refinement disables confirmation and reports a visible validation error. Further edits of saved points create normal corrections.
+The historical `categorical-explicit-interval-v1` representation remains readable,
+including its category-centre coordinates, interval and optional refinement. These
+coordinates never become a chart marker. The new `vector-contours-v1` method has a
+separate optional `chartPosition`; validation recomputes its numerical estimate.
+Normal immutable observation corrections preserve both methods and timestamps.
 
-Verified N/A combinations are massive × poor/very poor and laminated/sheared × very good/good. They are disabled in the UI and rejected in stored assessments. Altered method/position metadata is rejected. Details retain the warning that dominant oriented weakness, such as unfavourable persistent discontinuities, may invalidate GSI. The feature produces no direct stability or support recommendation.
+Verified source N/A combinations and dominant-oriented-weakness limitations remain.
+The source only provides actual contours from 5 through 95; outer corners are not
+numerically extrapolated. No direct stability or support recommendation is produced.
 
 ## Separate enterprise workbook
 
@@ -72,7 +81,7 @@ python3 scripts/generate_project.py
 
 The Python check requires development-only openpyxl and independently opens ZIP/OOXML/Excel, verifies exactly three visible worksheets, one observation row, numeric mean/count, dates, Cyrillic, blank fields, provenance and full precision text. Fixtures are synthetic and temporary. `EnterpriseGeotechnicalTests` runs through both SPM and Xcode. See the PR for final build/UI results and baseline failures. No physical iPhone validation is claimed.
 
-### Verification recorded 2026-10-21
+### Historical verification recorded 2026-10-21
 
 - `swift test`: 296 tests executed, 1 optional fixture skipped, **2 existing failures**; both reproduced from unchanged `main` (`229d1b3`) in `/tmp` before attributing them to this extension. `DXFRealTests.testOriginalFileStoragePickingZDraftMarkersIsolationAndCorruptImportPreserveEvidence` attempts an already registered plan revision. `P33RevisionTests.testQRecalculationUsesFrozenMethodAndRMRRemainsInputOnly` expects the old Q version string although main already creates `FieldForge-field-2`. These tests/methods were not changed to hide the failures.
 - All **16** new `EnterpriseGeotechnicalTests` pass in SwiftPM and Xcode Simulator. They cover numerical inversion/endpoints, all five initial systems, independent/manual overrides, RQD update/fallback/conflict, reset, legacy source preservation, saved means/counts, atomic restart/corrections, new-assessment corruption refusal, exact ROCK, field/laboratory strength and independent JCond76, GSI N/A/method/position validation, history and all workbook export modes.
@@ -90,3 +99,5 @@ GSI refinement is restricted to the inclusive selected interval, including singl
 Table 5.34 was inspected again in the same source copy. The diagram provides qualitative category axes and drawn numerical contours, some without individual numeric labels, rather than a complete tabulation of coordinates and numerical boundaries. No independently verified contour dataset / boundary test oracle is available in this task. Assigning values to traced paths or interpolating screen coordinates would add assumptions that have not been independently engineering-validated. Consequently no numerical graphical-point method is claimed or implemented. The UI now explicitly identifies the categorical matrix as category selection rather than the full Read & Stacey diagram; manual range/refinement entry and verified N/A cells remain available. A future graphical implementation needs a reviewed contour dataset with independently checked region/boundary cases; it must not silently reinterpret existing categorical centres as continuous chart points.
 
 Follow-up verification: all **20** `EnterpriseGeotechnicalTests` pass in SwiftPM and Xcode 26.6 / iPhone 17 Pro Simulator / iOS 26.5. The updated `testEnterpriseSDAndGSICategoricalWorkflow` passes with explicit UI checks that manual SD=0 and final GSI=46 outside [35,45] cannot be confirmed; valid values, reopening and export still work. Full `swift test`: 300 tests, 2 optional-fixture skips, the same 2 pre-existing DXF/Q failures documented above. Project generation remains deterministic with the same SHA-256; `git diff --check` passes. Q/RMR89 method files, exporter files, the schema and store/correction mechanism are unchanged by this follow-up. No physical-device validation is claimed.
+
+Current chart/DXF verification supersedes the historical numerical-contour gate above; see [the calibrated vector implementation](gsi-chart-dxf-elevation.md).

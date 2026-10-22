@@ -69,7 +69,7 @@ struct MappingRatingsDetail: View {
             if let gsi = ratings?.gsi {
                 DisclosureGroup("GSI · геологическая оценка") {
                     Text(gsi.selection.structure.title + " · " + gsi.selection.surface.title)
-                    Text("Интервал GSI: \(EngineeringDisplay.number(gsi.lower))–\(EngineeringDisplay.number(gsi.upper))")
+                    Text("Контуры / интервал GSI: \(EngineeringDisplay.number(gsi.lower))–\(EngineeringDisplay.number(gsi.upper))")
                     if let value = gsi.finalValue { Text("Уточнённый GSI: \(EngineeringDisplay.number(value))") }
                     Text("Оценено: \(MeasurementDateText.format(gsi.assessedAt, detailed: true))").font(.caption)
                     Text(GSIAssessment.reference).font(.caption)

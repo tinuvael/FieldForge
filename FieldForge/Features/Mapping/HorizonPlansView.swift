@@ -266,13 +266,14 @@ struct HorizonPlanLoader: View {
     let plan: MappingPlanReference
     let selecting: Bool
     let onSelection: (() -> Void)?
-    var onPointSelection: ((PlanPoint, MappingPlanReference) throws -> Void)? = nil
+    var onPointSelection: ((PlanPoint, MappingPlanReference, PlanGeometryElevation?) throws -> Void)? = nil
+    var preserveManualElevation = false
     @EnvironmentObject private var mapping: MappingModel
     @State private var drawing: DXFDocument?
     @State private var error: String?
     var body: some View {
         Group {
-            if let drawing { HorizonPlanView(plan: plan, drawing: drawing, selecting: selecting, onSelection: onSelection, onPointSelection: onPointSelection) }
+            if let drawing { HorizonPlanView(plan: plan, drawing: drawing, selecting: selecting, onSelection: onSelection, onPointSelection: onPointSelection, preserveManualElevation: preserveManualElevation) }
             else if let error { ContentUnavailableView("План недоступен", systemImage: "exclamationmark.triangle", description: Text(error)) }
             else { ProgressView("Проверка оригинала…") }
         }.task(id: plan.id) {
@@ -292,7 +293,12 @@ struct HorizonPlanView: View {
     let drawing: DXFDocument
     let selecting: Bool
     let onSelection: (() -> Void)?
-    var onPointSelection: ((PlanPoint, MappingPlanReference) throws -> Void)? = nil
+    var onPointSelection: ((PlanPoint, MappingPlanReference, PlanGeometryElevation?) throws -> Void)? = nil
+    var preserveManualElevation = false
+    @State private var automaticZ = true
+    @State private var snapTolerance = 2.0
+    @State private var elevationResolution = PlanElevationResolution(candidates: [], requiresChoice: false)
+    @State private var elevationChoice = -1
     @EnvironmentObject private var mapping: MappingModel
     @State private var zoom = 1.0
     @GestureState private var magnification = 1.0
@@ -311,6 +317,20 @@ struct HorizonPlanView: View {
         }.count
         let vertexCount = drawing.polylines.reduce(0) { $0 + $1.vertices.count }
         return "Полилинии: \(drawing.polylines.count); вершины: \(vertexCount); маркеры в окне: \(visibleMarkers); POINT: \(drawing.points.count); подписи: \(drawing.labels.count)"
+    }
+
+    private func elevationLabel(_ value: Double) -> String {
+        (value >= 0 ? "+" : "") + EngineeringDisplay.number(value, decimals: 2) + " м"
+    }
+    private var chosenElevation: PlanGeometryElevation? {
+        automaticZ && elevationResolution.candidates.indices.contains(elevationChoice) ? elevationResolution.candidates[elevationChoice] : nil
+    }
+    private func propose(_ point: PlanPoint) {
+        proposed = point
+        elevationResolution = PlanElevationSnap.resolve(point, document: drawing, plan: plan,
+            policy: PlanElevationSnapPolicy(toleranceMeters: snapTolerance))
+        let manual = preserveManualElevation || (onPointSelection == nil && mapping.workflow?.draft.preservesElevationOnPlanSelection == true)
+        elevationChoice = !automaticZ || manual || elevationResolution.candidates.isEmpty ? -1 : elevationResolution.requiresChoice ? -2 : 0
     }
 
     var body: some View {
@@ -371,7 +391,7 @@ struct HorizonPlanView: View {
                             return hypot(p.x - location.x, p.y - location.y) <= 24
                         }
                         if !hits.isEmpty { pointSelection = PlanPointSelection(records: hits) }
-                        else if selecting { proposed = viewport.drawing(location) }
+                        else if selecting { propose(viewport.drawing(location)) }
                     })
             }
             HStack {
@@ -385,21 +405,43 @@ struct HorizonPlanView: View {
                 VStack {
                     Text("Новая: X \(EngineeringDisplay.coordinate(proposed.x)), Y \(EngineeringDisplay.coordinate(proposed.y))")
                         .font(.caption).accessibilityIdentifier("planProposedXY")
+                    if automaticZ && !elevationResolution.candidates.isEmpty {
+                        if elevationResolution.requiresChoice || preserveManualElevation || mapping.workflow?.draft.preservesElevationOnPlanSelection == true {
+                            Picker("Отметка Z", selection: $elevationChoice) {
+                                if elevationChoice == -2 { Text("Выберите источник Z").tag(-2) }
+                                Text("Сохранить ручную / по горизонту").tag(-1)
+                                ForEach(Array(elevationResolution.candidates.enumerated()), id: \.offset) { index, candidate in
+                                    Text("\(elevationLabel(candidate.elevationMeters)) · DXF · \(EngineeringDisplay.number(candidate.distanceMeters)) м от линии").tag(index)
+                                }
+                            }.accessibilityIdentifier("planElevationChoice")
+                        }
+                        if let elevation = chosenElevation {
+                            Text("Z \(elevationLabel(elevation.elevationMeters)) · из DXF").font(.caption).accessibilityIdentifier("planProposedZ")
+                        }
+                    }
                     Button("Подтвердить X/Y") {
                         do {
                             guard mapping.workflow != nil else { throw StorageError.writesBlocked }
-                            if let onPointSelection { try onPointSelection(proposed, plan) }
-                            else { try mapping.workflow!.selectPlanPoint(proposed, planID: plan.id) }
+                            if let onPointSelection { try onPointSelection(proposed, plan, chosenElevation) }
+                            else { try mapping.workflow!.selectPlanPoint(proposed, planID: plan.id, elevation: chosenElevation) }
                             onSelection?()
                         } catch { self.error = error.localizedDescription }
-                    }.buttonStyle(.borderedProminent).accessibilityIdentifier("confirmPlanXY")
+                    }.buttonStyle(.borderedProminent).accessibilityIdentifier("confirmPlanXY").disabled(elevationChoice == -2)
                     Button("Отменить точку") { self.proposed = nil }
                 }.padding(8)
             }
-        }.navigationTitle(plan.file?.originalFilename ?? "DXF").navigationBarTitleDisplayMode(.inline)
+        }.onChange(of: automaticZ) { _, _ in if let proposed { propose(proposed) } }
+            .onChange(of: snapTolerance) { _, _ in if let proposed { propose(proposed) } }
+            .navigationTitle(plan.file?.originalFilename ?? "DXF").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 Menu {
                     Button("Сведения о плане", systemImage: "info.circle") { properties = true }
+                    if selecting {
+                        Toggle("Предлагать Z из DXF", isOn: $automaticZ)
+                        Picker("Расстояние поиска Z, м", selection: $snapTolerance) {
+                            ForEach([0.5, 1.0, 2.0, 5.0], id: \.self) { Text(EngineeringDisplay.number($0)).tag($0) }
+                        }
+                    }
                     Picker("Выработка", selection: $filter) {
                         Text("Все выработки").tag(nil as UUID?)
                         ForEach(mapping.workflow?.journal.excavations.filter { $0.horizonIDs.contains(plan.horizonID) } ?? []) {

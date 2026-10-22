@@ -2,6 +2,49 @@ import XCTest
 import UIKit
 
 final class P2MappingUITests: XCTestCase {
+    @MainActor func testAutomaticDXFElevationAndManualReview() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication(); app.launchArguments = ["--ui-testing"]
+        app.launchEnvironment["FIELD_FORGE_TEST_RUN_ID"] = UUID().uuidString
+        app.launchEnvironment["P2_PLAN_A"] = dxf("0\nLINE\n10\n0\n20\n0\n30\n300\n11\n10\n21\n0\n31\n400\n")
+        app.launch()
+        let project = "Z-\(UUID().uuidString.prefix(6))"
+        create("projectPicker", value: project, app: app); select("projectPicker", value: project, app: app)
+        create("horizonPicker", value: "+393", app: app); select("horizonPicker", value: "+393 м", app: app)
+        create("excavationPicker", value: "Штрек Z", app: app); select("excavationPicker", value: "Штрек Z", app: app)
+        app.tabBars.buttons["План"].tap(); app.buttons["Загрузить DXF"].tap()
+        app.buttons["P2_PLAN_A"].tap()
+        XCTAssertTrue(app.buttons["planUnits"].waitForExistence(timeout: 5))
+        app.buttons["planUnits"].tap(); app.buttons["Метры"].tap()
+        let save = app.buttons["savePlanImport"]; reveal(save, app: app); save.tap()
+        XCTAssertTrue(app.buttons["importDXF"].waitForExistence(timeout: 5))
+        app.buttons["Закрыть"].tap()
+        app.tabBars.buttons["Картирование"].tap(); app.buttons["selectHorizonPlan"].tap()
+        let canvas = app.otherElements["planCanvas"]
+        XCTAssertTrue(canvas.waitForExistence(timeout: 10))
+        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(app.staticTexts["planProposedZ"].waitForExistence(timeout: 5))
+        screenshot("DXF proposed interpolated Z", app: app)
+        app.buttons["confirmPlanXY"].tap()
+        XCTAssertTrue(app.buttons["selectHorizonPlan"].waitForExistence(timeout: 5))
+        reveal(app.textFields["mappingZ"], app: app, down: true)
+        XCTAssertEqual(Double((app.textFields["mappingZ"].value as? String ?? "").replacingOccurrences(of: ",", with: ".")) ?? .nan, 350, accuracy: 1)
+        XCTAssertEqual(app.staticTexts["mappingZSource"].label, "Z · из DXF")
+        XCTAssertEqual(Double((app.textFields["mappingX"].value as? String ?? "").replacingOccurrences(of: ",", with: ".")) ?? .nan, 5, accuracy: 0.05)
+        XCTAssertEqual(Double((app.textFields["mappingY"].value as? String ?? "").replacingOccurrences(of: ",", with: ".")) ?? .nan, 0, accuracy: 0.05)
+        enter("mappingZ", value: "349.125", app: app, replacing: true)
+        XCTAssertEqual(app.staticTexts["mappingZSource"].label, "Z · вручную")
+        app.buttons["selectHorizonPlan"].tap()
+        XCTAssertTrue(canvas.waitForExistence(timeout: 10))
+        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.6, dy: 0.5)).tap()
+        XCTAssertTrue(app.buttons["planElevationChoice"].waitForExistence(timeout: 5))
+        app.buttons["confirmPlanXY"].tap()
+        XCTAssertTrue(app.buttons["selectHorizonPlan"].waitForExistence(timeout: 5))
+        reveal(app.textFields["mappingZ"], app: app, down: true)
+        app.textFields["mappingZ"].tap()
+        XCTAssertEqual(app.textFields["mappingZ"].value as? String, "349.125")
+    }
+
     @MainActor private func heading(_ title: String, app: XCUIApplication) -> XCUIElement {
         app.staticTexts.matching(NSPredicate(format: "label ==[c] %@", title)).firstMatch
     }
@@ -248,7 +291,9 @@ final class P2MappingUITests: XCTestCase {
         let button = app.buttons["manage-\(picker)"]; XCTAssertTrue(button.waitForExistence(timeout: 10)); button.tap()
         let id = picker == "horizonPicker" ? "contextElevation" : "contextName"
         XCTAssertTrue(app.textFields[id].waitForExistence(timeout: 5)); enter(id, value: value, app: app)
-        app.buttons["saveContext"].tap(); XCTAssertTrue(button.waitForExistence(timeout: 5))
+        app.buttons["saveContext"].tap()
+        if picker == "horizonPicker" { app.buttons["Закрыть"].tap() }
+        XCTAssertTrue(button.waitForExistence(timeout: 5))
     }
     @MainActor private func select(_ picker: String, value: String, app: XCUIApplication) { app.buttons[picker].tap(); app.buttons[value].tap() }
     @MainActor private func enter(_ id: String, value: String, app: XCUIApplication, replacing: Bool = false) {

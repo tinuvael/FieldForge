@@ -74,7 +74,7 @@ final class DXFRealTests: XCTestCase {
         for c in Self.controls {
             let bytes = try Self.data(c.level)
             let plan = try files.stage(data: bytes, filename: "horizon_\(c.level)_3d.dxf", horizonID: w.context.horizonID!,
-                version: "original", units: .meters, crs: "synthetic local", axes: "X/Y plan; Z up")
+                version: "original-\(c.level)", units: .meters, crs: "synthetic local level \(c.level)", axes: "X/Y plan; Z up")
             try w.registerPlan(plan); files.complete(plan); plans.append(plan)
             XCTAssertEqual(try files.read(plan), bytes)
             let drawing = try DXFDocument.parse(files.read(plan))
