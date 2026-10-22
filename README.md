@@ -127,6 +127,11 @@ auditors are not routine task checklists. Existing CI remains applicable. DXF 10
 benchmarks require `FIELD_FORGE_DXF_BENCHMARKS=1` and a relevant performance change or
 failure. See [AGENTS.md](AGENTS.md) for the testing policy.
 
+The opt-in [A2 storage baseline](docs/storage-performance-baseline.md) generates
+synthetic schema-8 journals with 100/1,000/5,000 points entirely in temporary
+storage: `FIELD_FORGE_STORAGE_BENCHMARKS=1 swift test -c release --filter MappingStorageBenchmarkTests`.
+It reports storage/validation/query timings without changing application behavior.
+
 Synthetic underground survey tests generate their DXF streams in memory from a
 compact coordinate resource and verify the original manifest hashes on macOS and
 iOS. No large generated survey DXFs are committed or required before running tests.
