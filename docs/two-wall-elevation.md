@@ -75,10 +75,12 @@ Updating the loaded plan recalculates the current proposed point automatically.
 A tap displays X/Y and approximate Z, or «Z недоступна». The single primary
 button «Использовать точку» transfers the point and returns to Mapping. Search
 is always enabled and ambiguity safeguards remain unchanged. Detailed provenance
-stays in plan properties and Mapping's Z-source popover. Manual Z always takes
-priority over a new estimate, without a picker or dialog. Clearing manual Z
-permits automatic filling on the next selection; subsequent automatic selections
-replace previous automatic Z. Reopening a plan never changes saved observations.
+stays in plan properties and Mapping's Z-source popover. Explicit point acceptance
+replaces X/Y and applies available DXF Z with `planGeometry` provenance, including
+over a prior manual value. Subsequent manual edits set `manualOverride`; the next
+explicit DXF selection can replace them again without a picker or dialog. When
+DXF Z is unavailable, manual Z is retained and stale automatic Z is cleared.
+Reopening a plan never changes saved observations.
 
 ## Provenance and historical compatibility
 

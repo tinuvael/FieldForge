@@ -107,18 +107,22 @@ final class PlanElevationSnapTests: XCTestCase {
         reopened.draft.z = "-12"
         try reopened.selectPlanPoint(xy, planID: b.id)
         XCTAssertEqual(reopened.draft.z, "-12")
-        // Every plan selection preserves manual Z, even with historical confirmation flags.
+        XCTAssertEqual(reopened.draft.zOrigin, .manualOverride)
+        XCTAssertNil(reopened.draft.zPlanGeometry)
+        // Explicit point acceptance replaces manual Z without a separate source choice.
         let zb = try XCTUnwrap(PlanElevationSnap.resolve(xy, document: document, plan: b).automatic)
         try reopened.selectPlanPoint(xy, planID: b.id, elevation: zb)
-        XCTAssertEqual(reopened.draft.z, "-12")
-        try reopened.selectPlanPoint(xy, planID: b.id, elevation: zb.confirmed())
-        XCTAssertEqual(reopened.draft.z, "-12"); XCTAssertEqual(reopened.draft.zOrigin, .manualOverride)
-        XCTAssertNil(reopened.draft.zPlanGeometry)
-        reopened.draft.z = ""
-        try reopened.selectPlanPoint(xy, planID: b.id, elevation: zb)
-        XCTAssertEqual(reopened.draft.zPlanGeometry?.planRevision, "B")
+        XCTAssertEqual(reopened.draft.z, "-10"); XCTAssertEqual(reopened.draft.zOrigin, .planGeometry)
+        XCTAssertEqual(reopened.draft.zPlanGeometry, zb)
+        reopened.draft.z = "-15"
+        XCTAssertEqual(reopened.draft.zOrigin, .manualOverride); XCTAssertNil(reopened.draft.zPlanGeometry)
         let nextXY = PlanPoint(x: 7.5, y: 1)
         let nextZ = try XCTUnwrap(PlanElevationSnap.resolve(nextXY, document: document, plan: b).automatic)
+        try reopened.selectPlanPoint(nextXY, planID: b.id, elevation: nextZ)
+        XCTAssertEqual(reopened.draft.x, "7.5"); XCTAssertEqual(reopened.draft.y, "1")
+        XCTAssertEqual(reopened.draft.z, "10"); XCTAssertEqual(reopened.draft.zOrigin, .planGeometry)
+        XCTAssertEqual(reopened.draft.zPlanGeometry, nextZ)
+        reopened.draft.z = ""
         try reopened.selectPlanPoint(nextXY, planID: b.id, elevation: nextZ)
         XCTAssertEqual(reopened.draft.z, "10"); XCTAssertEqual(reopened.draft.zPlanGeometry, nextZ)
         // Old revision suggestions cannot be applied to a newly chosen plan/XY.

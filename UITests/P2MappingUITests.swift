@@ -60,9 +60,10 @@ final class P2MappingUITests: XCTestCase {
         XCTAssertTrue(app.buttons["selectHorizonPlan"].waitForExistence(timeout: 5))
         reveal(app.textFields["mappingZ"], app: app, down: true)
         app.textFields["mappingZ"].tap()
-        XCTAssertEqual(app.textFields["mappingZ"].value as? String, "349.125")
+        XCTAssertNotEqual(app.textFields["mappingZ"].value as? String, "349.125")
+        XCTAssertEqual(app.buttons["mappingZSource"].label, "DXF · расчётная отметка")
         if app.buttons["Готово"].exists { app.buttons["Готово"].tap() }
-        enter("mappingZ", value: "", app: app, replacing: true)
+        enter("mappingZ", value: "340", app: app, replacing: true)
         app.buttons["selectHorizonPlan"].tap()
         XCTAssertTrue(canvas.waitForExistence(timeout: 10))
         canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()

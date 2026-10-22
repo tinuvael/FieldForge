@@ -431,7 +431,7 @@ struct MappingDraft: Equatable {
         planID = plan.id; xyUnits = file.units.coordinateUnits; xySource = "plan"
         crs = file.crs; axes = file.axes
         coordinateProvenance = "plan \(plan.id.uuidString); revision \(plan.version); SHA-256 \(file.sha256); drawing WCS XY; user selected; accuracy unknown; \(file.unitDeclaration)"
-        if let elevation, !preservesElevationOnPlanSelection {
+        if let elevation {
             z = ElevationInput.text(elevation.elevationMeters)
             zOrigin = .planGeometry; zPlanGeometry = elevation
         }
@@ -451,9 +451,6 @@ struct MappingDraft: Equatable {
         zHorizonID = zOrigin == nil ? nil : horizon?.id
         zHorizonElevation = horizon?.elevationMeters
         zDatum = zOrigin == nil ? nil : horizon?.elevationDatum
-    }
-    var preservesElevationOnPlanSelection: Bool {
-        !z.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (zOrigin == .manualOverride || zOrigin == nil)
     }
     var hasChanges: Bool {
         !photos.isEmpty || !photoSessions.isEmpty || ![picket, chainageOriginAndDirection, x, y, crs, axes, coordinateProvenance, notes].allSatisfy(\.isEmpty) ||

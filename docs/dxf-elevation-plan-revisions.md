@@ -107,11 +107,13 @@ or changes the managed file declaration. Historical imports remain readable.
 A tap immediately resolves approximate Z with the unchanged nearest-segment
 algorithm. The point screen shows XY, approximate Z or «Z недоступна» and one
 «Использовать точку» action, returning to Mapping without another dialog.
-Ambiguous geometry remains unavailable; no source picker can bypass it. Manual
-Z always survives subsequent point selections (including correction drafts).
-Explicitly clearing it permits automatic Z on the next tap. Without a manual
-override, a new tap replaces automatic Z or clears it if unavailable. Detailed
-provenance remains available from Mapping and plan properties.
+Ambiguous geometry remains unavailable; no source picker can bypass it. Explicit
+point acceptance replaces X/Y and any prior Z with an available DXF estimate,
+setting `planGeometry` (including correction drafts). Subsequent manual edits set
+`manualOverride`; the next explicit DXF point selection replaces manual Z again
+when an estimate is available. If unavailable, manual Z is retained while stale
+automatic Z is cleared. Detailed provenance remains available from Mapping and
+plan properties.
 
 Mapping and the correction editor use one editable Z row with a trailing «DXF»,
 «Горизонт» or «Вручную», from the actual `ElevationOrigin`. Empty/invalid Z has no
