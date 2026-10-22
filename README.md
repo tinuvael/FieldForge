@@ -122,6 +122,11 @@ xcodebuild -project FieldForge.xcodeproj -scheme FieldForge \
   -derivedDataPath /tmp/FieldForge-DerivedData CODE_SIGNING_ALLOWED=NO test
 ```
 
+Synthetic underground survey tests generate their DXF streams in memory from a
+compact coordinate resource and verify the original manifest hashes on macOS and
+iOS. No large generated survey DXFs are committed or required before running tests.
+For standalone DXFs and independent audits, see [survey reproduction](docs/underground-survey-z-verification.md#reproduction).
+
 Set `DEVELOPER_DIR` to a supported Xcode installation when necessary. Project generation uses Python 3 only and is deterministic. Machine-local signing overrides belong in ignored `Config/LocalSigning.xcconfig` (`DEVELOPMENT_TEAM = your Team`), optionally included by `Config/Signing.xcconfig`; they survive regeneration. Identifier and deployment settings remain unchanged. Core tests run via Swift Package Manager on macOS; managed-plan/photo integrity uses system CryptoKit and photo decoding uses ImageIO, while UI and Core Motion use Apple SDKs. Linux plan-store builds are not qualified. Debug UI tests use separate journals and UUID-scoped mapping/plan/photo stores, never physical-device journals.
 
 ```text

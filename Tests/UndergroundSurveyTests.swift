@@ -22,7 +22,10 @@ final class UndergroundSurveyTests: XCTestCase {
         #endif
         return try Data(contentsOf: XCTUnwrap(bundle.url(forResource: "Fixtures", withExtension: nil)).appendingPathComponent(name))
     }
-    private func bytes(_ level: Int) throws -> Data { try resource("underground_survey_\(level).dxf") }
+    private func bytes(_ level: Int) throws -> Data {
+        try UndergroundSurveyFixture.bytes(level: level, geometry: resource("underground_surveys_geometry.json"),
+                                          manifest: resource("underground_surveys_manifest.json"))
+    }
     private struct Control {
         let name: String, point: PlanPoint, z: Double, layer: String, handle: String, index: Int
         let a: DXFVertex, b: DXFVertex, t: Double, distance: Double, projected: PlanPoint, status: String

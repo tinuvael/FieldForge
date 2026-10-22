@@ -215,10 +215,14 @@ controls. For example at x=25, two 100 m ramp walls provide Z1=105 and Z2=120;
 curved diagonal control Q1=(17,7), Q2=(14,10), d1=2√2, d2=√2 and Z1=17,Z2=26
 must give **23**.
 
-`audit_two_wall_elevations.py` independently reads committed DXF group-code pairs,
+`audit_two_wall_elevations.py` independently reads hash-pinned DXF group-code pairs,
 selects explicitly known fixture routes, and calculates 45 floor controls using
 50-digit Decimal arithmetic. It imports neither the production service nor the
-fixture generator. The older 90 controls audit **individual nearest-wall
+fixture generator. By default a subprocess creates the source DXFs in a temporary
+directory, verifies the original manifest hashes and removes them after the audit;
+`--dxf-dir` can select existing DXFs. SwiftPM/Xcode reconstruct identical DXFs from
+the compact coordinate resource without Python; see [fixture reproduction](underground-survey-z-verification.md#reproduction).
+The older 90 controls audit **individual nearest-wall
 projections**; “interior” in those names refers to segment parameters, and some
 points are outside the excavation. They must not be reused as across-floor Z.
 The new CSV constructs interior cross-wall samples and includes the three original

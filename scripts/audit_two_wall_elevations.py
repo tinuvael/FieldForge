@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Independent Decimal reference controls from committed XYZ DXF records.
+"""Independent Decimal reference controls from hash-pinned XYZ DXF records.
 
 No FieldForge/generator imports. Explicit fixture layer selection is an oracle,
-not the production wall-identification algorithm. --check never writes.
+not the production wall-identification algorithm. --check never writes controls.
 """
+import argparse
 import csv
 import io
-import sys
 from decimal import Decimal as D, localcontext
 from pathlib import Path
+from survey_fixture_directory import survey_fixture_directory
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / 'Tests' / 'Fixtures'
@@ -49,13 +50,13 @@ def project(wall, point):
     return min(answers)
 
 
-def generate():
+def generate(dxf_directory):
     output = io.StringIO(newline='')
     writer = csv.writer(output, lineterminator='\n')
     writer.writerow(['level', 'case', 'x', 'y', 'wall1_handle', 'wall1_segment', 'wall1_z', 'wall1_distance',
                      'wall2_handle', 'wall2_segment', 'wall2_z', 'wall2_distance', 'expected_z'])
     for level in [500, 600, 700]:
-        walls = read_walls(FIXTURES / f'underground_survey_{level}.dxf')
+        walls = read_walls(dxf_directory / f'underground_survey_{level}.dxf')
         controls = list(csv.DictReader((FIXTURES / f'underground_survey_{level}_controls.csv').open()))
         for c in controls:
             if not (c['case'].startswith(('main_', 'ramp_')) or c['case'] == 'wide_main_center'):
@@ -87,11 +88,15 @@ def generate():
 
 
 if __name__ == '__main__':
-    with localcontext() as context:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--check', action='store_true')
+    parser.add_argument('--dxf-dir', type=Path, help='Audit existing DXFs instead of generating temporary files')
+    args = parser.parse_args()
+    with survey_fixture_directory(args.dxf_dir) as fixtures, localcontext() as context:
         context.prec = 50
-        expected = generate()
+        expected = generate(fixtures)
     target = FIXTURES / 'two_wall_elevation_controls.csv'
-    if '--check' in sys.argv:
+    if args.check:
         if target.read_bytes() != expected:
             raise SystemExit('Two-wall reference controls differ')
     else:

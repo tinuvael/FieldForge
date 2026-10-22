@@ -9,7 +9,7 @@ or production data are changed by this fixture addition.
 
 ## Files and geometry
 
-| Fixture in `Tests/Fixtures/` | Main horizontal length | Branches | Open 3D polylines | Vertices | Actual floor Z range (m) |
+| Generated fixture (not committed) | Main horizontal length | Branches | Open 3D polylines | Vertices | Actual floor Z range (m) |
 | --- | ---: | ---: | ---: | ---: | --- |
 | `underground_survey_500.dxf` | 300 m | 4 | 14 | 528 | 488.825011127 … 513.330660000 |
 | `underground_survey_600.dxf` | 325 m | 5 | 17 | 653 | 583.203641696 … 614.339270467 |
@@ -51,8 +51,11 @@ its mouth, so left/right lengths differ slightly from centerline lengths.
 
 The generator has **no external dependencies** and uses fixed seeds, handles and
 nine-decimal source vertices. Those decimals support reproducibility and testing;
-they are not a survey-accuracy claim. It writes only these named synthetic fixtures,
-controls, manifest and SVGs; `--check` never writes.
+they are not a survey-accuracy claim. Its default output is the compact coordinate
+resource `Tests/Fixtures/underground_surveys_geometry.json`, controls, manifest and
+SVGs. Large DXFs are generated on demand and are not tracked. `--check` regenerates
+all products in memory and compares the tracked resources, including the original
+DXF SHA-256 values in the manifest; it never writes repository files.
 
 ```sh
 python3 scripts/generate_underground_surveys.py
@@ -65,6 +68,26 @@ The checked-in manifest records source hashes, counts, Z extrema and control
 outcomes. Literal SHA-256/count controls also live in `UndergroundSurveyTests.swift`.
 The existing original-owner DXFs and their independent tests remain unchanged.
 
+SwiftPM and Xcode tests reconstruct the full ASCII DXF streams in memory from the
+coordinate resource using `UndergroundSurveyFixture`. Coordinates stay lexical
+strings, so no platform-specific floating-point formatting changes their bytes.
+Every reconstruction must match the committed manifest SHA-256 before use; the
+original literal hashes and all geometry/control assertions remain in the tests.
+No Python installation, network, pre-test command or writable source/resource
+directory is needed on macOS or iOS. Both build systems still copy `Fixtures`;
+the generated Xcode project includes the test-only writer. The app does not bundle
+these resources.
+
+To obtain actual DXFs for import or an external audit, choose an output directory:
+
+```sh
+python3 scripts/generate_underground_surveys.py --dxf-dir /tmp/fieldforge-surveys
+```
+
+This mode writes only the three DXFs and leaves all tracked controls/resources
+untouched. Repeating it produces identical bytes. The old fixture paths are
+ignored to prevent accidental recommits.
+
 For an independent audit, use a disposable environment; ezdxf is a developer-only
 parser dependency, never an app/generator/Swift-test dependency:
 
@@ -75,10 +98,17 @@ python3 -m venv /tmp/ff-survey-audit
 ```
 
 The generator's oracle resolves nearest segments through unit-tangent/normal
-coordinates, separately from the app. The auditor reads **committed DXF bytes**
-with ezdxf 1.4.4 and checks the CSV using 50-digit Decimal projection, without
+coordinates, separately from the app. The auditor generates DXFs through a subprocess
+in an automatically cleaned temporary directory, verifies their hashes against the
+committed manifest, then reads the **actual DXF bytes** with ezdxf 1.4.4 and checks
+the CSV using 50-digit Decimal projection, without
 importing the generator or FieldForge. Raw handle uniqueness is checked before
 parsing; audit errors/fixes and proper wall crossings must all be zero.
+Both audit scripts also accept `--dxf-dir /tmp/fieldforge-surveys` to inspect
+existing files; missing files or mismatched hashes fail instead of substituting
+new geometry. Their numerical oracles do not import generator or app code. The
+90 single-wall CSV controls, 45 independent two-wall Decimal controls, manifest
+and previews retain their original bytes.
 
 ## Control-point contract
 

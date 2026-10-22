@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""Independent audit of committed bytes: ezdxf==1.4.4 + Decimal (50 digits).
+"""Independent audit of hash-pinned generated DXFs: ezdxf==1.4.4 + Decimal (50 digits).
 Developer-only dependency, not required by generator, Swift tests or the app.
 python3 -m venv /tmp/ff-dxf && /tmp/ff-dxf/bin/pip install ezdxf==1.4.4
 /tmp/ff-dxf/bin/python scripts/audit_underground_surveys.py
 """
+import argparse
 import csv
 from decimal import Decimal as D, getcontext
 import hashlib
 import json
 from pathlib import Path
 import ezdxf
+from survey_fixture_directory import survey_fixture_directory
 
 getcontext().prec = 50
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,8 +29,8 @@ def cross(a, b, c):
     return (b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0])
 
 
-def audit(level):
-    path = ROOT / f'Tests/Fixtures/underground_survey_{level}.dxf'
+def audit(level, dxf_directory):
+    path = dxf_directory / f'underground_survey_{level}.dxf'
     data = path.read_bytes()
     # Detect duplicate handles before ezdxf could replace a duplicate silently.
     lines = data.decode('ascii').splitlines()
@@ -84,4 +86,8 @@ def audit(level):
 
 
 if __name__ == '__main__':
-    print(json.dumps({str(level): audit(level) for level in [500,600,700]}, indent=2, sort_keys=True))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--dxf-dir', type=Path, help='Audit existing DXFs instead of generating temporary files')
+    args = parser.parse_args()
+    with survey_fixture_directory(args.dxf_dir) as fixtures:
+        print(json.dumps({str(level): audit(level, fixtures) for level in [500,600,700]}, indent=2, sort_keys=True))
