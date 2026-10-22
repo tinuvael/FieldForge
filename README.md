@@ -1,8 +1,6 @@
 # FieldForge
 
-DXF elevation search now uses a cached XY BVH with an expanding local query. Distant walls and drawing-wide segment counts no longer prevent an automatic result; 10,000/100,000-segment stress controls verify the same local two-wall Z. See [search strategy and performance](docs/two-wall-elevation.md#local-search-verification).
-
-DXF plan taps now interpolate floor **Z from two corresponding excavation walls**, preserving exact tap X/Y. Open/curved/ramp walls and widths beyond 5 m are supported; ambiguous intersections and overlapping levels require highlighted wall confirmation or manual Z. The inline Z source opens both wall elevations/distances. A nominal horizon is never used as plan-tap elevation. See [algorithm, limits and verification](docs/two-wall-elevation.md).
+DXF plan taps propose **approximate Z from the nearest eligible 3D segment and the nearest segment of a different polyline**, using the cached XY BVH and inverse-distance interpolation. A single nearby source is explicitly approximate. The plan shows X/Y, approximate Z, «DXF · расчётная отметка» and «Подтвердить X/Y/Z» or «Подтвердить X/Y». Unknown units can be confirmed immediately at the point; the proposal recalculates without another tap. Manual Z requires explicit replacement. Exact XY, original DXF SHA-256, revisions and historical two-wall provenance remain intact. See [algorithm, thresholds and compatibility](docs/two-wall-elevation.md).
 
 Synthetic underground surveys **500 / 600 / 700** include 90 individual-wall projection controls and 45 independently calculated two-wall floor controls, reproducible generation and plan/ramp previews. See [fixtures](docs/underground-survey-z-verification.md).
 
@@ -110,17 +108,24 @@ The current icon uses the owner-supplied faceted compass artwork. Its original m
 
 Open `FieldForge.xcodeproj`, select the shared **FieldForge** scheme and an installed iPhone simulator. Run with ⌘R, test with ⌘U. On a physical phone select your Team locally with automatic signing and retain the existing identifier. Never commit signing assets or device data. Deployment/debugging requires a toolchain that supports the selected device OS; simulator builds do not prove physical compatibility.
 
+For routine feature work, run one focused test selection and one Simulator build:
+
 ```sh
+# Regenerate only when source/resource inventory or generator settings change.
 python3 scripts/generate_project.py
-swift test
-xcrun simctl list devices available
+swift test --filter 'PlanElevationSnapTests|TwoWallElevationTests|PlanRevisionManagementTests'
 xcodebuild -project FieldForge.xcodeproj -scheme FieldForge \
-  -destination 'platform=iOS Simulator,id=<available-device-UUID>' \
+  -destination 'generic/platform=iOS Simulator' \
   -derivedDataPath /tmp/FieldForge-DerivedData CODE_SIGNING_ALLOWED=NO build
-xcodebuild -project FieldForge.xcodeproj -scheme FieldForge \
-  -destination 'platform=iOS Simulator,id=<available-device-UUID>' \
-  -derivedDataPath /tmp/FieldForge-DerivedData CODE_SIGNING_ALLOWED=NO test
 ```
+
+Choose the test filter for the affected feature. Add focused checks for actual failures;
+do not rerun a passing suite without a code change or unresolved failure. Full SwiftPM,
+Simulator core/UI regression and manual acceptance campaigns are for releases, major
+architecture/storage changes or explicit requests. Historical reports and optional
+auditors are not routine task checklists. Existing CI remains applicable. DXF 10k/100k
+benchmarks require `FIELD_FORGE_DXF_BENCHMARKS=1` and a relevant performance change or
+failure. See [AGENTS.md](AGENTS.md) for the testing policy.
 
 Synthetic underground survey tests generate their DXF streams in memory from a
 compact coordinate resource and verify the original manifest hashes on macOS and

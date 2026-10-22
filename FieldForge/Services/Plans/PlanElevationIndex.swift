@@ -80,7 +80,10 @@ final class PlanElevationIndex {
     var segmentCount: Int { tree.order.count }
     init(segments: [DXFElevationSegment]) {
         self.segments = segments
-        let valid = segments.indices.filter { segments[$0].projection(segments[$0].a.xy) != nil }
+        let valid = segments.indices.filter {
+            ["LINE", "POLYLINE", "LWPOLYLINE"].contains(segments[$0].entityType)
+                && segments[$0].projection(segments[$0].a.xy) != nil
+        }
         let boxes = segments.map(Box.init)
         tree = Tree(indices: valid, boxes: boxes)
         let groups = Dictionary(grouping: valid, by: { segments[$0].wallID })

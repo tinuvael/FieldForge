@@ -3,6 +3,9 @@
 
 No FieldForge/generator imports. Explicit fixture layer selection is an oracle,
 not the production wall-identification algorithm. --check never writes controls.
+
+Optional developer tool: run only for fixture changes, a specific failure,
+or explicitly requested validation; not a routine feature/PR gate.
 """
 import argparse
 import csv

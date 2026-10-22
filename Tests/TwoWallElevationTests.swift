@@ -6,6 +6,35 @@ import XCTest
 #endif
 
 final class TwoWallElevationTests: XCTestCase {
+    static func historicalPair(_ point: PlanPoint, walls: [String], document: DXFDocument,
+                               plan: MappingPlanReference) -> PlanGeometryElevation? {
+        guard walls.count == 2, let factor = PlanElevationSnap.metersPerUnit(plan),
+              let a = document.elevationIndex.nearest(point, wallID: walls[0]),
+              let b = document.elevationIndex.nearest(point, wallID: walls[1]),
+              let p = a.projection(point), let q = b.projection(point) else { return nil }
+        return PlanGeometryElevation(method: PlanGeometryElevation.twoWallVersion,
+            planID: plan.id, planRevision: plan.version, planSHA256: plan.file!.sha256,
+            segment: a, selectedXY: point, parameter: p.t, distanceMeters: p.distance * factor,
+            elevationMeters: (p.z * q.distance + q.z * p.distance) / (p.distance + q.distance) * factor,
+            metersPerDrawingUnit: factor, unitDeclaration: plan.elevationUnitDeclaration,
+            policy: PlanElevationSnapPolicy(), secondWall: PlanElevationWallSample(segment: b,
+                parameter: q.t, distanceMeters: q.distance * factor, elevationMeters: q.z * factor), confirmedByUser: true)
+    }
+    func testHistoricalTwoWallAndSingleSegmentRecordsRemainReadableWithoutNewPolicyFields() throws {
+        let (doc, plan) = try source(ramp), xy = PlanPoint(x: 25, y: 2)
+        let historical = try XCTUnwrap(Self.historicalPair(xy, walls: doc.elevationSegments.map(\.wallID), document: doc, plan: plan))
+        let data = try JSONEncoder().encode(historical)
+        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("searchRadiusMeters"))
+        let reopened = try JSONDecoder().decode(PlanGeometryElevation.self, from: data)
+        XCTAssertEqual(reopened, historical); try reopened.validate(plan: plan)
+        XCTAssertEqual(reopened.elevationMeters, 108); XCTAssertTrue(reopened.isTwoWall)
+        let p = doc.elevationSegments[0].projection(xy)!
+        let single = PlanGeometryElevation(planID: plan.id, planRevision: plan.version, planSHA256: plan.file!.sha256,
+            segment: doc.elevationSegments[0], selectedXY: xy, parameter: p.t, distanceMeters: p.distance,
+            elevationMeters: p.z, metersPerDrawingUnit: 1, unitDeclaration: plan.elevationUnitDeclaration,
+            policy: PlanElevationSnapPolicy())
+        try JSONDecoder().decode(PlanGeometryElevation.self, from: JSONEncoder().encode(single)).validate(plan: plan)
+    }
     private func wall(_ vertices: [(Double, Double, Double)], layer: String = "0") -> String {
         "0\nPOLYLINE\n8\n\(layer)\n70\n8\n" + vertices.map {
             "0\nVERTEX\n70\n32\n10\n\($0.0)\n20\n\($0.1)\n30\n\($0.2)\n"
@@ -29,9 +58,9 @@ final class TwoWallElevationTests: XCTestCase {
         // x=25: Z1=105, Z2=120. Across 10 m, z=105+1.5*y.
         for (y, expected) in [(0.0, 105.0), (2, 108), (5, 112.5), (8, 117), (10, 120)] {
             let hit = try XCTUnwrap(result(ramp, 25, y).automatic)
-            XCTAssertEqual(hit.isTwoWall, y > 0 && y < 10)
+            XCTAssertEqual(hit.secondWall != nil, y > 0 && y < 10)
             XCTAssertEqual(hit.elevationMeters, expected, accuracy: 1e-12)
-            if hit.isTwoWall {
+            if hit.secondWall != nil {
                 XCTAssertEqual(Set([hit.firstWallElevationMeters, try XCTUnwrap(hit.secondWall?.elevationMeters)]), Set([105, 120]))
             }
             XCTAssertEqual(hit.selectedXY, PlanPoint(x: 25, y: y))
@@ -54,15 +83,13 @@ final class TwoWallElevationTests: XCTestCase {
         XCTAssertEqual(hit.secondWall?.distanceMeters, 10)
         let short = wall([(0, 0, 10), (10, 0, 10)]) + wall([(0, 1000, 30), (10, 1000, 30)])
         let distant = try result(short, 5, 500)
-        XCTAssertNil(distant.automatic); XCTAssertTrue(distant.requiresChoice)
-        XCTAssertEqual(distant.candidates.first?.elevationMeters, 20)
+        XCTAssertNil(distant.automatic); XCTAssertTrue(distant.candidates.isEmpty)
         XCTAssertNil(try result(wide, 500, 10).automatic) // Beyond the open dead end.
     }
     func testVeryDistantLongWallsNeedConfirmationAndMillimeterSectionsUseMetricReviewGuard() throws {
         let huge = wall([(0, 0, 10), (10000, 0, 10)]) + wall([(0, 1000, 30), (10000, 1000, 30)])
         let r = try result(huge, 5000, 500)
-        XCTAssertNil(r.automatic); XCTAssertTrue(r.requiresChoice)
-        XCTAssertEqual(r.candidates.first?.elevationMeters, 20)
+        XCTAssertNil(r.automatic); XCTAssertTrue(r.candidates.isEmpty)
         // Millimetre drawing: a 20 m section, at 25 m chainage, z1=105,z2=120.
         let text = wall([(0, 0, 100000), (100000, 0, 120000)]) + wall([(0, 20000, 110000), (100000, 20000, 150000)])
         let bytes = DXFFixtures.drawing(text, units: 4), doc = try DXFDocument.parse(bytes)
@@ -74,11 +101,11 @@ final class TwoWallElevationTests: XCTestCase {
         XCTAssertEqual(hit.secondWall?.distanceMeters, 16); try hit.validate(plan: plan)
         XCTAssertEqual(hit.selectedXY, PlanPoint(x: 25000, y: 4000))
     }
-    func testCoincidentWallLevelsBelowOldHalfMeterThresholdStillRequireChoice() throws {
-        let walls = wall([(0, 0, 100), (100, 0, 100)]) + wall([(0, 0, 100.1), (100, 0, 100.1)])
-        let r = try result(walls, 50, 0)
-        XCTAssertTrue(r.requiresChoice); XCTAssertNil(r.automatic)
-        XCTAssertEqual(r.candidates.map(\.elevationMeters), [100, 100.1])
+    func testSubstantiallyDifferentCoincidentLevelsAreRejectedButSmallDifferencesAreAllowed() throws {
+        let a = wall([(0, 0, 100), (100, 0, 100)])
+        XCTAssertNotNil(try result(a + wall([(0, 0, 100.1), (100, 0, 100.1)]), 50, 0).automatic)
+        let r = try result(a + wall([(0, 0, 101), (100, 0, 101)]), 50, 5)
+        XCTAssertNil(r.automatic); XCTAssertTrue(r.candidates.isEmpty)
     }
     func testVariableWidthUsesActualDistancesAndIndependentWallProjection() throws {
         let a = wall([(0, 0, 0), (100, 0, 0)])
@@ -96,18 +123,20 @@ final class TwoWallElevationTests: XCTestCase {
         wall([(-5, 10, 100), (-5, 60, 110)], layer: "ACCESS_LEFT") +
         wall([(5, 10, 102), (5, 60, 112)], layer: "ACCESS_RIGHT")
     }
-    func testAccessDriveAndTJunctionRequireLocalSectionOrConfirmation() throws {
-        // y=35: walls Z=105 and107, midway gives106.
-        let access = try XCTUnwrap(result(junction, 0, 35).automatic)
-        XCTAssertEqual(access.elevationMeters, 106, accuracy: 1e-12)
-        XCTAssertEqual(access.segment.layer, "ACCESS_LEFT")
-        let mouth = try result(junction, 0, 10)
-        XCTAssertNil(mouth.automatic)
-        let (doc, plan) = try source(junction)
-        let walls = doc.elevationSegments.filter { $0.layer?.hasPrefix("ACCESS_") == true }.map(\.wallID)
-        let confirmed = try XCTUnwrap(PlanWallSection.confirmedPair(PlanPoint(x: 0, y: 10), walls: walls, document: doc, plan: plan))
-        XCTAssertEqual(confirmed.elevationMeters, 101); XCTAssertEqual(confirmed.confirmedByUser, true)
-        XCTAssertNil(try result(junction, 0, 80).automatic)
+    func testTJunctionAndShortFragmentsDoNotRequireTransverseSectionOrContinuation() throws {
+        XCTAssertEqual(try result(junction, 0, 35).automatic?.elevationMeters, 106)
+        // At the mouth ACCESS_RIGHT shares XY with MAIN_LEFT_2 but differs by 2 m.
+        XCTAssertNil(try result(junction, 0, 10).automatic)
+        let perpendicular = wall([(0, 0, 10), (4, 0, 10)]) + wall([(5, 1, 12), (5, 4, 12)])
+        XCTAssertEqual(try result(perpendicular, 4, 1).automatic?.elevationMeters, 11)
+    }
+    func testAdjacentSegmentsOfSamePolylineAreOneSource() throws {
+        let a = wall([(0, 0, 100), (5, 0, 105), (10, 0, 110)])
+        let hit = try XCTUnwrap(result(a + wall([(0, 10, 110), (10, 10, 120)]), 5, 1).automatic)
+        XCTAssertNotEqual(hit.segment.wallID, hit.secondWall?.segment.wallID)
+        XCTAssertEqual(hit.elevationMeters, 106)
+        let single = try XCTUnwrap(result(a, 5, 1).automatic)
+        XCTAssertNil(single.secondWall); XCTAssertEqual(single.elevationMeters, 105)
     }
     func testParallelExcavationsAndRockGapDoNotCrossPairAutomatically() throws {
         let rails = wall([(0, 0, 100), (100, 0, 100)], layer: "A_LEFT") + wall([(0, 10, 110), (100, 10, 110)], layer: "A_RIGHT") +
@@ -125,20 +154,15 @@ final class TwoWallElevationTests: XCTestCase {
         XCTAssertNil(try result(lower + upper, 50, 5).automatic)
         let cross = wall([(45, -50, 200), (45, 50, 200)]) + wall([(55, -50, 210), (55, 50, 210)])
         XCTAssertNil(try result(lower + cross, 50, 5).automatic)
-        let (doc, plan) = try source(lower + upper)
-        let chosen = try XCTUnwrap(PlanWallSection.confirmedPair(PlanPoint(x: 50, y: 5), walls: Array(doc.elevationSegments.prefix(2).map(\.wallID)), document: doc, plan: plan))
-        XCTAssertEqual(chosen.elevationMeters, 105); try chosen.validate(plan: plan)
     }
     func testSingleWallIsExplicitEstimateAndInvalidOrMissingZNeverInventsElevation() throws {
         let single = try XCTUnwrap(result(wall([(0, 0, 0), (100, 0, 20)]), 25, 1).automatic)
         XCTAssertFalse(single.isTwoWall); XCTAssertEqual(single.elevationMeters, 5)
-        XCTAssertTrue(single.sourceLabel.contains("1 стена")); XCTAssertTrue(single.sourceLabel.contains("≈"))
+        XCTAssertEqual(single.sourceLabel, "DXF · расчётная отметка"); XCTAssertTrue(single.sourceDetails.contains("одному сегменту"))
         XCTAssertNil(try result(wall([(0, 0, 0), (100, 0, 20)]), 25, 50).automatic)
         let invalid = "0\nLINE\n10\n0\n20\n0\n11\n100\n21\n0\n"
         XCTAssertTrue(try result(invalid, 25, 1).candidates.isEmpty)
         XCTAssertThrowsError(try source(wall([(0, 0, .nan), (100, 0, 20)])))
-        let (doc, plan) = try source(ramp)
-        XCTAssertNil(PlanWallSection.confirmedPair(PlanPoint(x: 25, y: -20), walls: doc.elevationSegments.map(\.wallID), document: doc, plan: plan))
     }
     func testTwoWallSaveReopenManualCorrectionAndTamperedProvenance() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

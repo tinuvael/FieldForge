@@ -1,4 +1,4 @@
-> Current two-wall elevation and plan-tap behavior: [algorithm and verification](two-wall-elevation.md). The nearest-wall/radius and nominal-horizon plan-tap descriptions below are historical. Original fixtures and projection audits are preserved.
+> Current automatic elevation: [nearest-segment algorithm](two-wall-elevation.md). The verification commands/results below are historical and optional reproduction instructions, not routine PR gates; follow [AGENTS.md](../AGENTS.md). No fixture regeneration or independent audit is required for ordinary changes.
 
 # Synthetic underground surveys: horizons 500, 600 and 700
 

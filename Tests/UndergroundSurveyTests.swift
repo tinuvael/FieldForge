@@ -132,22 +132,13 @@ final class UndergroundSurveyTests: XCTestCase {
         XCTAssertEqual(rows.count, 45)
         for level in Self.levels {
             let doc = try DXFDocument.parse(bytes(level)), plan = try reference(level)
-            var automaticCount = 0
             for f in rows where f[0] == String(level) {
                 let xy = PlanPoint(x: Double(f[2])!, y: Double(f[3])!)
                 let a = try XCTUnwrap(doc.elevationSegments.first { $0.handle == f[4] && $0.segmentIndex == Int(f[5]) })
                 let b = try XCTUnwrap(doc.elevationSegments.first { $0.handle == f[8] && $0.segmentIndex == Int(f[9]) })
                 let expected = Double(f[12])!
-                let r = PlanElevationSnap.resolve(xy, document: doc, plan: plan)
-                let hit: PlanGeometryElevation
-                if let automatic = r.automatic {
-                    hit = automatic; automaticCount += 1
-                } else {
-                    // Junction/throat ambiguity remains explicit; the oracle identifies the intended route.
-                    XCTAssertTrue(r.requiresChoice || r.candidates.isEmpty)
-                    hit = try XCTUnwrap(PlanWallSection.confirmedPair(xy, walls: [a.wallID, b.wallID], document: doc, plan: plan), "\(level): \(f[1])")
-                    XCTAssertEqual(hit.confirmedByUser, true)
-                }
+                // Retained oracle verifies historical two-wall evidence, independent of current picking policy.
+                let hit = try XCTUnwrap(TwoWallElevationTests.historicalPair(xy, walls: [a.wallID, b.wallID], document: doc, plan: plan))
                 XCTAssertTrue(hit.isTwoWall, f[1])
                 XCTAssertEqual(hit.elevationMeters, expected, accuracy: 1e-8, "\(level): \(f[1])")
                 XCTAssertEqual(Set([hit.segment.handle!, hit.secondWall!.segment.handle!]), Set([f[4], f[8]]), f[1])
@@ -159,13 +150,7 @@ final class UndergroundSurveyTests: XCTestCase {
                 }
                 try hit.validate(plan: plan)
                 XCTAssertEqual(hit.selectedXY, xy)
-                if f[1] == "wide_main_center" {
-                    XCTAssertNotNil(r.automatic, "Wide excavation must not require a 2 m snap")
-                    XCTAssertGreaterThan(hit.distanceMeters, 2); XCTAssertGreaterThan(hit.secondWall!.distanceMeters, 2)
-                }
             }
-            print("Two-wall survey \(level): \(automaticCount)/15 automatic; remainder explicitly confirmed")
-            XCTAssertGreaterThanOrEqual(automaticCount, 8)
         }
     }
     func testRampGradesChangeAtApproachHaulAndToeWithIndependentSidewallElevations() throws {

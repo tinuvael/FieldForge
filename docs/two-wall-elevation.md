@@ -1,271 +1,160 @@
-# Two-wall DXF floor elevation
+# Approximate automatic DXF elevation
 
-This supersedes the nearest-segment picking and nominal-horizon fallback described
-in older DXF documents. It does not modify geological classifications, orientation
-algorithms, wedge mechanics, the mapping schema number (8), or measurement-journal
-compatibility. Horizon identifiers and filenames never supply point elevation.
+`PlanElevationSnap` uses `DXF-WCS-nearest-distinct-polyline-IDW/1` for new proposals.
+It replaces strict wall-pair discovery. The existing schema-8 journal, immutable
+observations/revisions, DXF extraction and original SHA-256 are preserved. There
+is no migration, reset, CRS conversion, or rewriting of saved elevations.
 
-## Calculation and coordinate contract
+## Calculation and coordinates
 
-Implementation: `PlanElevationSnap` and `PlanWallSection`, pure Foundation shared
-by SwiftPM and iOS. Method `DXF-WCS-two-wall-section/1` uses explicit WCS endpoint
-XYZ from supported straight LINE/POLYLINE/LWPOLYLINE geometry. Open polylines are
-supported; no artificial closing edge is added. Segment projection is
-`clamp(dot(P-A,B-A)/dot(B-A,B-A),0,1)` in drawing XY; each wall Z is independently
-linearly interpolated using that parameter. The final floor estimate is
-`(Z1*d2+Z2*d1)/(d1+d2)`. An exact wall hit uses that wall's Z, without division by
-zero or an invented second source. A wall hit is recorded as a single-source result.
+1. Query the loaded document's shared XY BVH within the configured search radius.
+   Only finite, supported straight LINE/POLYLINE/LWPOLYLINE elevation segments
+   participate. Missing explicit Z, unsupported OCS/bulge/mesh geometry and
+   zero-length/vertical XY segments cannot provide a height.
+2. Choose the nearest segment, then the nearest segment with a different wall ID.
+   Wall identity is the expanded entity ordinal plus block-instance path, not the
+   filename, layer, handle or vertex spacing. Adjacent segments of one polyline
+   do not supply two independent sources. Stable index ordering resolves ties.
+3. For each source, project P onto segment AB in drawing XY:
+   `t = clamp(dot(P-A,B-A)/dot(B-A,B-A), 0, 1)`.
+   Interpolate `Z = A.z + t*(B.z-A.z)` and calculate the XY distance to the projection.
+4. Convert source elevations and distances to metres using explicitly confirmed
+   drawing units. For two sources use the owner's specified inverse-distance
+   weighting (power 1): `(Z1*d2 + Z2*d1)/(d1+d2)`.
+   An exact segment hit uses that source's Z after the overlap safeguard. If only
+   one eligible polyline is nearby, use its nearest segment's Z and mark the
+   proposal «Приблизительная Z по одному сегменту».
+5. Preserve the exact original selected X/Y in drawing coordinates, without
+   projection, unit conversion or rounding. Z is in metres; its vertical datum
+   stays unknown. All proposals are approximate and require field judgement.
 
-Distances are XY distances, not XYZ distances. All wall Z and distances convert
-to metres using the existing explicitly confirmed metric unit contract. The
-selected X/Y remain the original drawing-space tap, unrounded and unprojected.
-Drawing axes, horizontal CRS and the source hash/revision remain attached; the
-vertical datum remains unknown. No GPS, north/datum conversion, or accuracy claim
-is introduced. Z remains manually editable, with manual override clearing derived
-provenance. On a plan tap without usable Z, a nominal-horizon suggestion is cleared;
-an existing deliberate manual entry or deliberate empty manual value is preserved.
-Historical observations and their nominal-horizon values are never rewritten.
+There are no opposite-side, tangent, transverse-section, continuation, layer-name
+or fixed excavation-width prerequisites, and no manual wall-selection workflow.
+The search does not expand to drawing extents. Overlap checks use at most two
+additional small BVH queries around the chosen projections. No tap scans all
+source segments or rebuilds the index. Dense local geometry can still increase
+query work; no physical-iPhone timing or survey accuracy is claimed.
 
-## Wall correspondence policy and local spatial search
+## Configurable practical safeguards
 
-The distance-weighted expression is applied only after local geometry validation:
+`PlanElevationSnapPolicy` stores metre-valued application thresholds. These are
+picking heuristics, not engineering accuracy, risk or excavation design limits.
 
-1. The loaded `DXFDocument` owns one immutable `PlanElevationIndex`. Its XY
-   bounding-volume hierarchy (BVH) stores complete segment AABBs, not just source
-   vertices or centres. Document value copies share the same index reference;
-   taps do not build indexes or regroup the drawing. Source-wall membership is
-   grouped once by expanded entity ordinal and block-instance path, **not** handle,
-   layer, filename or vertex count. Walls with more than eight segments have an
-   additional per-wall BVH for independent continuation projections.
-2. Find the exact nearest eligible segment using point-to-AABB lower bounds and
-   branch-and-bound traversal. Query a disk initially twice that segment's XY
-   distance, doubling it until a transverse candidate exists or all source bounds
-   have been covered. There is no fixed candidate radius or drawing-wide count
-   cutoff. A discovered section of width W closes the search with an exact 2W
-   disk: this includes every competing section allowed by the 1.5W rule and every
-   extra parallel rail allowed by the 2W rule. Distant geometry outside this local
-   envelope cannot change the result. Query results sort by exact segment distance,
-   entity ordinal, segment index, wall identity and original array index.
-   Deduplicate walls only after that ordering, preserving nearest source positions.
-   Angular bins limit pairing to opposite projection directions; an incumbent
-   minimum width prunes pairs beyond the competitive distance. Adjacent vertices
-   may have different spacing/counts. Non-adjacent, equally close portions of a
-   folded wall prevent automatic acceptance (existing 0.1 m tie allowance).
-   Evaluate pairs of distinct local walls without a 2 m or 5 m candidate radius.
-   Tangents must align within 30 degrees, independent of vertex order. Projection
-   vectors from the tap must oppose within 30 degrees; their connecting section
-   must lie within 30 degrees of perpendicular to **both** local tangents.
-   Zero-width/coincident walls cannot form a pair. This also prevents extrapolation
-   past an open dead end from automatically becoming a transverse floor section.
-3. Reject automatic sections crossing any intervening eligible wall geometry,
-   even when that geometry has a different Z. An indexed chord-AABB query supplies
-   only potentially intersecting segments to the unchanged exact intersection
-   predicate; no pair scans the full segment collection. Collinear overlaps and
-   shared intervening endpoints also block a section. This prevents skipping a nearer
-   boundary to reach another drive or overpass.
-4. Reproject independently on each complete source wall at probe points half a
-   local width forward and backward along the mean tangent. Each must retain a
-   compatible transverse section, a width between half and twice the original
-   width, and no intervening geometry. Missing continuation at a throat, sharp
-   corner or end requires confirmation. Sections wider than 50 m also require
-   confirmation, even with long continuous walls. This is a product review guard,
-   not a maximum excavation width or a candidate search radius; distant geometry
-   remains selectable. Very distant, short walls also fail the support check.
-5. Consider competing sections whose total wall distance is at most 1.5 times
-   the smallest candidate section. More than one requires explicit choice,
-   **even if the resulting elevations agree**. A distinct-height competitor is
-   never silently discarded merely for having the less convenient Z. Wider
-   sections remain available through explicit plan wall selection.
-6. Additional parallel rails within twice the section width may bound intervening
-   rock rather than an excavation. Without correspondence hints this requires
-   confirmation. Optional `route_LEFT` / `route_RIGHT` layer hints can support
-   an otherwise valid pair; conflicting route/side hints require confirmation.
-   Hints never overcome overlap, geometry or competing-section checks, and no
-   naming convention is mandatory. Two isolated unnamed wall polylines work.
+| Setting | Default | Purpose |
+| --- | ---: | --- |
+| `searchRadiusMeters` | 25 m | Both sources must be nearby; do not combine a local source with remote geometry. A lone local source can still supply approximate Z. |
+| `maximumElevationDifferenceMeters` | 25 m | Refuse substantially different levels among selected and equally close competing sources. |
+| `similarDistanceMeters` | 0.1 m | XY overlap neighborhood around each source projection and distance tie allowance. |
+| `distinctElevationMeters` | 0.5 m | Refuse overlapping XY geometry whose interpolated Z range exceeds this value, including self-overlaps of a polyline. |
 
-These dimensionless angles/ratios, numerical XY coincidence tolerance (1e-8
-source units), 50 m review guard and tie policy are **application picking heuristics**,
-not published geological coefficients, survey tolerances or excavation design
-criteria. The former 64-wall cutoff and 2,000,000-operation guard are removed.
-Neither total wall count nor total segment count participates in acceptance.
-The 50 m *section-width review* guard is retained; it does not stop search or
-prevent explicit source selection. Manual wall hit testing uses the same global
-index, and highlighting uses cached per-wall membership rather than full scans.
+All thresholds must be finite and nonnegative. Small consistent elevation
+variations remain eligible. The legacy `toleranceMeters` (2 m) is retained for
+validating old single-segment records only. New optional policy fields decode
+absent in old JSON using the version-1 defaults. Full numerical precision is
+preserved; display formatting is separate.
 
-The BVH uses deterministic longest-axis median splits and at most eight segments
-per leaf. Storage is linear in source segment count, with shared source arrays;
-construction sorts subranges, taking O(N log² N) worst-case work once on the
-existing background DXF-loading path. Typical nearest/disk/chord queries prune
-unrelated nodes; a dense local overlap can still require many exact predicates.
-Worst-case query work is data-dependent, rather than a universal logarithmic or
-physical-iPhone timing guarantee. Local geometric ambiguity still requires review;
-distant source complexity never constitutes ambiguity by itself.
+A DXF cannot establish excavation connectivity or the intended underground level.
+Nearby unrelated geometry with consistent Z can still supply an approximate
+result. The safeguards detect clear distance/height conflicts, without introducing
+another topology classifier. Unavailable/unreliable Z leaves XY confirmation
+available and asks for manual Z in Mapping. A nominal horizon, filename or phone
+GPS never supplies plan-tap Z.
 
-To make an actual 100,000-LINE DXF loadable, the ASCII parser's pair budget is
-raised from 300,000 to 1,000,000 (2,000,000 text lines). The 10 MB source cap,
-200,000 display vertices, 200,000 expanded records, 1,000,000 expansion-work budget,
-and all numeric/geometry validation remain in force. A stress source with 100,000
-segments is 6,100,047 bytes and has exactly 200,000 display vertices. The index is
-transient; it adds no database fields, migration, dependencies or evidence rewrite.
+## Units and field UI
 
-A single isolated wall within the existing 2 m single-source estimate tolerance
-can supply a clearly marked `DXF · 1 стена ≈` estimate. That limit does not restrict
-two-wall candidates. Multiple similar-distance single sources require explicit
-choice. A failed multi-wall pairing never automatically copies the nearest wall.
-Distinct coincident wall elevations require a source choice. Missing endpoint Z,
-unsupported OCS/bulge geometry and XY-degenerate segments cannot invent Z.
+Units explicitly confirmed at import are reused. `$INSUNITS`, when present, must
+agree: metres=6, millimetres=4; missing/0 permits an explicit confirmation, while
+other codes/conflicts cannot silently become metric units.
 
-## Intersections, topology and user review
+For an existing plan with unknown units, the point panel immediately offers
+metres/millimetres and an explicit confirmation button. The existing plan-scoped
+`elevationUnitConfirmation` persists the decision/time; it does not relabel saved
+XY, CRS, the original file or observations. Updating the loaded plan recalculates
+the current proposed point automatically. A contradiction is refused.
 
-A bare DXF wall graph cannot prove mine topology. In particular, multiple parallel
-unlabelled rails cannot distinguish excavation from intervening rock; perfectly
-superposed XY floors cannot establish the intended level. T-junction mouths may
-lack a complete transverse section. These cases require highlighted source review
-or leave Z unknown. This is intentionally conservative rather than a claim of
-universal branch recognition from raw linework. Sharp bends, large width changes,
-short wall fragments and incomplete survey extents can also need confirmation.
+After a tap the primary panel displays X, Y, approximate Z when available,
+«DXF · расчётная отметка» and a brief warning only when needed. The button says
+«Подтвердить X/Y/Z» when applying the proposal, otherwise «Подтвердить X/Y».
+Technical details remain in plan properties and Mapping's Z-source popover.
+A pre-existing manual Z, including deliberate empty input, defaults to preservation.
+Replacing it requires choosing «Заменить ручную Z расчётной» and confirming the
+point. The domain also rejects an unconfirmed automatic replacement. Manual Z
+entry remains in Mapping; no saved observation changes just by reopening a plan.
 
-The plan displays the proposed point at the original XY and highlights the
-selected source walls in cyan. A source picker previews candidate walls, source
-Z and distances. «Указать две стены на плане» lets the user tap the two source
-walls without moving the original point. When sources overlap in plan, a wall
-chooser exposes layer, handle and interpolated Z so the upper/lower source can be
-selected deliberately. User confirmation may override the global overlap and
-continuation checks after review; it **cannot** override opposite-side/local
-transverse validation. Confirming XY with no DXF source leaves unknown Z (or an
-existing manual value). No stable/unstable or engineering confidence label is used.
+## Provenance and historical compatibility
 
-Mapping and correction forms keep one compact trailing provenance button in the
-Z row (`DXF · 2 стены`, a confirmed estimate marked `≈`, or single-wall estimate). Its popover shows both source
-wall elevations/distances; no additional coordinate-information section is added.
+New evidence stores the method version, original plan UUID/revision/SHA-256,
+exact selected XY, source segment XYZ/identity, projection parameters, distances,
+interpolated result, policy and unit declaration/confirmation. `secondWall` remains
+an optional second source field; absence explicitly identifies a single-source
+estimate. Exports retain the complete existing JSON provenance column.
 
-## Persistence and evidence
+`DXF-WCS-XY-segment-projection/1` and `DXF-WCS-two-wall-section/1` keep their original
+validation and source labels. `PlanWallSection.compatible` remains solely to
+validate historical two-wall evidence; automatic discovery and manual pair picking
+were removed. Opening old evidence does not rerun today's neighbor policy.
+Controlled manual corrections retain the original evidence and add a revision.
 
-`PlanGeometryElevation` keeps the existing first segment/parameter/distance and
-now optionally includes `secondWall` (segment XYZ/identity, parameter, distance,
-wall elevation), and `confirmedByUser`. The final `elevationMeters` is the across-
-width result; the first source elevation is reproducible from its segment. Layers
-are optional descriptive segment metadata; the extraction version remains
-`Autodesk-DXF-2018-straight-WCS-blocks/2` because extraction coordinates are unchanged.
-Both source identities remain qualified by the original SHA-256 and plan revision.
+## Lightweight verification
 
-Validation recomputes both projections, the local transverse check and weighted
-Z, rejects a missing second wall for the new method, and retains support for
-historical `DXF-WCS-XY-segment-projection/1` records. Global picking heuristics are
-not rerun when opening evidence: the original hashed plan/source snapshot and
-recorded method remain authoritative for that saved calculation. CSV's existing
-JSON provenance column and technical workbook provenance preserve the complete
-optional source record. Old schema-8 journals decode without rewriting. No mapping
-migration, reset or older-schema support is added. Manual corrections create the
-existing append-only observation revision and retain original derived evidence.
+Routine changes follow [AGENTS.md](../AGENTS.md): one focused automated selection
+and one iOS Simulator build. `TwoWallElevationTests` retains independent arithmetic
+references for straight/asymmetric/curved/unequal-spacing/variable-width sources,
+exact hits, single sources, shared-polyline adjacency, overlaps, levels, short
+fragments, historical evidence and current-journal round trips.
+`PlanElevationSnapTests` and `PlanRevisionManagementTests` cover units, missing/
+unsupported geometry, manual preservation, tampering, revisions and persisted
+confirmation without modifying earlier observations. Small `PlanElevationIndexTests`
+check BVH ordering and complete segment bounds without performance campaigns.
 
-## Local-search verification
-
-`PlanElevationIndexTests` covers 10,000 and 100,000 independent segment/wall sources
-with a two-wall ramp near the tap and unrelated sources on both sides far away.
-Each size compares 20 repeated results with the complete small baseline record,
-requires automatic Z=108 (Z1=105, Z2=120, d1=2, d2=8), and preserves exact XY.
-Disk-query projection counts verify spatial pruning; index identity verifies reuse.
-Additional controls cover real 100,000-segment DXF loading, expanding beyond the
-initial disk, complete long-segment bounds, deterministic ties versus independent
-brute-force ordering, invalid segments, crossing/adjacent ambiguity, and explicit
-wall confirmation. Wall/index arrays and process resident-memory deltas are
-reported separately; array payload counts do not pretend to measure Dictionary,
-String, allocator or parser peak memory. Timing assertions are broad test-host
-regression ceilings, not a claimed survey-device performance specification.
-
-Local-search revision, 2026-10-22: **60 focused SwiftPM tests and 38 focused
-Xcode simulator tests, zero failures**. This selection covers DXF extraction,
-indexing, two-wall geometry, provenance, persistence and plan revisions; no whole-
-project regression run was performed for this revision. The app/test bundles
-build successfully for iPhone 17 Pro Simulator, iOS 26.5, Xcode 26.6.
-
-Final simulator stress measurements (debug build, 20 complete resolutions each):
-
-| Segments / independent walls | Index construction | Average resolution | Index array payload | Added resident bytes | Disk query projections |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 10,000 | 0.170 s | 0.983 ms | 538,656 B | 0 B incremental* | 9 |
-| 100,000 | 3.933 s | 1.186 ms | 5,059,744 B | 22,712,320 B | 12 |
-
-*The allocator reused already resident memory in the 10k case; this does not mean
-zero memory consumption. Payload counts exclude source arrays, dictionaries and
-strings. Both stress sizes additionally verify local competing drives remain
-ambiguous and explicit confirmation recovers the expected Z=108 at unchanged XY.
-
-The actual 100k-segment DXF imported and indexed in **8.385 s** in the final
-simulator run. The concurrent final SwiftPM import took **41.654 s**; earlier
-isolated runs took 7.884 s, demonstrating test-host scheduling sensitivity. Loading
-stays on the existing background task. These are service/loader measurements;
-Canvas redraw, Files-provider latency and physical-device performance are not
-timed or claimed. Source geometry outside the local query envelope is pruned
-regardless of the total drawing size.
-
-The independent 45-point Decimal control check passes. Consecutive Xcode project
-and scheme generations match; current project SHA-256:
-`ca16ae9a24dfb4fdd0070eabe4b20b7bfdf9c438d4a3a6e3a6501e0746203026`.
-The earlier whole-suite results below are historical.
-
-## Independent validation
-
-`TwoWallElevationTests` contains hand-calculated straight, asymmetric, sloping,
-curved, unequal-spacing, variable-width, >5 m, direct-wall, dead-end, access,
-T-junction, parallel-drive, rock-gap, overlap, missing/invalid Z and persistence
-controls. For example at x=25, two 100 m ramp walls provide Z1=105 and Z2=120;
-10 m across-width taps at y=2,5,8 must give **108,112.5,117**, respectively. On the
-curved diagonal control Q1=(17,7), Q2=(14,10), d1=2√2, d2=√2 and Z1=17,Z2=26
-must give **23**.
-
-`audit_two_wall_elevations.py` independently reads hash-pinned DXF group-code pairs,
-selects explicitly known fixture routes, and calculates 45 floor controls using
-50-digit Decimal arithmetic. It imports neither the production service nor the
-fixture generator. By default a subprocess creates the source DXFs in a temporary
-directory, verifies the original manifest hashes and removes them after the audit;
-`--dxf-dir` can select existing DXFs. SwiftPM/Xcode reconstruct identical DXFs from
-the compact coordinate resource without Python; see [fixture reproduction](underground-survey-z-verification.md#reproduction).
-The older 90 controls audit **individual nearest-wall
-projections**; “interior” in those names refers to segment parameters, and some
-points are outside the excavation. They must not be reused as across-floor Z.
-The new CSV constructs interior cross-wall samples and includes the three original
-widened-drift centers. Names 500/600/700 remain identifiers only. Renamed imports
-and unrelated nominal +393 horizons exercise managed originals, save and reopen.
-
-```sh
-python3 scripts/audit_two_wall_elevations.py --check
-python3 scripts/generate_underground_surveys.py --check
-python3 scripts/generate_project.py
-swift test
-```
-
-Earlier two-wall verification on 2026-10-22 (before the local-search revision):
-
-- SwiftPM: **347 tests, 0 failures, 2 existing opt-in workbook skips**.
-- Xcode simulator core suite: **347 tests, 0 failures, the same 2 skips**;
-  app and test bundles build on Xcode 26.6 / iPhone 17 Pro, iOS 26.5.
-- All **45** independent two-wall controls agree within 1e-8 m. Each survey
-  supplies 14/15 automatic results; its throat sample requires explicit confirmation.
-- The independent Decimal check and original survey-generator byte checks pass.
-- Two consecutive project/scheme generations are identical. Project SHA-256:
-  `36794ddce4b6765cb0e3c670b9f10073a56c412877585062e650846f21f4a2ab`.
-- Focused simulator UI scenario: **1 test, 0 failures** (132.153 s), covering
-  automatic two-wall Z, inline provenance, both source elevations/distances,
-  popover dismissal, manual override preservation, explicit highlighted wall
-  selection and unchanged original tap X/Y. The source button has an independent
-  borderless action and 44 pt minimum hit height, so inspection does not focus Z.
-
-Per owner steering, full regression runs were not repeated after that request;
-subsequent verification is restricted to the focused UI scenario and its build.
-Physical survey validation and Files-provider/device smoke tests remain outside
-these synthetic numerical/UI checks.
+The compact survey resources, their existing projection/control tests and optional
+Python auditors remain useful for fixture or parser investigations. They are not
+routine gates and are not regenerated for this change. The former 45-point
+wall-route oracle now tests historical two-wall records independently of automatic
+neighbor discovery. 10k/100k benchmarks remain opt-in through
+`FIELD_FORGE_DXF_BENCHMARKS=1`; no essential CI check is disabled.
 
 ## Published primitive references
 
-- Christer Ericson, *Real-Time Collision Detection*, 2005, §§3.4 (barycentric/linear
-  interpolation), 5.1.2 (closest point on a line segment), 5.1.9 (segment
-  intersection), 6.2.1 (top-down BVH construction), 6.3 (hierarchy traversal),
-  and 6.6.1 (array representation): [publisher/author contents](https://realtimecollisiondetection.net/books/rtcd/toc/).
+- Christer Ericson, *Real-Time Collision Detection* (2005), §§3.4, 5.1.2,
+  6.2.1, 6.3, 6.6.1: linear interpolation, closest point on a segment and existing
+  BVH construction/traversal. [Author's contents](https://realtimecollisiondetection.net/books/rtcd/toc/).
 - Autodesk AutoCAD DXF 2018 [VERTEX group codes](https://help.autodesk.com/cloudhelp/2018/ENU/AutoCAD-DXF/files/GUID-0741E831-599E-4CBF-91E1-8ADBCFD6556D.htm):
-  explicit WCS XYZ for 3D polyline vertices; the existing supported extraction
-  subset and exclusions remain as documented in [DXF revisions](dxf-elevation-plan-revisions.md).
-- The across-width distance formula and two-wall workflow are the owner's explicit
-  specification for this change; wall-pair discovery is the conservative versioned
-  application policy above, not a claimed published rock-mechanics method.
+  source WCS XYZ contract. Extraction version remains
+  `Autodesk-DXF-2018-straight-WCS-blocks/2`.
+- The two-source inverse-distance expression and approximate workflow are the
+  owner's explicit specification. It is ordinary weighted interpolation, not a
+  rock-mechanics calculation or a survey-grade elevation method. Historical
+  two-wall validation retains its documented 30° tangent/opposition checks.
+
+## Verification for this change (2026-10-22)
+
+- Targeted SwiftPM selection: 39 tests for elevation, units, provenance, current
+  persistence/plan revisions, supported DXF extraction and small BVH controls.
+  Initial result: 38 passed, one incorrect junction expectation failed. The
+  junction contains XY-coincident sources differing by 2 m; the corrected test
+  expects refusal and passed in a one-test rerun. No passing suite was repeated.
+- One generic iOS Simulator app build: **BUILD SUCCEEDED**, signing disabled,
+  Xcode 26.6 / iOS Simulator SDK 26.5, arm64 and x86_64. The existing App Intents
+  metadata warning is unrelated to this change.
+- `python3 scripts/generate_project.py`: no project/scheme diff. No source
+  inventory changed. `git diff --check`: passed.
+- Deliberately skipped: full SwiftPM/Xcode regression, Simulator UI automation,
+  manual field acceptance, 10k/100k stress/performance checks, survey regeneration
+  and independent Python DXF audits. No repository CI workflow was removed or
+  changed. Existing optional tools/compact fixtures remain available.
+
+Commands (logs were written outside the repository):
+
+```sh
+swift test --scratch-path /tmp/FieldForge-nearest-spm \
+  --filter 'PlanElevationSnapTests|TwoWallElevationTests|PlanRevisionManagementTests|DXFElevationAuditTests|PlanElevationIndexTests.test(Bounded|Nearest|Nearby)'
+swift test --scratch-path /tmp/FieldForge-nearest-spm \
+  --filter 'TwoWallElevationTests.testTJunctionAndShortFragmentsDoNotRequireTransverseSectionOrContinuation'
+xcodebuild -project FieldForge.xcodeproj -scheme FieldForge \
+  -destination 'generic/platform=iOS Simulator' \
+  -derivedDataPath /tmp/FieldForge-nearest-ios CODE_SIGNING_ALLOWED=NO build
+```
+
+Physical iPhone field usability/accuracy and actual mine topology are not verified
+by these automated numerical checks or by the compile build.

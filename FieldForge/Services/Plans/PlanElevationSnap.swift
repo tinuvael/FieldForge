@@ -22,7 +22,10 @@ struct DXFElevationSegment: Codable, Equatable {
         // A vertical/zero-length XY segment has no unique elevation at its XY position.
         guard lengthSquared.isFinite, lengthSquared > 0 else { return nil }
         let t = min(1, max(0, ((point.x - a.x) * dx + (point.y - a.y) * dy) / lengthSquared))
-        return (t, hypot(point.x - (a.x + t * dx), point.y - (a.y + t * dy)), a.z + t * (b.z - a.z))
+        let distance = hypot(point.x - (a.x + t * dx), point.y - (a.y + t * dy))
+        let z = a.z + t * (b.z - a.z)
+        guard t.isFinite, distance.isFinite, z.isFinite else { return nil }
+        return (t, distance, z)
     }
 }
 
@@ -31,14 +34,22 @@ struct PlanElevationSnapPolicy: Codable, Equatable {
     var toleranceMeters = 2.0
     var similarDistanceMeters = 0.1
     var distinctElevationMeters = 0.5
+    // Optional fields keep historical schema-8 policy JSON decodable without a migration.
+    // toleranceMeters remains the historical single-source limit, not the new search radius.
+    var searchRadiusMeters: Double? = nil
+    var maximumElevationDifferenceMeters: Double? = nil
+    var radius: Double { searchRadiusMeters ?? 25 }
+    var levelDifference: Double { maximumElevationDifferenceMeters ?? 25 }
     var valid: Bool {
-        [toleranceMeters, similarDistanceMeters, distinctElevationMeters].allSatisfy { $0.isFinite && $0 >= 0 }
+        [toleranceMeters, similarDistanceMeters, distinctElevationMeters, radius, levelDifference]
+            .allSatisfy { $0.isFinite && $0 >= 0 }
     }
 }
 
 struct PlanGeometryElevation: Codable, Equatable {
     static let version = "DXF-WCS-XY-segment-projection/1"
     static let twoWallVersion = "DXF-WCS-two-wall-section/1"
+    static let nearestVersion = "DXF-WCS-nearest-distinct-polyline-IDW/1"
     var method = Self.version
     let planID: UUID
     let planRevision: String
@@ -60,6 +71,7 @@ struct PlanGeometryElevation: Codable, Equatable {
     var confirmedByUser: Bool? = nil
     var isTwoWall: Bool { method == Self.twoWallVersion }
     var sourceLabel: String {
+        if method == Self.nearestVersion { return "DXF · расчётная отметка" }
         if isTwoWall { return confirmedByUser == true ? "DXF · 2 стены ≈" : "DXF · 2 стены" }
         return "DXF · 1 стена ≈"
     }
@@ -70,12 +82,15 @@ struct PlanGeometryElevation: Codable, Equatable {
         }
         var text = wall(segment, firstWallElevationMeters, distanceMeters)
         if let secondWall { text += "\n" + wall(secondWall.segment, secondWall.elevationMeters, secondWall.distanceMeters) }
+        if method == Self.nearestVersion {
+            text += secondWall == nil ? "\nПриблизительно по одному сегменту." : "\nПриблизительно по двум ближайшим полилиниям."
+        }
         return text + "\n" + (confirmedByUser == true ? "Источники подтверждены пользователем; оценка требует проверки. " : "") + "Высотная система неизвестна."
     }
     func confirmed() -> Self { var copy = self; copy.confirmedByUser = true; return copy }
 
     func validate(plan: MappingPlanReference) throws {
-        guard [Self.version, Self.twoWallVersion].contains(method), planID == plan.id, planRevision == plan.version,
+        guard [Self.version, Self.twoWallVersion, Self.nearestVersion].contains(method), planID == plan.id, planRevision == plan.version,
               let file = plan.file, planSHA256 == file.sha256,
               metersPerDrawingUnit == PlanElevationSnap.metersPerUnit(plan), unitDeclaration == plan.elevationUnitDeclaration,
               unitConfirmedAt == plan.elevationUnitConfirmation?.confirmedAt,
@@ -87,7 +102,20 @@ struct PlanGeometryElevation: Codable, Equatable {
               let p = segment.projection(selectedXY), parameter == p.t,
               distanceMeters == p.distance * metersPerDrawingUnit,
               elevationMeters.isFinite else { throw StorageError.invalidRecord }
-        if isTwoWall {
+        if method == Self.nearestVersion {
+            guard distanceMeters <= policy.radius else { throw StorageError.invalidRecord }
+            if let secondWall {
+                guard secondWall.valid(at: selectedXY, factor: metersPerDrawingUnit),
+                      secondWall.segment.wallID != segment.wallID,
+                      secondWall.distanceMeters <= policy.radius,
+                      distanceMeters <= secondWall.distanceMeters,
+                      abs(p.z * metersPerDrawingUnit - secondWall.elevationMeters) <= policy.levelDifference,
+                      elevationMeters == PlanWallSection.elevation(p.z * metersPerDrawingUnit, secondWall.elevationMeters,
+                          distanceMeters, secondWall.distanceMeters) else { throw StorageError.invalidRecord }
+            } else {
+                guard elevationMeters == p.z * metersPerDrawingUnit else { throw StorageError.invalidRecord }
+            }
+        } else if isTwoWall {
             guard let secondWall, secondWall.valid(at: selectedXY, factor: metersPerDrawingUnit),
                   PlanWallSection.compatible(segment, secondWall.segment, at: selectedXY),
                   elevationMeters == PlanWallSection.elevation(p.z * metersPerDrawingUnit, secondWall.elevationMeters,
@@ -148,7 +176,60 @@ enum PlanElevationSnap {
                 ? "Нет допустимой высотной геометрии: есть неподдерживаемые объекты. См. исключения ниже."
                 : "Нет сегментов с явными достоверными Z; 2D-геометрия и подписи отметок не задают высоту.")
         }
-        return PlanWallSection.resolve(point, document: document, plan: plan, factor: factor, policy: policy)
+        return nearestEstimate(point, document: document, plan: plan, factor: factor, policy: policy)
+    }
+
+    /// Bounded BVH disk query. Independent projections, no tangent/topology classification.
+    private static func nearestEstimate(_ point: PlanPoint, document: DXFDocument, plan: MappingPlanReference,
+                                        factor: Double, policy: PlanElevationSnapPolicy) -> PlanElevationResolution {
+        let index = document.elevationIndex
+        let nearby = index.nearby(point, radius: policy.radius / factor)
+        func unavailable(_ reason: String) -> PlanElevationResolution {
+            PlanElevationResolution(candidates: [], requiresChoice: false, failureReason: reason)
+        }
+        guard let firstID = nearby.first else {
+            return unavailable("Нет высотной геометрии рядом. Введите Z в картировании.")
+        }
+        let first = index.segments[firstID], a = first.projection(point)!
+        let second = nearby.first { index.segments[$0].wallID != first.wallID }.map { index.segments[$0] }
+        // Check overlaps at each source projection, including self-overlaps of one polyline.
+        // A local BVH query also finds a duplicated level whose tap distance is slightly larger.
+        for segment in (a.distance == 0 ? [first] : [first, second].compactMap({ $0 })) {
+            let projected = PlanWallSection.position(segment, at: point)
+            let z = segment.projection(projected)!.z * factor
+            let overlap = index.nearby(projected, radius: policy.similarDistanceMeters / factor)
+                .compactMap { index.segments[$0].projection(projected).map { $0.z * factor } }
+            if let low = (overlap + [z]).min(), let high = (overlap + [z]).max(),
+               high - low > policy.distinctElevationMeters {
+                return unavailable("Перекрытие DXF с разными Z. Введите Z вручную.")
+            }
+        }
+        // An exact hit uses that segment after overlap validation, without mixing another wall.
+        let b = a.distance == 0 ? nil : second?.projection(point)
+        if let b, abs(a.z * factor - b.z * factor) > policy.levelDifference {
+            return unavailable("Большой перепад Z: возможны разные уровни. Введите Z вручную.")
+        }
+        // Include equally close competing sources so a third coincident level cannot hide behind ties.
+        let limit = (b?.distance ?? a.distance) + policy.similarDistanceMeters / factor
+        let elevations = nearby.prefix { index.segments[$0].projection(point)!.distance <= limit }
+            .map { index.segments[$0].projection(point)!.z * factor }
+        if a.distance > 0, let low = elevations.min(), let high = elevations.max(), high - low > policy.levelDifference {
+            return unavailable("Большой перепад Z: возможны разные уровни. Введите Z вручную.")
+        }
+        let z = b.map { PlanWallSection.elevation(a.z * factor, $0.z * factor, a.distance * factor, $0.distance * factor) } ?? a.z * factor
+        guard z.isFinite else { return unavailable("Недопустимая отметка DXF. Введите Z вручную.") }
+        var proposal = PlanGeometryElevation(method: PlanGeometryElevation.nearestVersion,
+            planID: plan.id, planRevision: plan.version, planSHA256: plan.file!.sha256,
+            segment: first, selectedXY: point, parameter: a.t, distanceMeters: a.distance * factor,
+            elevationMeters: z, metersPerDrawingUnit: factor, unitDeclaration: plan.elevationUnitDeclaration,
+            unitConfirmedAt: plan.elevationUnitConfirmation?.confirmedAt, policy: policy)
+        if let b, let second {
+            proposal.secondWall = PlanElevationWallSample(segment: second, parameter: b.t,
+                distanceMeters: b.distance * factor, elevationMeters: b.z * factor)
+        }
+        return PlanElevationResolution(candidates: [proposal], requiresChoice: false,
+            failureReason: b == nil && a.distance > 0 ? "Приблизительная Z по одному сегменту." : nil,
+            nearestDistanceMeters: a.distance * factor)
     }
 }
 
