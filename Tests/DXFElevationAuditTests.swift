@@ -99,8 +99,13 @@ final class DXFElevationAuditTests: XCTestCase {
             let center = PlanElevationSnap.resolve(control.bounds.center, document: doc, plan: oldReference)
             if control.level != 400 {
                 XCTAssertNil(center.automatic); XCTAssertEqual(try XCTUnwrap(center.nearestDistanceMeters), 8.5, accuracy: 1e-8)
-                XCTAssertTrue(center.failureReason?.contains("дальше допуска") == true)
-            } else { XCTAssertEqual(center.automatic?.elevationMeters, 400) }
+                XCTAssertNotNil(center.failureReason)
+            } else {
+                // The fitted bounding-box centre is outside a validated transverse section.
+                XCTAssertNil(center.automatic); XCTAssertTrue(center.candidates.isEmpty)
+                XCTAssertEqual(try XCTUnwrap(center.nearestDistanceMeters), 0.7073080051541791, accuracy: 1e-8)
+                XCTAssertNotNil(center.failureReason)
+            }
             XCTAssertEqual(try files.read(oldReference), bytes)
         }
     }

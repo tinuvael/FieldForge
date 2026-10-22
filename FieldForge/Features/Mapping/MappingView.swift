@@ -165,7 +165,8 @@ struct MappingView: View {
     private func coordinate(_ name: String, _ key: WritableKeyPath<MappingDraft, String>) -> some View {
         MappingCoordinateField(title: name,
             text: draft(key, fallback: ""), identifier: "mapping\(name)", focus: $coordinateFocus,
-            source: name == "Z" && (try? ElevationInput.meters(mapping.workflow?.draft.z ?? "")) != nil ? mapping.workflow?.draft.zOrigin?.fieldLabel : nil)
+            source: name == "Z" && (try? ElevationInput.meters(mapping.workflow?.draft.z ?? "")) != nil ? (mapping.workflow?.draft.zPlanGeometry?.sourceLabel ?? mapping.workflow?.draft.zOrigin?.fieldLabel) : nil,
+            sourceDetails: name == "Z" ? mapping.workflow?.draft.zPlanGeometry?.sourceDetails : nil)
     }
     private func selector(_ title: String, id: String, values: [(UUID, String)], selection: Binding<UUID?>, kind: ContextEditorKind) -> some View {
         HStack {
@@ -320,9 +321,12 @@ struct MappingCoordinateField: View {
     let identifier: String
     let focus: Binding<String?>
     var source: String? = nil
+    var sourceDetails: String? = nil
+    @State private var showingSource = false
     var body: some View {
         HStack {
             Text(title).frame(width: 42, alignment: .leading)
+                .contentShape(Rectangle()).onTapGesture { focus.wrappedValue = identifier }
             LosslessNumericField(text: $text,
                 displayText: (try? ElevationInput.meters(text)).map { title == "Z" ? EngineeringDisplay.elevation($0) : EngineeringDisplay.coordinate($0) } ?? text,
                 focused: focus.wrappedValue == identifier, identifier: identifier) { active in
@@ -330,10 +334,22 @@ struct MappingCoordinateField: View {
                     else if focus.wrappedValue == identifier { focus.wrappedValue = nil }
                 }
             if let source {
-                Text(source).font(.caption).foregroundStyle(.secondary).lineLimit(1).fixedSize()
-                    .accessibilityIdentifier(identifier + "Source")
+                if let sourceDetails {
+                    Button(source) { focus.wrappedValue = nil; showingSource = true }
+                        .buttonStyle(.borderless).font(.caption).lineLimit(1).frame(minHeight: 44)
+                        .accessibilityIdentifier(identifier + "Source")
+                        .popover(isPresented: $showingSource) {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text(sourceDetails).font(.caption).accessibilityIdentifier(identifier + "SourceDetails")
+                                Button("Готово") { showingSource = false }.accessibilityIdentifier(identifier + "SourceClose")
+                            }.padding().presentationCompactAdaptation(.popover)
+                        }
+                } else {
+                    Text(source).font(.caption).foregroundStyle(.secondary).lineLimit(1).fixedSize()
+                        .accessibilityIdentifier(identifier + "Source")
+                }
             }
         }
-        .contentShape(Rectangle()).onTapGesture { focus.wrappedValue = identifier }
+        .contentShape(Rectangle())
     }
 }

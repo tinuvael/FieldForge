@@ -6,7 +6,7 @@ final class P2MappingUITests: XCTestCase {
         continueAfterFailure = false
         let app = XCUIApplication(); app.launchArguments = ["--ui-testing"]
         app.launchEnvironment["FIELD_FORGE_TEST_RUN_ID"] = UUID().uuidString
-        app.launchEnvironment["P2_PLAN_A"] = dxf("0\nLINE\n10\n0\n20\n0\n30\n300\n11\n10\n21\n0\n31\n400\n")
+        app.launchEnvironment["P2_PLAN_A"] = dxf("0\nLINE\n10\n0\n20\n0\n30\n300\n11\n100\n21\n0\n31\n400\n0\nLINE\n10\n0\n20\n20\n30\n320\n11\n100\n21\n20\n31\n420\n")
         app.launch()
         let project = "Z-\(UUID().uuidString.prefix(6))"
         create("projectPicker", value: project, app: app); select("projectPicker", value: project, app: app)
@@ -34,13 +34,21 @@ final class P2MappingUITests: XCTestCase {
         app.buttons["confirmPlanXY"].tap()
         XCTAssertTrue(app.buttons["selectHorizonPlan"].waitForExistence(timeout: 5))
         reveal(app.textFields["mappingZ"], app: app, down: true)
-        XCTAssertEqual(Double((app.textFields["mappingZ"].value as? String ?? "").replacingOccurrences(of: ",", with: ".")) ?? .nan, 350, accuracy: 1)
-        XCTAssertEqual(app.staticTexts["mappingZSource"].label, "DXF")
-        XCTAssertEqual(app.staticTexts.matching(identifier: "mappingZSource").count, 1)
-        XCTAssertEqual(app.staticTexts["mappingZSource"].frame.midY, app.textFields["mappingZ"].frame.midY, accuracy: 5)
+        XCTAssertEqual(Double((app.textFields["mappingZ"].value as? String ?? "").replacingOccurrences(of: ",", with: ".")) ?? .nan, 360, accuracy: 1)
+        XCTAssertEqual(app.buttons["mappingZSource"].label, "DXF · 2 стены")
+        XCTAssertEqual(app.buttons.matching(identifier: "mappingZSource").count, 1)
+        XCTAssertEqual(app.buttons["mappingZSource"].frame.midY, app.textFields["mappingZ"].frame.midY, accuracy: 5)
         screenshot("Inline DXF Z source", app: app)
-        XCTAssertEqual(Double((app.textFields["mappingX"].value as? String ?? "").replacingOccurrences(of: ",", with: ".")) ?? .nan, 5, accuracy: 0.05)
-        XCTAssertEqual(Double((app.textFields["mappingY"].value as? String ?? "").replacingOccurrences(of: ",", with: ".")) ?? .nan, 0, accuracy: 0.05)
+        app.buttons["mappingZSource"].tap()
+        let details = app.staticTexts["mappingZSourceDetails"]
+        XCTAssertTrue(details.waitForExistence(timeout: 5))
+        XCTAssertEqual(details.label.components(separatedBy: ": Z ").count, 3)
+        XCTAssertEqual(details.label.components(separatedBy: "; d ").count, 3)
+        screenshot("Both wall elevations and distances", app: app)
+        app.buttons["mappingZSourceClose"].tap()
+        XCTAssertTrue(details.waitForNonExistence(timeout: 5))
+        XCTAssertEqual(Double((app.textFields["mappingX"].value as? String ?? "").replacingOccurrences(of: ",", with: ".")) ?? .nan, 50, accuracy: 0.05)
+        XCTAssertEqual(Double((app.textFields["mappingY"].value as? String ?? "").replacingOccurrences(of: ",", with: ".")) ?? .nan, 10, accuracy: 0.05)
         enter("mappingZ", value: "349.125", app: app, replacing: true)
         XCTAssertEqual(app.staticTexts["mappingZSource"].label, "Вручную")
         app.buttons["selectHorizonPlan"].tap()
@@ -52,6 +60,29 @@ final class P2MappingUITests: XCTestCase {
         reveal(app.textFields["mappingZ"], app: app, down: true)
         app.textFields["mappingZ"].tap()
         XCTAssertEqual(app.textFields["mappingZ"].value as? String, "349.125")
+        if app.buttons["Готово"].exists { app.buttons["Готово"].tap() }
+        app.buttons["selectHorizonPlan"].tap()
+        XCTAssertTrue(canvas.waitForExistence(timeout: 10))
+        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        app.buttons["pickElevationWalls"].tap()
+        func tapWall(_ direction: Double) {
+            let frame = canvas.frame
+            let scale = min(max(1, frame.width - 48) / 100, max(1, frame.height - 48) / 20)
+            canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5 + direction * 10 * scale / frame.height)).tap()
+        }
+        tapWall(1); tapWall(-1)
+        XCTAssertTrue(app.buttons["planElevationChoice"].waitForExistence(timeout: 5))
+        app.buttons["planElevationChoice"].tap()
+        let pair = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "2 стены")).firstMatch
+        XCTAssertTrue(pair.waitForExistence(timeout: 5)); pair.tap()
+        XCTAssertTrue(app.buttons["confirmPlanXY"].isEnabled)
+        screenshot("Explicit wall pair highlighted without moving tap", app: app)
+        app.buttons["confirmPlanXY"].tap()
+        reveal(app.textFields["mappingZ"], app: app, down: true)
+        XCTAssertEqual(app.buttons["mappingZSource"].label, "DXF · 2 стены ≈")
+        XCTAssertEqual(Double((app.textFields["mappingZ"].value as? String ?? "").replacingOccurrences(of: ",", with: ".")) ?? .nan, 360, accuracy: 0.1)
+        XCTAssertEqual(Double((app.textFields["mappingX"].value as? String ?? "").replacingOccurrences(of: ",", with: ".")) ?? .nan, 50, accuracy: 0.05)
+        XCTAssertEqual(Double((app.textFields["mappingY"].value as? String ?? "").replacingOccurrences(of: ",", with: ".")) ?? .nan, 10, accuracy: 0.05)
     }
 
     @MainActor func testRevisionActionsDeletionArchiveAndMove() throws {

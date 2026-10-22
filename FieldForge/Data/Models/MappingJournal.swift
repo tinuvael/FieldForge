@@ -414,15 +414,15 @@ struct MappingDraft: Equatable {
         }
     }
     mutating func selectPlanPoint(_ point: PlanPoint, plan: MappingPlanReference,
-                                  elevation: PlanGeometryElevation? = nil, fallback: MappingHorizon? = nil) throws {
+                                  elevation: PlanGeometryElevation? = nil) throws {
         guard let file = plan.file, point.x.isFinite, point.y.isFinite else { throw StorageError.invalidRecord }
         if let elevation {
             try elevation.validate(plan: plan)
             guard elevation.selectedXY == point else { throw StorageError.invalidRecord }
         }
-        if zOrigin == .planGeometry {
+        if zOrigin == .planGeometry || zOrigin == .horizonDefault {
+            // A horizon identifies the plan, never the actual floor at a tapped location.
             z = ""; zOrigin = nil
-            suggestElevation(fallback)
         }
         // Canonical unrounded decimals also cover tiny XY near an axis; String(Double)
         // may use exponent notation, which the editable decimal input contract rejects.

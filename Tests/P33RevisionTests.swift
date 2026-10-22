@@ -100,7 +100,7 @@ private typealias RevisionReading = FieldForge.Measurement
             XCTAssertEqual(b.snapshot.coordinates?.crs, plan.file?.crs); XCTAssertEqual(b.snapshot.coordinates?.axes, plan.file?.axes)
             XCTAssertTrue(b.snapshot.coordinates?.provenance.contains("Survey A") == true)
             XCTAssertEqual(a.snapshot.coordinates?.x, 123.123456789); XCTAssertEqual(b.snapshot.coordinates?.x, 999.123456789)
-            XCTAssertEqual(b.snapshot.coordinates?.z, 393); XCTAssertEqual(b.snapshot.coordinates?.zOrigin, .horizonDefault)
+            XCTAssertNil(b.snapshot.coordinates?.z); XCTAssertNil(b.snapshot.coordinates?.zOrigin)
             var q = MappingJournalQuery(); q.picket = "17,125"
             XCTAssertEqual(q.apply(w.journal.effectiveObservations, projectID: original.projectID).count, 1)
             q.picket = "ПК 0+005"; XCTAssertTrue(q.apply(w.journal.effectiveObservations, projectID: original.projectID).isEmpty)

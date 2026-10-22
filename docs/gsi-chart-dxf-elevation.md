@@ -1,3 +1,5 @@
+> Current two-wall elevation and plan-tap behavior: [algorithm and verification](two-wall-elevation.md). The nearest-wall/radius and nominal-horizon plan-tap descriptions below are historical. Original fixtures and projection audits are preserved.
+
 > DXF parsing, unit review, inline Z and plan-management details are superseded by [DXF elevation and plan revisions](dxf-elevation-plan-revisions.md). GSI is unchanged.
 
 # Interactive GSI and DXF elevation suggestions

@@ -1,0 +1,41 @@
+{
+  "500": {
+    "controls": 30,
+    "default_status_counts": {
+      "automatic": 25,
+      "outside_tolerance": 5
+    },
+    "main_length_xy_m": 300.00000000000296,
+    "polylines": 14,
+    "sha256": "d56489281c73c31c7dc4e7c189fdfc2277baba30635bd721a763856708ae9316",
+    "vertices": 528,
+    "z_max": 513.33066,
+    "z_min": 488.825011127
+  },
+  "600": {
+    "controls": 30,
+    "default_status_counts": {
+      "automatic": 25,
+      "outside_tolerance": 5
+    },
+    "main_length_xy_m": 325.0000000000001,
+    "polylines": 17,
+    "sha256": "5a572b4fdb3d553f26ffbd783ddb8dc9a9886099ce1fb70935558d7e661fffb9",
+    "vertices": 653,
+    "z_max": 614.339270467,
+    "z_min": 583.203641696
+  },
+  "700": {
+    "controls": 30,
+    "default_status_counts": {
+      "automatic": 25,
+      "outside_tolerance": 5
+    },
+    "main_length_xy_m": 275.00000000000347,
+    "polylines": 20,
+    "sha256": "fbd43db7146cc757b3229597138ec0d092f527624a7b80252e28e16e6b8055f5",
+    "vertices": 634,
+    "z_max": 711.985207337,
+    "z_min": 682.822247881
+  }
+}

@@ -168,7 +168,7 @@ struct DXFDocument {
                 guard explicit[index], explicit[next] else { continue }
                 let segment = DXFElevationSegment(a: vertices[index], b: vertices[next],
                     entityType: kind, handle: fields.first { $0.code == 5 }?.value,
-                    entityOrdinal: ordinal, segmentIndex: index, blockPath: blockPath, extractionVersion: Self.elevationExtractionVersion)
+                    entityOrdinal: ordinal, segmentIndex: index, blockPath: blockPath, extractionVersion: Self.elevationExtractionVersion, layer: fields.first { $0.code == 8 }?.value ?? "0")
                 guard segment.projection(vertices[index].xy) != nil else { continue }
                 elevationSegments.append(segment); used = true
             }
