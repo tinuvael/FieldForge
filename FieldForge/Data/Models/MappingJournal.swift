@@ -180,7 +180,8 @@ struct MappingJournal: Codable, Equatable {
                   (p.file.map { f in !f.originalFilename.isEmpty && !f.crs.isEmpty && !f.axes.isEmpty &&
                       f.sha256.range(of: #"^[a-f0-9]{64}$"#, options: .regularExpression) != nil &&
                       (1...10_000_000).contains(f.byteCount) && f.importedAt.timeIntervalSinceReferenceDate.isFinite &&
-                      f.unitDeclaration == "userConfirmedAtImport" } ?? true) }),
+                      (f.unitDeclaration == "userConfirmedAtImport" ||
+                       (f.unitDeclaration == "dxfINSUNITS" && PlanUnits.declared(by: f.insertionUnits) == f.units)) } ?? true) }),
               validContext(selection) else { throw StorageError.invalidRecord }
         for plan in plans {
             try plan.validateManagement()
@@ -418,8 +419,7 @@ struct MappingDraft: Equatable {
         guard let file = plan.file, point.x.isFinite, point.y.isFinite else { throw StorageError.invalidRecord }
         if let elevation {
             try elevation.validate(plan: plan)
-            guard elevation.selectedXY == point,
-                  !preservesElevationOnPlanSelection || elevation.confirmedByUser == true else { throw StorageError.invalidRecord }
+            guard elevation.selectedXY == point else { throw StorageError.invalidRecord }
         }
         if zOrigin == .planGeometry || zOrigin == .horizonDefault {
             // A horizon identifies the plan, never the actual floor at a tapped location.
@@ -451,9 +451,6 @@ struct MappingDraft: Equatable {
         zHorizonID = zOrigin == nil ? nil : horizon?.id
         zHorizonElevation = horizon?.elevationMeters
         zDatum = zOrigin == nil ? nil : horizon?.elevationDatum
-    }
-    var preservesElevationOnPlanSelection: Bool {
-        zOrigin == .manualOverride || (zOrigin == nil && !z.isEmpty)
     }
     var hasChanges: Bool {
         !photos.isEmpty || !photoSessions.isEmpty || ![picket, chainageOriginAndDirection, x, y, crs, axes, coordinateProvenance, notes].allSatisfy(\.isEmpty) ||

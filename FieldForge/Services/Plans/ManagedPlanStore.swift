@@ -3,6 +3,9 @@ import CryptoKit
 
 enum PlanUnits: String, Codable, CaseIterable {
     case unknown, meters, millimeters
+    static func declared(by insertionUnits: Int?) -> PlanUnits? {
+        switch insertionUnits { case 6: return .meters; case 4: return .millimeters; default: return nil }
+    }
     var coordinateUnits: String { switch self { case .unknown: return "drawing"; case .meters: return "m"; case .millimeters: return "mm" } }
     var label: String { switch self { case .unknown: return "Неизвестно · единицы чертежа"; case .meters: return "Метры"; case .millimeters: return "Миллиметры" } }
 }
@@ -37,7 +40,7 @@ final class ManagedPlanStore {
                 sha256: Self.digest(data), byteCount: data.count, importedAt: Date(), units: units,
                 crs: crs.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "unknown" : crs,
                 axes: axes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "unknown" : axes,
-                unitDeclaration: "userConfirmedAtImport", insertionUnits: drawing.insertionUnits),
+                unitDeclaration: PlanUnits.declared(by: drawing.insertionUnits) == units ? "dxfINSUNITS" : "userConfirmedAtImport", insertionUnits: drawing.insertionUnits),
             frameConfirmation: frameConfirmation)
         try FileManager.default.createDirectory(at: root.appendingPathComponent("operations"), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: root.appendingPathComponent("originals"), withIntermediateDirectories: true)

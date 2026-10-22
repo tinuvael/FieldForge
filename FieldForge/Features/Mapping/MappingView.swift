@@ -51,7 +51,7 @@ struct MappingView: View {
                     onPointSelection: { point, _, elevation in
                         guard mapping.workflow != nil else { throw StorageError.writesBlocked }
                         try mapping.workflow!.selectPlanPoint(point, request: request, elevation: elevation)
-                    }, preserveManualElevation: mapping.workflow?.draft.preservesElevationOnPlanSelection ?? false)
+                    })
                     .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Вернуться") { planSelection = nil } } }
             }.id(request.id)
         }

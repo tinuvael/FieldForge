@@ -136,14 +136,16 @@ struct PlanElevationResolution: Equatable {
 }
 
 enum PlanElevationSnap {
-    /// Confirmed drawing units must agree with a declared INSUNITS value, if any.
+    /// Supported declarations are automatic; other headers require an explicit unit choice.
     static func metersPerUnit(_ file: ManagedPlanFile) -> Double? {
-        guard file.unitDeclaration == "userConfirmedAtImport" else { return nil }
-        switch (file.units, file.insertionUnits) {
-        case (.meters, nil), (.meters, 0), (.meters, 6): return 1
-        case (.millimeters, nil), (.millimeters, 0), (.millimeters, 4): return 0.001
-        default: return nil
-        }
+        guard file.unitDeclaration == "userConfirmedAtImport" ||
+                (file.unitDeclaration == "dxfINSUNITS" && PlanUnits.declared(by: file.insertionUnits) == file.units) else { return nil }
+        return unitFactor(file.units, insertionUnits: file.insertionUnits)
+    }
+
+    private static func unitFactor(_ units: PlanUnits, insertionUnits: Int?) -> Double? {
+        if let declared = PlanUnits.declared(by: insertionUnits), declared != units { return nil }
+        switch units { case .meters: return 1; case .millimeters: return 0.001; case .unknown: return nil }
     }
 
     /// A later, explicit Z-only declaration does not relabel existing XY in drawing units.
@@ -151,11 +153,7 @@ enum PlanElevationSnap {
         guard let file = plan.file else { return nil }
         guard let confirmation = plan.elevationUnitConfirmation else { return metersPerUnit(file) }
         guard file.units == .unknown, confirmation.confirmedAt.timeIntervalSinceReferenceDate.isFinite else { return nil }
-        switch (confirmation.units, file.insertionUnits) {
-        case (.meters, nil), (.meters, 0), (.meters, 6): return 1
-        case (.millimeters, nil), (.millimeters, 0), (.millimeters, 4): return 0.001
-        default: return nil
-        }
+        return unitFactor(confirmation.units, insertionUnits: file.insertionUnits)
     }
 
     static func resolve(_ point: PlanPoint, document: DXFDocument, plan: MappingPlanReference,
@@ -167,7 +165,7 @@ enum PlanElevationSnap {
         guard let file = plan.file else { return failure("Нет сохранённого оригинала DXF.") }
         guard document.insertionUnits == file.insertionUnits else { return failure("$INSUNITS не совпадает с сохранёнными метаданными.") }
         guard let factor = metersPerUnit(plan) else {
-            return failure(file.units == .unknown || file.unitDeclaration != "userConfirmedAtImport"
+            return failure(file.units == .unknown
                 ? "Единицы чертежа не подтверждены. Уточните единицы по исходному файлу."
                 : "Подтверждённые единицы противоречат $INSUNITS или не поддерживаются.")
         }

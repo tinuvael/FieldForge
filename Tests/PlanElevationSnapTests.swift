@@ -56,7 +56,7 @@ final class PlanElevationSnapTests: XCTestCase {
         XCTAssertEqual(c.elevationMeters, -10); XCTAssertEqual(c.distanceMeters, 1); XCTAssertEqual(c.metersPerDrawingUnit, 0.001)
         XCTAssertTrue(try resolve(line(0, 0), units: .unknown).candidates.isEmpty)
         XCTAssertTrue(try resolve(line(0, 0), units: .millimeters, insertionUnits: 6).candidates.isEmpty)
-        XCTAssertTrue(try resolve(line(0, 0), units: .meters, insertionUnits: 1).candidates.isEmpty)
+        XCTAssertNotNil(try resolve(line(0, 0), units: .meters, insertionUnits: 1).automatic) // Explicit import confirmation.
         XCTAssertNotNil(try resolve(line(0, 0), units: .meters, insertionUnits: 0).automatic)
     }
     func testLwPolylineExplicitElevationAndClosedSegment() throws {
@@ -107,12 +107,24 @@ final class PlanElevationSnapTests: XCTestCase {
         reopened.draft.z = "-12"
         try reopened.selectPlanPoint(xy, planID: b.id)
         XCTAssertEqual(reopened.draft.z, "-12")
-        // Explicitly choosing the suggestion replaces a manual override.
+        XCTAssertEqual(reopened.draft.zOrigin, .manualOverride)
+        XCTAssertNil(reopened.draft.zPlanGeometry)
+        // Explicit point acceptance replaces manual Z without a separate source choice.
         let zb = try XCTUnwrap(PlanElevationSnap.resolve(xy, document: document, plan: b).automatic)
-        XCTAssertThrowsError(try reopened.selectPlanPoint(xy, planID: b.id, elevation: zb))
-        XCTAssertEqual(reopened.draft.z, "-12")
-        try reopened.selectPlanPoint(xy, planID: b.id, elevation: zb.confirmed())
-        XCTAssertEqual(reopened.draft.zPlanGeometry?.planRevision, "B")
+        try reopened.selectPlanPoint(xy, planID: b.id, elevation: zb)
+        XCTAssertEqual(reopened.draft.z, "-10"); XCTAssertEqual(reopened.draft.zOrigin, .planGeometry)
+        XCTAssertEqual(reopened.draft.zPlanGeometry, zb)
+        reopened.draft.z = "-15"
+        XCTAssertEqual(reopened.draft.zOrigin, .manualOverride); XCTAssertNil(reopened.draft.zPlanGeometry)
+        let nextXY = PlanPoint(x: 7.5, y: 1)
+        let nextZ = try XCTUnwrap(PlanElevationSnap.resolve(nextXY, document: document, plan: b).automatic)
+        try reopened.selectPlanPoint(nextXY, planID: b.id, elevation: nextZ)
+        XCTAssertEqual(reopened.draft.x, "7.5"); XCTAssertEqual(reopened.draft.y, "1")
+        XCTAssertEqual(reopened.draft.z, "10"); XCTAssertEqual(reopened.draft.zOrigin, .planGeometry)
+        XCTAssertEqual(reopened.draft.zPlanGeometry, nextZ)
+        reopened.draft.z = ""
+        try reopened.selectPlanPoint(nextXY, planID: b.id, elevation: nextZ)
+        XCTAssertEqual(reopened.draft.z, "10"); XCTAssertEqual(reopened.draft.zPlanGeometry, nextZ)
         // Old revision suggestions cannot be applied to a newly chosen plan/XY.
         let unchanged = reopened.draft
         XCTAssertThrowsError(try reopened.selectPlanPoint(xy, planID: b.id, elevation: z)); XCTAssertEqual(reopened.draft, unchanged)
