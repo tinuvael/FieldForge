@@ -20,6 +20,9 @@ struct JointSpacingField: View {
                     .font(.caption).accessibilityIdentifier("resetJointSpacing")
             }
         }
+        if case .failure(let error) = Result(catching: { try draft.validatedSpacing() }) {
+            Text(error.localizedDescription).font(.caption).foregroundStyle(.red).accessibilityIdentifier("jointSpacingError")
+        }
         if let warning = rqd.warning { Text(warning).font(.caption).foregroundStyle(.orange) }
     }
 }
@@ -91,7 +94,11 @@ struct GSISelectionView: View {
     }
     var body: some View {
         Form {
-            Section("Структура × состояние поверхности") {
+            Section {
+                Label("Полная диаграмма GSI недоступна", systemImage: "info.circle").font(.headline)
+                Text(GSIAssessment.chartLimitation).font(.caption).accessibilityIdentifier("gsiChartLimitation")
+            }
+            Section("Категории массива · без расчёта GSI") {
                 Text("Выберите ячейку. Столбцы 1–5: от очень хорошего до очень плохого состояния.").font(.caption)
                 // Five >=44 pt targets fit a compact iPhone; full descriptions remain below.
                 VStack(alignment: .leading, spacing: 12) {
@@ -123,10 +130,14 @@ struct GSISelectionView: View {
                 }
             }
             Section("GSI · интервал выбирает инженер") {
-                Text("Числовые контуры не оцифрованы. Ячейка не вычисляет GSI; укажите обоснованный интервал явно.").font(.caption)
+                Text("Выбранная категория не вычисляет GSI. Укажите обоснованный интервал вручную; уточнённое значение должно находиться внутри него.").font(.caption)
                 TextField("Нижняя граница, 0…100", text: $lower).keyboardType(.decimalPad).focused($focused).accessibilityIdentifier("gsiLower")
                 TextField("Верхняя граница, 0…100", text: $upper).keyboardType(.decimalPad).focused($focused).accessibilityIdentifier("gsiUpper")
                 TextField("Уточнённый GSI · необязательно", text: $finalValue).keyboardType(.decimalPad).focused($focused).accessibilityIdentifier("gsiFinal")
+                if !lower.isEmpty && !upper.isEmpty && !finalValue.isEmpty,
+                   case .failure(let validationError) = Result(catching: { try record() }) {
+                    Text(validationError.localizedDescription).font(.caption).foregroundStyle(.red).accessibilityIdentifier("gsiValidationError")
+                }
                 if let error { Text(error).foregroundStyle(.red) }
                 Button("Подтвердить GSI") {
                     do { assessment = try record(); focused = false; dismiss() } catch { self.error = error.localizedDescription }

@@ -62,6 +62,7 @@ struct GSIChartSelection: Codable, Equatable {
 struct GSIAssessment: Codable, Equatable {
     static let version = "Read-Stacey-2009/table5.34-HoekBrown2000/categorical-explicit-interval-v1"
     static let reference = "Read & Stacey (2009), Guidelines for Open Pit Slope Design, §5.4.4, Table 5.34; Marinos & Hoek (2000)."
+    static let chartLimitation = "Это выбор категорий, а не полная диаграмма Read & Stacey, табл. 5.34. Числовые контуры и соответствие точки интервалу GSI не верифицированы; графическое определение GSI недоступно. Диапазон задаёт инженер вручную."
     static let limitation = "GSI может быть неприменим, если разрушение определяет ориентированная слабость, например неблагоприятные протяжённые трещины."
     let selection: GSIChartSelection
     let lower: Double
@@ -73,7 +74,9 @@ struct GSIAssessment: Codable, Equatable {
         try selection.validate()
         guard method == Self.version, lower.isFinite, upper.isFinite,
               (0...100).contains(lower), (lower...100).contains(upper),
-              finalValue.map({ $0.isFinite && (0...100).contains($0) }) ?? true,
               assessedAt.timeIntervalSinceReferenceDate.isFinite else { throw StorageError.invalidRecord }
+        guard finalValue.map({ $0.isFinite && (lower...upper).contains($0) }) ?? true else {
+            throw MappingError.invalid("Уточнённый GSI должен быть в выбранном диапазоне, включая его границы.")
+        }
     }
 }

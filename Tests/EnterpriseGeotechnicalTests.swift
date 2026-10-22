@@ -84,9 +84,89 @@ import XCTest
             XCTAssertEqual(value.jointSets[0].spacing, "")
         }
     }
+    func testManualSpacingRejectsZeroNegativeNonFiniteAndAcceptsMissingOrPositive() throws {
+        var set = draft(count: 1).jointSets[0]
+        for raw in ["0", "0,0", "-0", "-0,01", "-1", "nan", "inf", "1e309"] {
+            set.spacing = raw
+            XCTAssertThrowsError(try set.validatedSpacing(), raw)
+            XCTAssertThrowsError(try set.record(now: now), raw)
+        }
+        for raw in ["", " "] {
+            set.spacing = raw; XCTAssertNil(try set.record(now: now).spacingMeters)
+        }
+        for (raw, expected) in [("0,01", 0.01), ("0.2", 0.2), ("0.000000000001", 1e-12)] {
+            set.spacing = raw; XCTAssertEqual(try set.record(now: now).spacingMeters, expected)
+        }
+        set.spacing = "0"; set.spacingProvenance = nil
+        let legacy = try set.record(now: now); try legacy.validate(pointMeasurementIDs: [])
+        XCTAssertEqual(legacy.spacingMeters, 0)
+        XCTAssertEqual(try JointSetDraft(legacy).record(now: now).spacingMeters, 0)
+        var editedLegacy = JointSetDraft(legacy); editedLegacy.spacing = "0"
+        XCTAssertThrowsError(try editedLegacy.record(now: now))
+    }
+    func testInvalidManualSpacingCannotSaveOrCorrectAndPreservesExistingFiles() throws {
+        try directory { url in
+            let file = url.appendingPathComponent("mapping.json")
+            var w = try configured(FileMappingStore(url: file))
+            let before = try Data(contentsOf: file)
+            let backup = file.appendingPathExtension("previous"), previous = try Data(contentsOf: backup)
+            for raw in ["0", "-0.1"] {
+                w.draft.jointSets[0].spacing = raw
+                XCTAssertThrowsError(try w.save(now: now))
+                XCTAssertEqual(try Data(contentsOf: file), before)
+                XCTAssertEqual(try Data(contentsOf: backup), previous)
+                XCTAssertEqual(w.draft.jointSets[0].spacing, raw)
+            }
+            w.draft.jointSets[0].spacing = "0.2"; let original = try w.save(now: now)
+            let saved = try Data(contentsOf: file), savedBackup = try Data(contentsOf: backup)
+            for raw in ["0", "-0.1"] {
+                var correction = try w.correction(for: original.id)
+                correction.reason = "Проверка SD"; correction.fields.jointSets[0].spacing = raw
+                XCTAssertThrowsError(try w.saveCorrection(correction, now: now.addingTimeInterval(1)))
+                XCTAssertEqual(try Data(contentsOf: file), saved)
+                XCTAssertEqual(try Data(contentsOf: backup), savedBackup)
+            }
+            XCTAssertEqual(w.observations, [original]); XCTAssertTrue(w.journal.revisions.isEmpty)
+        }
+    }
+    func testGSIFinalMustBeWithinInclusiveAssessmentInterval() throws {
+        for value in [35.0, 40, 45] {
+            let value = gsi(final: value); try value.validate()
+            let decoded = try JSONDecoder().decode(GSIAssessment.self, from: JSONEncoder().encode(value))
+            try decoded.validate(); XCTAssertEqual(decoded, value)
+        }
+        try gsi().validate(); try gsi(40, 40, final: 40).validate()
+        for value in [Double(35).nextDown, Double(45).nextUp, 0, 100, .nan, .infinity, -.infinity] {
+            XCTAssertThrowsError(try gsi(final: value).validate())
+        }
+        for value in [39.0, 41] { XCTAssertThrowsError(try gsi(40, 40, final: value).validate()) }
+    }
+    func testOutOfRangeGSICorrectionDoesNotChangeSelectionOrHistory() throws {
+        try directory { url in
+            let file = url.appendingPathComponent("mapping.json")
+            var w = try configured(FileMappingStore(url: file)); w.draft.gsi = gsi(final: 40)
+            let original = try w.save(now: now), bytes = try Data(contentsOf: file)
+            for final in [34.0, 46] {
+                var correction = try w.correction(for: original.id)
+                correction.reason = "Проверка GSI"; correction.fields.gsi = gsi(final: final)
+                XCTAssertThrowsError(try w.saveCorrection(correction, now: now.addingTimeInterval(1)))
+                XCTAssertEqual(try Data(contentsOf: file), bytes)
+                XCTAssertEqual(w.observations, [original]); XCTAssertTrue(w.journal.revisions.isEmpty)
+            }
+            var valid = try w.correction(for: original.id); valid.reason = "Уточнение GSI"; valid.fields.gsi = gsi(final: 45)
+            let revised = try w.saveCorrection(valid, now: now.addingTimeInterval(1))
+            XCTAssertEqual(revised.snapshot.ratings?.gsi?.selection, original.ratings?.gsi?.selection)
+            XCTAssertEqual(revised.snapshot.ratings?.gsi?.lower, 35); XCTAssertEqual(revised.snapshot.ratings?.gsi?.upper, 45)
+            XCTAssertEqual(revised.snapshot.ratings?.gsi?.finalValue, 45)
+            XCTAssertEqual(w.journal.observations, [original])
+            XCTAssertEqual(try MappingWorkflow(store: FileMappingStore(url: file)).observations, [revised.snapshot])
+        }
+    }
     func testMeanUsesEffectiveValuesAndDoesNotAddMissingOrZero() throws {
         var d = draft(count: 5)
         for (i, raw) in ["0.20", "0.40", "0.09", "", "0"].enumerated() { d.jointSets[i].spacing = raw }
+        // Zero is only representable here as untouched legacy evidence, never new manual input.
+        d.jointSets[4].spacingProvenance = nil
         let mean = JointSpacingMean(try d.jointSets.map { try $0.record(now: now) })
         XCTAssertEqual(try XCTUnwrap(mean.value), 0.23, accuracy: 1e-15); XCTAssertEqual(mean.count, 3)
         XCTAssertFalse(mean.includesEstimates)

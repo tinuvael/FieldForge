@@ -112,13 +112,21 @@ struct JointSetDraft: Equatable, Identifiable {
     }
     var roughness = "", infill = "", notes = "", author = ""
     init(identifier: JointSetIdentifier, id: UUID = UUID()) { self.identifier = identifier; self.id = id }
+    /// New manual entry must be positive; untouched legacy spacing keeps its original meaning.
+    func validatedSpacing() throws -> Double? {
+        let value = try RatingNumber.optional(spacing, name: "SD, м")
+        if let value, value < 0 || (value == 0 && spacingProvenance?.source == .manual) {
+            throw MappingError.invalid("SD, м: введите значение больше нуля или оставьте поле пустым.")
+        }
+        return value
+    }
     func record(now: Date) throws -> InterpretedJointSet {
         do {
             _ = try representative.validated()
             return InterpretedJointSet(id: id, identifier: identifier, revision: 1, interpretedAt: now,
                 author: author.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : author,
                 method: "user-interpretation-v1", representative: representative, measurementIDs: measurementIDs,
-                spacingMeters: try GeologyInput.optionalNonnegative(spacing, field: "Расстояние, м"),
+                spacingMeters: try validatedSpacing(),
                 persistenceMeters: try GeologyInput.optionalNonnegative(persistence, field: "Протяжённость, м"),
                 apertureMillimeters: try GeologyInput.optionalNonnegative(aperture, field: "Раскрытие, мм"),
                 roughness: roughness, infill: infill, notes: notes, spacingProvenance: spacingProvenance)
