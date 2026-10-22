@@ -23,7 +23,7 @@ enum MappingFieldWorkbook {
              text(journal.excavations.first { $0.id == point.excavationID }?.name),
              text(point.displayPicket), text(pointRefs[point.id])]
         }
-        var observation = Table(name: "Наблюдения", columns: contextColumns + ["Дата", "X", "Y", "Z, м", "Единицы XY"] + JointSetIdentifier.allCases.flatMap { ["\($0.rawValue) азимут, °", "\($0.rawValue) падение, °", "\($0.rawValue) север"] } + ["Q", "Категория по Q · FieldForge", "RMR89 базовый", "Класс RMR89 базовый", "Примечания"])
+        var observation = Table(name: "Наблюдения", columns: contextColumns + ["Дата", "X", "Y", "Z, м", "Единицы XY"] + JointSetIdentifier.allCases.flatMap { ["\($0.rawValue) азимут, °", "\($0.rawValue) падение, °", "\($0.rawValue) север"] } + ["Q", "Категория по Q · FieldForge", "RMR89 базовый", "Класс RMR89 базовый", "Примечания", "GSI · оценка", "GSI · нижний контур / граница", "GSI · верхний контур / граница", "Метод GSI", "Дата GSI", "GSI X", "GSI Y", "Источник Z", "План Z · ревизия", "Метод Z", "Z · привязка, м", "Z · коэффициент в м", "Z · высотная система"])
         var joints = Table(name: "Системы трещин", columns: contextColumns + ["Система", "Азимут, °", "Падение, °", "Север", "Расстояние, м", "Протяжённость, м", "Раскрытие, мм", "Шероховатость", "Заполнитель", "Примечания"])
         var tectonics = Table(name: "Тектоника", columns: contextColumns + ["Структура", "Тип", "Азимут, °", "Падение, °", "Север", "Мощность, м", "Описание"])
         var ratings = Table(name: "Рейтинги массива", columns: contextColumns + ["Метод", "Дата оценки", "Q", "Класс Q · NGI", "Категория по Q · FieldForge", "RMR89 базовый", "Класс RMR89 базовый", "RQD, %", "Jn", "Jr", "Ja", "Jw", "SRF", "UCS / Is(50) / R0–R6", "Прочность, МПа", "Расстояние, м", "RMR балл прочности", "RMR балл RQD", "RMR балл расстояния", "RMR балл состояния", "RMR балл воды", "Категории RMR", "Пропуски", "RMR с ориентацией"])
@@ -42,6 +42,10 @@ enum MappingFieldWorkbook {
                 } else { row += [.empty, .empty, .empty] }
             }
             row += [.number(q?.evaluation.result?.value), text(q?.evaluation.result.flatMap { FieldQCategory(q: $0.value)?.title }), .integer(rmr?.calculation?.value), text(rmr?.calculation?.rockClass), text(point.notes)]
+            let gsi = point.ratings?.gsi
+            row += [.number(gsi?.finalValue), .number(gsi?.lower), .number(gsi?.upper), text(gsi?.method), .timestamp(gsi?.assessedAt), .number(gsi?.chartPosition?.x), .number(gsi?.chartPosition?.y)]
+            let z = coordinates?.zPlanGeometry
+            row += [text(coordinates?.zOrigin?.title), text(z?.planRevision), text(z?.method), .number(z?.distanceMeters), .number(z?.metersPerDrawingUnit), text(z?.verticalDatum ?? coordinates?.zDatum)]
             observation.rows.append(row)
             for joint in point.geology?.jointSets ?? [] {
                 let orientation = try joint.representative.validated().orientation

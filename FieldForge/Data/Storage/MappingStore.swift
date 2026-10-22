@@ -177,11 +177,11 @@ struct MappingWorkflow {
         }
         var next = journal; next.plans.append(plan); try commit(next)
     }
-    mutating func selectPlanPoint(_ point: PlanPoint, planID: UUID) throws {
+    mutating func selectPlanPoint(_ point: PlanPoint, planID: UUID, elevation: PlanGeometryElevation? = nil) throws {
         guard !draft.saving else { throw MappingError.invalid("Дождитесь сохранения наблюдения.") }
         guard let plan = plans.first(where: { $0.id == planID }),
               journal.horizons.contains(where: { $0.id == plan.horizonID && $0.projectID == context.projectID }) else { throw StorageError.invalidRecord }
-        try draft.selectPlanPoint(point, plan: plan)
+        try draft.selectPlanPoint(point, plan: plan, elevation: elevation, fallback: selectedHorizon)
     }
     func points(on plan: MappingPlanReference, excavationID: UUID? = nil, restrictToSelection: Bool = true) -> [MappingObservation] {
         guard journal.plans.contains(plan), !restrictToSelection || plans.contains(plan) else { return [] }

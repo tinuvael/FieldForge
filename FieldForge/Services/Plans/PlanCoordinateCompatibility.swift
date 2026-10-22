@@ -79,10 +79,10 @@ extension MappingWorkflow {
         guard !draft.saving, pendingContext == nil, plans.contains(plan), plan.file != nil else { throw StorageError.invalidRecord }
         return MappingPlanSelectionRequest(draftID: draft.id, context: context, plan: plan)
     }
-    mutating func selectPlanPoint(_ point: PlanPoint, request: MappingPlanSelectionRequest) throws {
+    mutating func selectPlanPoint(_ point: PlanPoint, request: MappingPlanSelectionRequest, elevation: PlanGeometryElevation? = nil) throws {
         guard draft.id == request.draftID, context == request.context, pendingContext == nil else {
             throw MappingError.invalid("Черновик точки изменился. Выберите место заново.")
         }
-        try selectPlanPoint(point, planID: request.plan.id)
+        try selectPlanPoint(point, planID: request.plan.id, elevation: elevation)
     }
 }

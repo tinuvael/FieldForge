@@ -21,6 +21,7 @@ enum MappingObservationDifference {
         changed("Исходный горизонт Z", a?.zHorizonID, b?.zHorizonID)
         changed("Исходная отметка горизонта Z", a?.zHorizonElevation, b?.zHorizonElevation)
         changed("Высотная система", a?.zDatum, b?.zDatum)
+        changed("Источник геометрии Z", a?.zPlanGeometry, b?.zPlanGeometry)
         changed("Начало интервала", before.geology?.start, after.geology?.start)
         changed("Конец интервала", before.geology?.end, after.geology?.end)
         changed("Положение наблюдения", before.geology?.position, after.geology?.position)

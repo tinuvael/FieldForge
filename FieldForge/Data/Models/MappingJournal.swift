@@ -52,9 +52,15 @@ struct MappingCoordinates: Codable, Equatable {
     var zHorizonElevation: Double? = nil
     var zDatum: String? = nil
     var planID: UUID? = nil
+    var zPlanGeometry: PlanGeometryElevation? = nil
 }
 
-enum ElevationOrigin: String, Codable { case horizonDefault, manualOverride }
+enum ElevationOrigin: String, Codable {
+    case horizonDefault, manualOverride, planGeometry
+    var title: String {
+        switch self { case .horizonDefault: return "горизонт"; case .manualOverride: return "вручную"; case .planGeometry: return "из DXF" }
+    }
+}
 
 enum ElevationInput {
     static func meters(_ text: String) throws -> Double {
@@ -215,6 +221,12 @@ struct MappingJournal: Codable, Equatable {
                     guard c.zHorizonID == o.horizonID, let elevation = c.zHorizonElevation,
                           elevation.isFinite, c.z == elevation, c.zDatum?.isEmpty == false else { throw StorageError.invalidRecord }
                 } else if c.zHorizonID != nil || c.zHorizonElevation != nil || c.zDatum != nil { throw StorageError.invalidRecord }
+                if c.zOrigin == .planGeometry {
+                    guard let elevation = c.zPlanGeometry, c.z == elevation.elevationMeters,
+                          c.planID == elevation.planID, let plan = plans.first(where: { $0.id == elevation.planID }) else { throw StorageError.invalidRecord }
+                    try elevation.validate(plan: plan)
+                    if c.source == "plan", (c.x != elevation.selectedXY.x || c.y != elevation.selectedXY.y) { throw StorageError.invalidRecord }
+                } else if c.zPlanGeometry != nil { throw StorageError.invalidRecord }
             }
         }
         if includingRevisions { try validateRevisions(); try validatePhotos() }
@@ -388,27 +400,44 @@ struct MappingDraft: Equatable {
             if !coordinateProvenance.contains("XY manually overridden") { coordinateProvenance += "; XY manually overridden in selected drawing frame" }
         }
     }
-    mutating func selectPlanPoint(_ point: PlanPoint, plan: MappingPlanReference) throws {
+    mutating func selectPlanPoint(_ point: PlanPoint, plan: MappingPlanReference,
+                                  elevation: PlanGeometryElevation? = nil, fallback: MappingHorizon? = nil) throws {
         guard let file = plan.file, point.x.isFinite, point.y.isFinite else { throw StorageError.invalidRecord }
+        if let elevation {
+            try elevation.validate(plan: plan)
+            guard elevation.selectedXY == point else { throw StorageError.invalidRecord }
+        }
+        if zOrigin == .planGeometry {
+            z = ""; zOrigin = nil
+            suggestElevation(fallback)
+        }
         x = String(point.x); y = String(point.y)
         planID = plan.id; xyUnits = file.units.coordinateUnits; xySource = "plan"
         crs = file.crs; axes = file.axes
         coordinateProvenance = "plan \(plan.id.uuidString); revision \(plan.version); SHA-256 \(file.sha256); drawing WCS XY; user selected; accuracy unknown; \(file.unitDeclaration)"
+        if let elevation {
+            z = ElevationInput.text(elevation.elevationMeters)
+            zOrigin = .planGeometry; zPlanGeometry = elevation
+        }
     }
-    var z = "" { didSet { zOrigin = .manualOverride; zHorizonID = nil; zHorizonElevation = nil; zDatum = nil } }
+    var z = "" { didSet { zOrigin = .manualOverride; zHorizonID = nil; zHorizonElevation = nil; zDatum = nil; zPlanGeometry = nil } }
     private(set) var zOrigin: ElevationOrigin?
     private(set) var zHorizonID: UUID?
     private(set) var zHorizonElevation: Double?
     private(set) var zDatum: String?
+    private(set) var zPlanGeometry: PlanGeometryElevation?
     var crs = "", axes = "", coordinateProvenance = ""
     var notes = ""
     mutating func suggestElevation(_ horizon: MappingHorizon?) {
-        guard zOrigin != .manualOverride else { return }
+        guard zOrigin != .manualOverride, zOrigin != .planGeometry else { return }
         z = horizon?.elevationMeters.map { ElevationInput.text($0) } ?? ""
         zOrigin = horizon?.elevationMeters == nil ? nil : .horizonDefault
         zHorizonID = zOrigin == nil ? nil : horizon?.id
         zHorizonElevation = horizon?.elevationMeters
         zDatum = zOrigin == nil ? nil : horizon?.elevationDatum
+    }
+    var preservesElevationOnPlanSelection: Bool {
+        zOrigin == .manualOverride || (zOrigin == nil && !z.isEmpty)
     }
     var hasChanges: Bool {
         !photos.isEmpty || !photoSessions.isEmpty || ![picket, chainageOriginAndDirection, x, y, crs, axes, coordinateProvenance, notes].allSatisfy(\.isEmpty) ||
@@ -425,7 +454,7 @@ struct MappingDraft: Equatable {
         return MappingCoordinates(x: values[0], y: values[1], z: values[2],
             crs: crs.isEmpty ? "unknown" : crs, axes: axes.isEmpty ? "unknown" : axes,
             units: xyUnits, source: xySource, provenance: coordinateProvenance.isEmpty ? "manual; accuracy unknown" : coordinateProvenance,
-            zOrigin: zOrigin, zHorizonID: zHorizonID, zHorizonElevation: zHorizonElevation, zDatum: zDatum, planID: planID)
+            zOrigin: zOrigin, zHorizonID: zHorizonID, zHorizonElevation: zHorizonElevation, zDatum: zDatum, planID: planID, zPlanGeometry: zPlanGeometry)
     }
 }
 
@@ -445,6 +474,7 @@ extension MappingDraft {
             planID = c.planID; xyUnits = c.units; xySource = c.source
             crs = c.crs; axes = c.axes; coordinateProvenance = c.provenance
             zOrigin = c.zOrigin; zHorizonID = c.zHorizonID; zHorizonElevation = c.zHorizonElevation; zDatum = c.zDatum
+            zPlanGeometry = c.zPlanGeometry
         }
         bartonQ = observation.ratings?.bartonQ?.input ?? BartonQInput()
         rmr89 = observation.ratings?.rmr89?.input ?? RMR89Input()

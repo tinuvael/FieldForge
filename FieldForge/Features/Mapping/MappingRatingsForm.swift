@@ -14,7 +14,7 @@ struct MappingRatingsForm: View {
                 RMR89Form(input: $rmr, focus: focus)
             }
             NavigationLink { GSISelectionView(assessment: $gsi) } label: {
-                LabeledContent("GSI", value: gsi.map { "\(EngineeringDisplay.number($0.lower))–\(EngineeringDisplay.number($0.upper))" } ?? "Оценить")
+                LabeledContent("GSI", value: gsi.map { $0.chartPosition != nil ? "≈ \(Int($0.finalValue!))" : "\(EngineeringDisplay.number($0.lower))–\(EngineeringDisplay.number($0.upper))" } ?? "Оценить")
             }.accessibilityIdentifier("openGSI")
             if let warning = SpacingRQD(q: q, rmr: rmr).warning { Text(warning).font(.caption).foregroundStyle(.orange) }
         }

@@ -48,10 +48,10 @@ struct MappingView: View {
         .sheet(item: $planSelection) { request in
             NavigationStack {
                 HorizonPlanLoader(plan: request.plan, selecting: true, onSelection: { planSelection = nil },
-                    onPointSelection: { point, _ in
+                    onPointSelection: { point, _, elevation in
                         guard mapping.workflow != nil else { throw StorageError.writesBlocked }
-                        try mapping.workflow!.selectPlanPoint(point, request: request)
-                    })
+                        try mapping.workflow!.selectPlanPoint(point, request: request, elevation: elevation)
+                    }, preserveManualElevation: mapping.workflow?.draft.preservesElevationOnPlanSelection ?? false)
                     .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Вернуться") { planSelection = nil } } }
             }.id(request.id)
         }
@@ -124,6 +124,7 @@ struct MappingView: View {
                 }
                 Section {
                     coordinate("X", \.x); coordinate("Y", \.y); coordinate("Z", \.z)
+                    if let origin = w.draft.zOrigin { Text("Z · " + origin.title).font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("mappingZSource") }
                     Button("Выбрать на плане", systemImage: "map") {
                         focused = false; coordinateFocus = nil
                         do { planSelection = try mapping.beginCoordinateSelection() }

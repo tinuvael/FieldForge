@@ -1,5 +1,11 @@
 # P2 mapping, nominal horizon elevations and offline DXF
 
+Current behavior: [DXF elevation snapping](gsi-chart-dxf-elevation.md) supersedes the
+historical no-DXF-Z/horizontal-LINE restrictions below. Explicit WCS LINE,
+3D POLYLINE and constant-elevation LWPOLYLINE segments can propose Z in metres,
+with bounded XY distance, ambiguity review and manual override preservation.
+
+
 **Pre-MVP owner storage decision:** mapping uses only current experimental schema **8**. No automatic mapping migrations, new `.pN-backup`, resets or deletions; old/corrupt files fail closed and all existing files are preserved. Earlier mapping-schema descriptions below are historical, not supported compatibility. Atomic current saves/`.previous`, integrity, external-change guards and immutable evidence/history remain. The independent original-measurement journal keeps its deployed compatibility. See [current storage/recovery](p4-1-photos.md) and [AGENTS.md](../AGENTS.md).
 
 **P3.1 update:** [Integrated measurements](p3-measurements.md) supersedes historical standalone-only measurement navigation, empty measurement links and schema-1/2-only statements. Mapping now saves point-owned originals atomically in schema 3; the existing DXF contract is unchanged.

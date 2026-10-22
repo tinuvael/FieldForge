@@ -1,6 +1,8 @@
 # Future geomechanical domain schema
 
-Current enterprise geotechnical extension: see [versioned SD, ROCK, field strength, JCond76, categorical GSI and three-sheet workbook](enterprise-geotechnical.md). Optional fields extend the shared schema-8 graph; no migration/reset or original-measurement journal change.
+Current chart/DXF elevation model: [exact graphical GSI positions and computed Z provenance](gsi-chart-dxf-elevation.md).
+
+Current enterprise geotechnical extension: see [versioned SD, ROCK, field strength, JCond76, versioned GSI and three-sheet workbook](enterprise-geotechnical.md). Optional fields extend the shared schema-8 graph; no migration/reset or original-measurement journal change.
 
 ## Third iPhone review contract
 

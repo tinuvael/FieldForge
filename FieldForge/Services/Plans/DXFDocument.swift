@@ -36,7 +36,7 @@ struct PlanViewport {
 }
 
 /// Source WCS geometry is distinct from the XY display and from observation coordinates.
-struct DXFVertex: Equatable {
+struct DXFVertex: Codable, Equatable {
     let x: Double, y: Double, z: Double
     var xy: PlanPoint { PlanPoint(x: x, y: y) }
 }
@@ -62,6 +62,7 @@ struct DXFDocument {
     let bounds: PlanBounds
     let insertionUnits: Int?
     let warnings: [String]
+    var elevationSegments: [DXFElevationSegment] = []
 
     /// Autodesk AutoCAD 2018 ASCII DXF group-code subset; see docs/p2-dxf.md.
     static func parse(_ data: Data) throws -> DXFDocument {
@@ -148,6 +149,18 @@ struct DXFDocument {
             paths.append(points)
         }
         var polylines: [DXFPolyline] = [], dots: [DXFVertex] = [], labels: [DXFLabel] = []
+        var elevationSegments: [DXFElevationSegment] = []
+        func elevations(_ vertices: [DXFVertex], explicit: [Bool], closed: Bool,
+                        kind: String, fields: [Pair], ordinal: Int) {
+            guard vertices.count >= 2 else { return }
+            for index in 0..<(vertices.count - (closed ? 0 : 1)) {
+                let next = (index + 1) % vertices.count
+                guard explicit[index], explicit[next] else { continue }
+                elevationSegments.append(DXFElevationSegment(a: vertices[index], b: vertices[next],
+                    entityType: kind, handle: fields.first { $0.code == 5 }?.value,
+                    entityOrdinal: ordinal, segmentIndex: index))
+            }
+        }
         func xyz(_ f: [Pair]) throws -> DXFVertex {
             try DXFVertex(x: number(f, 10), y: number(f, 20), z: number(f, 30, default: 0))
         }
@@ -169,6 +182,7 @@ struct DXFDocument {
         }
         var e = 0
         while e < entities.count {
+            let ordinal = e
             let (kind, f) = entities[e]; e += 1
             if kind == "POLYLINE" {
                 var vertices: [[Pair]] = []
@@ -191,7 +205,11 @@ struct DXFDocument {
                 try append(projected)
                 polylines.append(DXFPolyline(vertices: sourceVertices,
                     layer: f.first { $0.code == 8 }?.value ?? "0", closed: bits & 1 != 0, is3D: is3D))
-                if is3D { notes.insert("3D POLYLINE показаны в проекции WCS X/Y. Исходный Z сохранён; Z наблюдения задаётся отдельно.") }
+                if is3D {
+                    elevations(sourceVertices, explicit: vertices.map { $0.contains { $0.code == 30 } },
+                        closed: bits & 1 != 0, kind: kind, fields: f, ordinal: ordinal)
+                    notes.insert("3D POLYLINE показаны в проекции WCS X/Y. Явный Z доступен для предложения отметки рядом с сегментом.")
+                }
                 widthWarning(f); for v in vertices { widthWarning(v) }
                 continue
             }
@@ -243,8 +261,11 @@ struct DXFDocument {
             }
             switch kind {
             case "LINE":
-                guard try number(f, 30, default: 0) == number(f, 31, default: 0) else { skip("LINE (3D)"); continue }
-                try append([point(f), PlanPoint(x: number(f, 11), y: number(f, 21))])
+                let a = try xyz(f)
+                let b = try DXFVertex(x: number(f, 11), y: number(f, 21), z: number(f, 31, default: 0))
+                try append([a.xy, b.xy])
+                elevations([a, b], explicit: [f.contains { $0.code == 30 }, f.contains { $0.code == 31 }],
+                    closed: false, kind: kind, fields: f, ordinal: ordinal)
             case "LWPOLYLINE":
                 let flags = try number(f, 70, default: 0)
                 guard flags.rounded() == flags, flags >= 0, flags <= 129 else { throw invalid("флаги LWPOLYLINE.") }
@@ -256,7 +277,11 @@ struct DXFDocument {
                     else if [20, 40, 41, 42, 91].contains(field.code), !vertices.isEmpty { vertices[vertices.count - 1].append(field) }
                 }
                 guard try number(f, 90) == Double(vertices.count) else { throw invalid("не совпало число вершин LWPOLYLINE.") }
-                var points = try vertices.map { try point($0) }
+                let elevation = try number(f, 38, default: 0)
+                let source = try vertices.map { try DXFVertex(x: number($0, 10), y: number($0, 20), z: elevation) }
+                elevations(source, explicit: Array(repeating: f.contains { $0.code == 38 }, count: source.count),
+                    closed: Int(flags) & 1 != 0, kind: kind, fields: f, ordinal: ordinal)
+                var points = source.map(\.xy)
                 if Int(flags) & 1 != 0, let first = points.first { points.append(first) }
                 try append(points)
             default:
@@ -286,7 +311,7 @@ struct DXFDocument {
         notes.insert("Упрощённый 2D: стили, цвета и привязки не воспроизводятся; скрытые/замороженные слои пропущены. Проверьте исходный план.")
         for key in skipped.keys.sorted() { notes.insert("Пропущено \(key): \(skipped[key]!).") }
         return DXFDocument(paths: paths, polylines: polylines, points: dots, labels: labels, bounds: PlanBounds(minX: minX, minY: minY, maxX: maxX, maxY: maxY),
-                           insertionUnits: units, warnings: notes.sorted())
+                           insertionUnits: units, warnings: notes.sorted(), elevationSegments: elevationSegments)
     }
 }
 
