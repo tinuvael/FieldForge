@@ -34,6 +34,7 @@ final class FileMappingStore: MappingStore {
         // Original observations are append-only; names/metadata can be managed separately.
         if let loadedBytes {
             let previous = try JSONDecoder().decode(MappingJournal.self, from: loadedBytes)
+            try journal.validatePlanChanges(from: previous)
             guard previous.projects.allSatisfy({ old in
                       (old.lithologies ?? []).allSatisfy { rock in journal.projects.first { $0.id == old.id }?.lithologies?.contains(rock) == true }
                   }), previous.photos.allSatisfy({ journal.photos.contains($0) }),
@@ -41,8 +42,7 @@ final class FileMappingStore: MappingStore {
                   previous.photoRevisions.allSatisfy({ journal.photoRevisions.contains($0) }),
                   previous.revisions.allSatisfy({ journal.revisions.contains($0) }),
                   previous.observations.allSatisfy({ old in journal.observations.contains(old) }),
-                  previous.measurements.allSatisfy({ old in journal.measurements.contains(old) }),
-                  previous.plans.allSatisfy({ old in journal.plans.contains(old) }) else {
+                  previous.measurements.allSatisfy({ old in journal.measurements.contains(old) }) else {
                 throw StorageError.invalidRecord
             }
         }
@@ -168,11 +168,11 @@ struct MappingWorkflow {
         next.excavations[i].name = try validName(name); next.excavations[i].horizonIDs = horizonIDs
         try commit(next)
     }
-    var plans: [MappingPlanReference] { journal.plans.filter { $0.horizonID == context.horizonID } }
+    var plans: [MappingPlanReference] { journal.plans.filter { $0.horizonID == context.horizonID && $0.isAvailable } }
     mutating func registerPlan(_ plan: MappingPlanReference) throws {
-        guard journal.horizons.contains(where: { $0.id == plan.horizonID }) else { throw StorageError.invalidRecord }
+        guard plan.managementHistory == nil, !journal.plans.contains(where: { $0.id == plan.id && $0 != plan }), journal.horizons.contains(where: { $0.id == plan.horizonID }) else { throw StorageError.invalidRecord }
         if journal.plans.contains(plan) { return }
-        guard !journal.plans.contains(where: { $0.horizonID == plan.horizonID && PlanRevisionNumber.same($0.version, plan.version) }) else {
+        guard !journal.plans.contains(where: { $0.horizonID == plan.horizonID && !$0.isDeleted && PlanRevisionNumber.same($0.version, plan.version) }) else {
             throw MappingError.invalid("Такая ревизия плана уже существует. Выберите другой номер.")
         }
         var next = journal; next.plans.append(plan); try commit(next)

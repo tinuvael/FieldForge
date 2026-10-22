@@ -17,7 +17,7 @@ struct ActiveHorizonPlanView: View {
                         }.pickerStyle(.menu).padding(.horizontal)
                         if mapping.hasUnavailablePlanSelection(for: horizon.id) {
                             VStack(alignment: .leading, spacing: 4) {
-                                Label("Прежний выбор недоступен. Открыт последний импорт.", systemImage: "exclamationmark.triangle")
+                                Label("Прежний выбор недоступен. Выберите ревизию.", systemImage: "exclamationmark.triangle")
                                     .font(.caption).foregroundStyle(.orange)
                                 Button("Выбрать ревизию") { managing = true }.frame(minHeight: 44)
                             }.padding(.horizontal).accessibilityIdentifier("planSelectionFallback")

@@ -1,3 +1,5 @@
+> DXF parsing, unit review, inline Z and plan-management details are superseded by [DXF elevation and plan revisions](dxf-elevation-plan-revisions.md). GSI is unchanged.
+
 # Interactive GSI and DXF elevation suggestions
 
 This supersedes the categorical GSI input and the no-DXF-Z statements in earlier
