@@ -1,3 +1,5 @@
+> Current DXF elevation, BLOCK/INSERT, revision lifecycle and schema-8 behavior: [DXF elevation and plan revisions](dxf-elevation-plan-revisions.md). Historical statements below about unsupported INSERT, no DXF Z, migration and active selection are superseded.
+
 # P2 mapping, nominal horizon elevations and offline DXF
 
 Current behavior: [DXF elevation snapping](gsi-chart-dxf-elevation.md) supersedes the

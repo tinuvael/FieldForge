@@ -92,7 +92,7 @@ final class PlanElevationSnapTests: XCTestCase {
         let xy = PlanPoint(x: 2.5, y: 1), document = try DXFDocument.parse(bytes)
         let z = try XCTUnwrap(PlanElevationSnap.resolve(xy, document: document, plan: a).automatic)
         try w.selectPlanPoint(xy, planID: a.id, elevation: z); w.draft.picket = "1"
-        XCTAssertEqual(w.draft.x, "2.5"); XCTAssertEqual(w.draft.y, "1.0"); XCTAssertEqual(w.draft.z, "-10")
+        XCTAssertEqual(w.draft.x, "2.5"); XCTAssertEqual(w.draft.y, "1"); XCTAssertEqual(w.draft.z, "-10")
         let first = try w.save()
         XCTAssertEqual(first.coordinates?.zOrigin, .planGeometry); XCTAssertEqual(first.coordinates?.zPlanGeometry, z)
         var reopened = try MappingWorkflow(store: store)

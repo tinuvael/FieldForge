@@ -27,6 +27,14 @@ enum EngineeringDisplay {
         return formatter.string(from: NSNumber(value: value == 0 ? 0 : value)) ?? "—"
     }
 
+    static func elevation(_ value: Double) -> String {
+        guard value.isFinite else { return "—" }
+        let formatter = base()
+        formatter.minimumFractionDigits = 2; formatter.maximumFractionDigits = 2
+        formatter.positivePrefix = "+"
+        return formatter.string(from: NSNumber(value: value == 0 ? 0 : value)) ?? "—"
+    }
+
     static func significant(_ value: Double) -> String {
         guard value.isFinite else { return "—" }
         let formatter = base()

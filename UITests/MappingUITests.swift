@@ -648,7 +648,7 @@ final class MappingUITests: XCTestCase {
         show(fault, app: app); fault.tap(); fill(app.textFields["tectonicThickness"], "0,5", app: app); back(app)
         top(app); reveal("selectHorizonPlan", app: app); app.buttons["selectHorizonPlan"].tap()
         app.buttons["P2_PLAN_A"].tap(); XCTAssertTrue(app.textFields["planVersion"].waitForExistence(timeout: 5))
-        fill(app.textFields["planVersion"], "A", app: app); app.buttons["savePlanImport"].tap()
+        fill(app.textFields["planVersion"], "A", app: app); app.switches["confirmPlanHorizon"].tap(); app.buttons["savePlanImport"].tap()
         XCTAssertTrue(app.staticTexts["P2_PLAN_A.dxf"].waitForExistence(timeout: 10)); app.staticTexts["P2_PLAN_A.dxf"].tap()
         let canvas = app.otherElements["planCanvas"]; XCTAssertTrue(canvas.waitForExistence(timeout: 10))
         canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap(); app.buttons["confirmPlanXY"].tap()

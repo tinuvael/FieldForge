@@ -14,11 +14,11 @@ import Combine
     // Disposable UI preferences, outside the append-only mapping journal.
     private let preferences: UserDefaults
     @Published private var activePlanIDs: [String: String]
-    func plans(for horizonID: UUID) -> [MappingPlanReference] {
+    func plans(for horizonID: UUID, archived: Bool = false) -> [MappingPlanReference] {
         guard let workflow, workflow.journal.horizons.contains(where: {
             $0.id == horizonID && $0.projectID == workflow.context.projectID
         }) else { return [] }
-        return workflow.journal.plans.filter { $0.horizonID == horizonID }
+        return workflow.journal.plans.filter { $0.horizonID == horizonID && !$0.isDeleted && $0.isArchived == archived }
     }
     private func planKey(_ horizonID: UUID) -> String? {
         workflow?.context.projectID.map { "\($0.uuidString)/\(horizonID.uuidString)" }
@@ -29,8 +29,9 @@ import Combine
            let selected = available.first(where: { $0.id.uuidString == id }) {
             return selected
         }
+        if let key = planKey(horizonID), activePlanIDs[key] != nil { return nil }
         // Import order is journal append order; no geometric compatibility is implied.
-        return available.last
+        return available.first
     }
     func hasExplicitPlan(for horizonID: UUID) -> Bool {
         guard let key = planKey(horizonID), let id = activePlanIDs[key] else { return false }
@@ -44,6 +45,30 @@ import Combine
         guard plans(for: plan.horizonID).contains(plan), let key = planKey(plan.horizonID) else { return }
         activePlanIDs[key] = plan.id.uuidString
         preferences.set(activePlanIDs, forKey: "FieldForge.activePlans.v1")
+    }
+    func selectActivePlanIfUnset(_ plan: MappingPlanReference) {
+        guard let key = planKey(plan.horizonID), activePlanIDs[key] == nil else { return }
+        selectActivePlan(plan)
+    }
+    func managePlan(_ plan: MappingPlanReference, action: PlanManagementChange.Action, targetHorizonID: UUID? = nil,
+                    replacement: MappingPlanReference? = nil) throws {
+        guard workflow != nil else { throw StorageError.writesBlocked }
+        let wasActive = activePlan(for: plan.horizonID)?.id == plan.id
+        if wasActive && action != .restore {
+            let alternatives = plans(for: plan.horizonID).filter { $0.id != plan.id }
+            guard alternatives.isEmpty || replacement.map({ alternatives.contains($0) }) == true else {
+                throw MappingError.invalid("Выберите новую активную ревизию.")
+            }
+        }
+        try workflow!.managePlan(plan.id, action: action, horizonID: targetHorizonID)
+        if wasActive && action != .restore {
+            if let replacement { selectActivePlan(replacement) }
+            else if let key = planKey(plan.horizonID) {
+                // Keep a deliberate empty choice; never silently fall back to another import.
+                activePlanIDs[key] = plan.id.uuidString
+                preferences.set(activePlanIDs, forKey: "FieldForge.activePlans.v1")
+            }
+        }
     }
     private(set) var planStore: ManagedPlanStore?
     private(set) var photoStore: ManagedPhotoStore?

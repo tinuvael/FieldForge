@@ -14,7 +14,7 @@ enum PlanCoordinateCompatibility {
         return ["", "unknown", "неизвестно", "неизвестна", "не указано", "?", "local", "локальная", "местная"].contains(value) ? nil : value
     }
     private static func noConflict(_ a: MappingPlanReference, _ b: MappingPlanReference) -> Bool {
-        guard a.horizonID == b.horizonID, let x = a.file, let y = b.file,
+        guard !a.isDeleted, !b.isDeleted, a.horizonID == b.horizonID, let x = a.file, let y = b.file,
               x.units != .unknown, x.units == y.units else { return false }
         for (left, right) in [(x.crs, y.crs), (x.axes, y.axes)] {
             if let left = known(left), let right = known(right), left != right { return false }
@@ -38,7 +38,7 @@ enum PlanCoordinateCompatibility {
         return found
     }
     static func compatible(_ a: MappingPlanReference, _ b: MappingPlanReference, plans: [MappingPlanReference]) -> Bool {
-        guard plans.contains(a), plans.contains(b) else { return false }
+        guard !a.isDeleted, !b.isDeleted, plans.contains(a), plans.contains(b) else { return false }
         if a.id == b.id { return true } // Preserve original-plan display, including unknown units.
         let group = component(a, plans: plans)
         return group.contains(b) && group.allSatisfy { left in group.allSatisfy { noConflict(left, $0) } }
@@ -80,7 +80,9 @@ extension MappingWorkflow {
         return MappingPlanSelectionRequest(draftID: draft.id, context: context, plan: plan)
     }
     mutating func selectPlanPoint(_ point: PlanPoint, request: MappingPlanSelectionRequest, elevation: PlanGeometryElevation? = nil) throws {
-        guard draft.id == request.draftID, context == request.context, pendingContext == nil else {
+        guard draft.id == request.draftID, context == request.context, pendingContext == nil,
+              let current = plans.first(where: { $0.id == request.plan.id }),
+              current.file == request.plan.file, current.managementHistory == request.plan.managementHistory else {
             throw MappingError.invalid("Черновик точки изменился. Выберите место заново.")
         }
         try selectPlanPoint(point, planID: request.plan.id, elevation: elevation)

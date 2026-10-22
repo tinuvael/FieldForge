@@ -22,14 +22,16 @@ struct MappingExcavation: Codable, Equatable, Identifiable {
     var horizonIDs: Set<UUID>
 }
 
-/// One immutable DXF revision belongs to exactly one horizon/project through its parent.
+/// Immutable DXF identity/source; horizon assignment and lifecycle have explicit management history.
 struct MappingPlanReference: Codable, Equatable, Identifiable {
     let id: UUID
-    let horizonID: UUID
+    var horizonID: UUID
     let attachmentID: UUID
     let version: String
     var file: ManagedPlanFile? = nil
     var frameConfirmation: PlanFrameConfirmation? = nil
+    var managementHistory: [PlanManagementChange]? = nil
+    var elevationUnitConfirmation: PlanElevationUnitConfirmation? = nil
 }
 
 struct MappingContext: Codable, Equatable {
@@ -57,6 +59,9 @@ struct MappingCoordinates: Codable, Equatable {
 
 enum ElevationOrigin: String, Codable {
     case horizonDefault, manualOverride, planGeometry
+    var fieldLabel: String {
+        switch self { case .horizonDefault: return "Горизонт"; case .manualOverride: return "Вручную"; case .planGeometry: return "DXF" }
+    }
     var title: String {
         switch self { case .horizonDefault: return "горизонт"; case .manualOverride: return "вручную"; case .planGeometry: return "из DXF" }
     }
@@ -177,6 +182,14 @@ struct MappingJournal: Codable, Equatable {
                       (1...10_000_000).contains(f.byteCount) && f.importedAt.timeIntervalSinceReferenceDate.isFinite &&
                       f.unitDeclaration == "userConfirmedAtImport" } ?? true) }),
               validContext(selection) else { throw StorageError.invalidRecord }
+        for plan in plans {
+            try plan.validateManagement()
+            if plan.isDeleted, !planDependencies(plan.id).isEmpty { throw StorageError.invalidRecord }
+            for event in plan.managementHistory ?? [] {
+                guard let from = horizons.first(where: { $0.id == event.previousHorizonID }),
+                      horizons.contains(where: { $0.id == event.horizonID && $0.projectID == from.projectID }) else { throw StorageError.invalidRecord }
+            }
+        }
         try PlanCoordinateCompatibility.validate(plans)
         let geologyIDs = observations.flatMap { observation in
             (observation.geology?.jointSets.map(\.id) ?? []) + (observation.geology?.tectonicStructures.map(\.id) ?? [])
@@ -213,7 +226,7 @@ struct MappingJournal: Codable, Equatable {
                     throw StorageError.invalidRecord
                 }
                 if let planID = c.planID {
-                    guard ["plan", "manualInPlan"].contains(c.source), let plan = plans.first(where: { $0.id == planID }),
+                    guard ["plan", "manualInPlan"].contains(c.source), let plan = plans.first(where: { $0.id == planID && !$0.isDeleted }),
                           plan.horizonID == o.horizonID, let file = plan.file, (c.source != "plan" || (c.x != nil && c.y != nil)),
                           c.units == file.units.coordinateUnits, c.crs == file.crs, c.axes == file.axes else { throw StorageError.invalidRecord }
                 } else if c.source != "manual" || c.units != "m" { throw StorageError.invalidRecord }
@@ -411,7 +424,9 @@ struct MappingDraft: Equatable {
             z = ""; zOrigin = nil
             suggestElevation(fallback)
         }
-        x = String(point.x); y = String(point.y)
+        // Canonical unrounded decimals also cover tiny XY near an axis; String(Double)
+        // may use exponent notation, which the editable decimal input contract rejects.
+        x = ElevationInput.text(point.x); y = ElevationInput.text(point.y)
         planID = plan.id; xyUnits = file.units.coordinateUnits; xySource = "plan"
         crs = file.crs; axes = file.axes
         coordinateProvenance = "plan \(plan.id.uuidString); revision \(plan.version); SHA-256 \(file.sha256); drawing WCS XY; user selected; accuracy unknown; \(file.unitDeclaration)"

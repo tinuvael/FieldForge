@@ -7,7 +7,9 @@ struct HorizonPlansView: View {
     var onSelection: (() -> Void)?
     var horizonID: UUID? = nil
     private var effectiveHorizonID: UUID? { horizonID ?? mapping.workflow?.context.horizonID }
-    private var plans: [MappingPlanReference] { effectiveHorizonID.map { mapping.plans(for: $0) } ?? [] }
+    private var plans: [MappingPlanReference] { effectiveHorizonID.map { mapping.plans(for: $0, archived: showingArchive) } ?? [] }
+    @State private var showingArchive = false
+    @State private var management: PlanRevisionActionRequest?
     @State private var importing = false
     @State private var prepared: PreparedPlanImport?
     @State private var error: String?
@@ -40,28 +42,50 @@ struct HorizonPlansView: View {
             }
             #endif
             Section("Планы и версии") {
+                Picker("Ревизии", selection: $showingArchive) {
+                    Text("Планы").tag(false)
+                    Text("Архив").tag(true)
+                }.pickerStyle(.segmented).accessibilityIdentifier("planArchiveFilter")
                 ForEach(plans) { plan in
-                    NavigationLink {
-                        HorizonPlanLoader(plan: plan, selecting: selecting, onSelection: onSelection)
-                    } label: {
-                        VStack(alignment: .leading) {
-                            Text(plan.file?.originalFilename ?? "Старая ссылка без файла")
-                            Text("Версия: \(plan.version)").font(.subheadline)
-                            if mapping.activePlan(for: plan.horizonID)?.id == plan.id {
-                                Text(mapping.hasExplicitPlan(for: plan.horizonID) ? "Активная для просмотра" : "Последний импорт · для просмотра").font(.caption).foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 6) {
+                        NavigationLink {
+                            HorizonPlanLoader(plan: plan, selecting: selecting && plan.isAvailable, onSelection: onSelection)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(plan.file?.originalFilename ?? "Старая ссылка без файла").font(.headline)
+                                Text("\(horizonName(plan.horizonID)) · Ревизия \(plan.version)").font(.subheadline)
+                                if plan.isArchived {
+                                    Label("Архивная", systemImage: "archivebox").font(.caption)
+                                } else if mapping.activePlan(for: plan.horizonID)?.id == plan.id {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "checkmark.circle.fill")
+                                        Text("Активная").accessibilityIdentifier("activePlan-\(plan.version)")
+                                    }.font(.caption).foregroundStyle(.blue)
+                                } else { Text("Неактивная").font(.caption).foregroundStyle(.secondary) }
+                                if let file = plan.file {
+                                    Text(file.importedAt.formatted(date: .numeric, time: .shortened)).font(.caption)
+                                }
                             }
-                            if selecting, mapping.workflow?.draft.planID == plan.id {
-                                Text("Источник координат черновика").font(.caption)
+                        }.accessibilityIdentifier("plan-\(plan.id.uuidString)")
+                        HStack {
+                            if !plan.isArchived {
+                                Button("Сделать активной") { mapping.selectActivePlan(plan) }
+                                    .disabled(mapping.activePlan(for: plan.horizonID)?.id == plan.id && mapping.hasExplicitPlan(for: plan.horizonID))
+                                    .accessibilityIdentifier("activatePlan-\(plan.version)")
                             }
-                            Text(plan.file?.units.label ?? "Единицы неизвестны").font(.caption)
-                        }
-                    }.accessibilityIdentifier("plan-\(plan.id.uuidString)")
-                    if !selecting {
-                        Button("Показывать версию \(plan.version)") { mapping.selectActivePlan(plan) }
-                            .disabled(mapping.activePlan(for: plan.horizonID)?.id == plan.id && mapping.hasExplicitPlan(for: plan.horizonID))
+                            Spacer()
+                            Menu("Действия", systemImage: "ellipsis.circle") {
+                                NavigationLink("Открыть") { HorizonPlanLoader(plan: plan, selecting: false, onSelection: nil) }
+                                Button(plan.isArchived ? "Вернуть из архива" : "Архивировать") {
+                                    management = PlanRevisionActionRequest(plan: plan, action: plan.isArchived ? .restore : .archive)
+                                }
+                                Button("Перенести на другой горизонт") { management = PlanRevisionActionRequest(plan: plan, action: .move) }
+                                Button("Удалить", role: .destructive) { management = PlanRevisionActionRequest(plan: plan, action: .delete) }
+                            }.accessibilityIdentifier("planActions-\(plan.version)")
+                        }.font(.subheadline).buttonStyle(.borderless)
                     }
                 }
-                if plans.isEmpty { Text("На этом горизонте пока нет DXF") }
+                if plans.isEmpty { Text(showingArchive ? "Архив этого горизонта пуст" : "На этом горизонте пока нет DXF") }
             }
             if !pending.isEmpty {
                 Section("Незавершённые импорты · оригиналы сохранены") {
@@ -73,10 +97,10 @@ struct HorizonPlansView: View {
                 }
             }
             DisclosureGroup("Помощь по DXF") {
-                Text("Текстовый DXF: LINE, LWPOLYLINE, 2D/3D POLYLINE (XY-проекция), ARC, CIRCLE, POINT, простые TEXT/MTEXT. BLOCK/INSERT и кривые bulge пропускаются с предупреждением. Не DWG.").font(.caption)
-                Text("Локальные координаты чертежа не подтверждают съёмочную точность. Z берётся из горизонта либо вводится вручную. GPS не используется.").font(.caption)
+                Text("Текстовый DXF: LINE, LWPOLYLINE, 2D/3D POLYLINE (XY-проекция), ARC, CIRCLE, POINT, простые TEXT/MTEXT. Прямые внутри BLOCK/INSERT поддерживаются при стандартном направлении оси Z. Кривые bulge пропускаются с предупреждением. Не DWG.").font(.caption)
+                Text("Локальные координаты чертежа не подтверждают съёмочную точность. Z предлагается по явной высотной геометрии DXF рядом с точкой при подтверждённых единицах; иначе — горизонт или ручной ввод. GPS не используется.").font(.caption)
             }
-        }.navigationTitle("Планы горизонта")
+        }.accessibilityIdentifier("planRevisionList").navigationTitle("Планы горизонта")
             .fileImporter(isPresented: $importing, allowedContentTypes: [UTType(filenameExtension: "dxf") ?? .data]) { result in
                 switch result {
                 case .success(let url): prepare(url)
@@ -84,9 +108,9 @@ struct HorizonPlansView: View {
                 }
             }
             .sheet(item: $prepared, onDismiss: refreshPending) { item in
-                PlanImportSetup(item: item, previousPlan: plans.last, existingVersions: (plans + pending).filter { $0.horizonID == item.horizonID }.map(\.version), stage: { units, version, crs, axes, confirmation in
+                PlanImportSetup(item: item, horizonName: horizonName(item.horizonID), previousPlan: mapping.activePlan(for: item.horizonID), existingVersions: ((mapping.workflow?.journal.plans ?? []) + pending).filter { $0.horizonID == item.horizonID && !$0.isDeleted }.map(\.version), stage: { units, version, crs, axes, confirmation in
                     guard let files = mapping.planStore else { throw StorageError.writesBlocked }
-                    try PlanRevisionNumber.validateNew(version, existing: ((mapping.workflow?.journal.plans ?? []) + pending).filter { $0.horizonID == item.horizonID }.map(\.version))
+                    try PlanRevisionNumber.validateNew(version, existing: ((mapping.workflow?.journal.plans ?? []) + pending).filter { $0.horizonID == item.horizonID && !$0.isDeleted }.map(\.version))
                     let preview = MappingPlanReference(id: UUID(), horizonID: item.horizonID, attachmentID: UUID(), version: version,
                         file: ManagedPlanFile(originalFilename: item.filename, sha256: ManagedPlanStore.digest(item.data), byteCount: item.data.count,
                             importedAt: Date(), units: units, crs: crs.isEmpty ? "unknown" : crs, axes: axes.isEmpty ? "unknown" : axes,
@@ -100,21 +124,23 @@ struct HorizonPlansView: View {
                     // Import context was frozen at file selection, independent of subsequent navigation.
                     guard mapping.workflow != nil else { throw StorageError.writesBlocked }
                     try mapping.workflow!.registerPlan(plan)
-                    mapping.planStore?.complete(plan); refreshPending()
+                    mapping.planStore?.complete(plan); mapping.selectActivePlanIfUnset(plan); refreshPending()
                 })
             }
+            .sheet(item: $management) { PlanRevisionActionsView(request: $0) }
             .alert("План", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
                 Button("Понятно", role: .cancel) { error = nil }
             } message: { Text(error ?? "") }
             .onAppear { refreshPending() }
             .onChange(of: effectiveHorizonID) { _, _ in refreshPending() }
     }
+    private func horizonName(_ id: UUID) -> String { mapping.workflow?.journal.horizons.first { $0.id == id }?.displayName ?? "Неизвестно" }
     private func refreshPending() {
         do {
             let items = try mapping.planStore?.pending() ?? []
-            for plan in items where mapping.workflow?.journal.plans.contains(plan) == true { mapping.planStore?.complete(plan) }
+            for plan in items where mapping.workflow?.journal.plans.contains(where: { $0.matchesImport(plan) }) == true { mapping.planStore?.complete(plan) }
             pending = items.filter { plan in
-                plan.horizonID == effectiveHorizonID && mapping.workflow?.journal.plans.contains(plan) != true
+                plan.horizonID == effectiveHorizonID && mapping.workflow?.journal.plans.contains(where: { $0.matchesImport(plan) }) != true
             }
         } catch { self.error = "Не удалось прочитать журнал импорта: \(error.localizedDescription). Файлы сохранены." }
     }
@@ -179,6 +205,7 @@ struct PreparedPlanImport: Identifiable {
 
 private struct PlanImportSetup: View {
     let item: PreparedPlanImport
+    let horizonName: String
     let previousPlan: MappingPlanReference?
     let existingVersions: [String]
     let stage: (PlanUnits, String, String, String, PlanFrameConfirmation?) async throws -> MappingPlanReference
@@ -188,6 +215,7 @@ private struct PlanImportSetup: View {
     @State private var staged: MappingPlanReference?
     @State private var busy = false
     @State private var sameFrame = false
+    @State private var confirmedHorizon = false
     @State private var units = PlanUnits.unknown
     @State private var version = "1"
     @State private var initializedVersion = false
@@ -199,11 +227,15 @@ private struct PlanImportSetup: View {
             Form {
                 Section("Импорт DXF") {
                     Text(item.filename)
-                    LabeledContent("Ревизия", value: version)
-                    DisclosureGroup("Изменить номер ревизии") {
+                    LabeledContent("Целевой горизонт", value: horizonName).accessibilityIdentifier("planImportHorizon")
+                    Toggle("Подтверждаю горизонт \(horizonName)", isOn: $confirmedHorizon)
+                        .disabled(staged != nil || busy).accessibilityIdentifier("confirmPlanHorizon")
+                    HStack {
+                        Text("Ревизия")
                         TextField("Номер ревизии", text: $version).keyboardType(.numberPad).focused($inputFocused)
                             .accessibilityIdentifier("planVersion").disabled(staged != nil || busy)
                     }
+                    LabeledContent("Единицы в DXF · $INSUNITS", value: item.drawing.insertionUnits.map(String.init) ?? "Не заданы")
                     Picker("Единицы XY · подтвердите источник", selection: $units) {
                         ForEach(PlanUnits.allCases, id: \.self) { Text($0.label).tag($0) }
                     }.accessibilityIdentifier("planUnits").disabled(staged != nil || busy)
@@ -246,7 +278,7 @@ private struct PlanImportSetup: View {
                             try register(staged); dismiss()
                         } catch { self.error = error.localizedDescription }
                     }
-                }.disabled(busy).accessibilityIdentifier("savePlanImport")
+                }.disabled(busy || !confirmedHorizon).accessibilityIdentifier("savePlanImport")
             }.navigationTitle("Импорт DXF").interactiveDismissDisabled(busy)
                 .onAppear {
                     guard !initializedVersion else { return }
@@ -269,11 +301,12 @@ struct HorizonPlanLoader: View {
     var onPointSelection: ((PlanPoint, MappingPlanReference, PlanGeometryElevation?) throws -> Void)? = nil
     var preserveManualElevation = false
     @EnvironmentObject private var mapping: MappingModel
+    private var currentPlan: MappingPlanReference { mapping.workflow?.journal.plans.first { $0.id == plan.id } ?? plan }
     @State private var drawing: DXFDocument?
     @State private var error: String?
     var body: some View {
         Group {
-            if let drawing { HorizonPlanView(plan: plan, drawing: drawing, selecting: selecting, onSelection: onSelection, onPointSelection: onPointSelection, preserveManualElevation: preserveManualElevation) }
+            if let drawing { HorizonPlanView(plan: currentPlan, drawing: drawing, selecting: selecting, onSelection: onSelection, onPointSelection: onPointSelection, preserveManualElevation: preserveManualElevation) }
             else if let error { ContentUnavailableView("План недоступен", systemImage: "exclamationmark.triangle", description: Text(error)) }
             else { ProgressView("Проверка оригинала…") }
         }.task(id: plan.id) {
@@ -308,6 +341,7 @@ struct HorizonPlanView: View {
     @State private var filter: UUID?
     @State private var pointSelection: PlanPointSelection?
     @State private var properties = false
+    @State private var reviewedUnits = PlanUnits.unknown
     @State private var error: String?
     private var points: [MappingObservation] { mapping.workflow?.points(on: plan, excavationID: filter, restrictToSelection: selecting && onPointSelection == nil) ?? [] }
     private func canvasDescription(_ viewport: PlanViewport) -> String {
@@ -430,7 +464,8 @@ struct HorizonPlanView: View {
                     Button("Отменить точку") { self.proposed = nil }
                 }.padding(8)
             }
-        }.onChange(of: automaticZ) { _, _ in if let proposed { propose(proposed) } }
+        }.onChange(of: plan) { _, _ in if let proposed { propose(proposed) } }
+            .onChange(of: automaticZ) { _, _ in if let proposed { propose(proposed) } }
             .onChange(of: snapTolerance) { _, _ in if let proposed { propose(proposed) } }
             .navigationTitle(plan.file?.originalFilename ?? "DXF").navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -487,7 +522,7 @@ struct HorizonPlanView: View {
                         Section("Совместимость") {
                             Text("Показаны точки этой и совместимых ревизий горизонта.")
                             if let workflow = mapping.workflow {
-                                ForEach(workflow.journal.plans.filter { $0.horizonID == plan.horizonID && $0.id != plan.id }) { other in
+                                ForEach(workflow.journal.plans.filter { $0.horizonID == plan.horizonID && $0.id != plan.id && !$0.isDeleted }) { other in
                                     let compatible = PlanCoordinateCompatibility.compatible(plan, other, plans: workflow.journal.plans)
                                     LabeledContent("Ревизия \(other.version)", value: compatible ? "Совместима" : "Совместимость не подтверждена")
                                     if !compatible {
@@ -500,7 +535,41 @@ struct HorizonPlanView: View {
                             DisclosureGroup("Технические сведения") {
                                 LabeledContent("СК", value: plan.file?.crs ?? "Неизвестно")
                                 LabeledContent("Оси", value: plan.file?.axes ?? "Неизвестно")
-                                Text("Z — отдельная отметка в метрах; не получена из DXF. XY без преобразования координат.")
+                                Text("Z предлагается из явной высотной геометрии DXF; XY остаются в выбранной точке чертежа. Вертикальная система отсчёта DXF неизвестна.")
+                                LabeledContent("Сегменты с достоверной Z", value: String(drawing.elevationSegments.count))
+                                if plan.file?.units == .unknown && plan.elevationUnitConfirmation == nil {
+                                    Picker("Единицы для расчёта Z", selection: $reviewedUnits) {
+                                        ForEach(PlanUnits.allCases, id: \.self) { Text($0.label).tag($0) }
+                                    }.accessibilityIdentifier("reviewPlanZUnits")
+                                    Button("Подтвердить единицы для Z") {
+                                        do {
+                                            guard mapping.workflow != nil else { throw StorageError.writesBlocked }
+                                            try mapping.workflow!.confirmPlanElevationUnits(plan.id, units: reviewedUnits)
+                                            properties = false
+                                        } catch { self.error = error.localizedDescription }
+                                    }.disabled(reviewedUnits == .unknown).accessibilityIdentifier("confirmPlanZUnits")
+                                    Text("Уточнение единиц применяется к новым предложениям Z. Сохранённые XY и наблюдения сохраняют исходные единицы.")
+                                }
+                                LabeledContent("Источники Z", value: drawing.elevationEntityTypes.isEmpty ? "Нет" : drawing.elevationEntityTypes.joined(separator: ", "))
+                                LabeledContent("Не использовано для Z", value: String(drawing.elevationExclusions.values.reduce(0, +)))
+                                LabeledContent("Единицы высоты", value: plan.elevationUnitConfirmation?.units.label ?? plan.file?.units.label ?? "Неизвестно")
+                                if let confirmation = plan.elevationUnitConfirmation {
+                                    Text("Единицы Z подтверждены: \(confirmation.confirmedAt.formatted())")
+                                }
+                                LabeledContent("Единицы для Z", value: PlanElevationSnap.metersPerUnit(plan) == nil ? "Не подтверждены / противоречат $INSUNITS" : "Подтверждены")
+                                if let proposed {
+                                    Text("Выбранная точка: X \(EngineeringDisplay.coordinate(proposed.x)), Y \(EngineeringDisplay.coordinate(proposed.y))")
+                                    if let reason = elevationResolution.failureReason { Text(reason).accessibilityIdentifier("planZFailure") }
+                                    if let distance = elevationResolution.nearestDistanceMeters {
+                                        LabeledContent("До ближайшей высотной линии, м", value: EngineeringDisplay.number(distance))
+                                    }
+                                    if elevationResolution.requiresChoice { Text("Близкие сегменты имеют разные Z: требуется выбор источника.") }
+                                    if !automaticZ { Text("Автоматическое предложение Z отключено.") }
+                                    if preserveManualElevation { Text("Сохранена ручная отметка; замена требует выбора источника.") }
+                                } else if drawing.elevationSegments.isEmpty { Text("Нет допустимых сегментов с явной высотой. См. причины исключения объектов.") }
+                                ForEach(drawing.elevationExclusions.keys.sorted(), id: \.self) { reason in
+                                    Text("\(reason): \(drawing.elevationExclusions[reason] ?? 0)")
+                                }
                                 Text("План: \(plan.id.uuidString)")
                                 Text("Исходный файл: \(plan.attachmentID.uuidString)")
                                 if let file = plan.file {
