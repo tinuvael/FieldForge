@@ -98,7 +98,7 @@ struct HorizonPlansView: View {
             }
             DisclosureGroup("Помощь по DXF") {
                 Text("Текстовый DXF: LINE, LWPOLYLINE, 2D/3D POLYLINE (XY-проекция), ARC, CIRCLE, POINT, простые TEXT/MTEXT. Прямые внутри BLOCK/INSERT поддерживаются при стандартном направлении оси Z. Кривые bulge пропускаются с предупреждением. Не DWG.").font(.caption)
-                Text("Локальные координаты чертежа не подтверждают съёмочную точность. Z предлагается по явной высотной геометрии DXF рядом с точкой при подтверждённых единицах; иначе — горизонт или ручной ввод. GPS не используется.").font(.caption)
+                Text("Локальные координаты чертежа не подтверждают съёмочную точность. Z предлагается по явной высотной геометрии DXF рядом с точкой при подтверждённых единицах; иначе — ручной ввод. Номер горизонта не задаёт Z точки. GPS не используется.").font(.caption)
             }
         }.accessibilityIdentifier("planRevisionList").navigationTitle("Планы горизонта")
             .fileImporter(isPresented: $importing, allowedContentTypes: [UTType(filenameExtension: "dxf") ?? .data]) { result in
@@ -329,7 +329,11 @@ struct HorizonPlanView: View {
     var onPointSelection: ((PlanPoint, MappingPlanReference, PlanGeometryElevation?) throws -> Void)? = nil
     var preserveManualElevation = false
     @State private var automaticZ = true
-    @State private var snapTolerance = 2.0
+    @State private var pickingWalls = false
+    @State private var pickedWalls: [String] = []
+    @State private var wallChoices: [DXFElevationSegment] = []
+    @State private var showingWallChoices = false
+    @State private var previewChoice: Int?
     @State private var elevationResolution = PlanElevationResolution(candidates: [], requiresChoice: false)
     @State private var elevationChoice = -1
     @EnvironmentObject private var mapping: MappingModel
@@ -357,14 +361,27 @@ struct HorizonPlanView: View {
         (value >= 0 ? "+" : "") + EngineeringDisplay.number(value, decimals: 2) + " м"
     }
     private var chosenElevation: PlanGeometryElevation? {
-        automaticZ && elevationResolution.candidates.indices.contains(elevationChoice) ? elevationResolution.candidates[elevationChoice] : nil
+        guard automaticZ, elevationResolution.candidates.indices.contains(elevationChoice) else { return nil }
+        let candidate = elevationResolution.candidates[elevationChoice]
+        return elevationResolution.requiresChoice ? candidate.confirmed() : candidate
     }
     private func propose(_ point: PlanPoint) {
-        proposed = point
-        elevationResolution = PlanElevationSnap.resolve(point, document: drawing, plan: plan,
-            policy: PlanElevationSnapPolicy(toleranceMeters: snapTolerance))
+        proposed = point; pickedWalls = []; pickingWalls = false; previewChoice = nil
+        elevationResolution = PlanElevationSnap.resolve(point, document: drawing, plan: plan)
         let manual = preserveManualElevation || (onPointSelection == nil && mapping.workflow?.draft.preservesElevationOnPlanSelection == true)
         elevationChoice = !automaticZ || manual || elevationResolution.candidates.isEmpty ? -1 : elevationResolution.requiresChoice ? -2 : 0
+    }
+
+    private func pickWall(_ wall: DXFElevationSegment, at point: PlanPoint) {
+        if !pickedWalls.contains(wall.wallID) { pickedWalls.append(wall.wallID) }
+        guard pickedWalls.count == 2 else { return }
+        if let elevation = PlanWallSection.confirmedPair(point, walls: pickedWalls, document: drawing, plan: plan) {
+            elevationResolution = PlanElevationResolution(candidates: [elevation], requiresChoice: true,
+                failureReason: "Проверьте выделенные стены и подтвердите сечение. Перекрытия и принадлежность выработке проверяет пользователь.")
+            elevationChoice = -2; previewChoice = 0; pickingWalls = false
+        } else {
+            pickedWalls = []; error = "Стены не образуют поперечное сечение по разные стороны исходной точки. Выберите другую пару или введите Z вручную."
+        }
     }
 
     var body: some View {
@@ -381,6 +398,13 @@ struct HorizonPlanView: View {
                             if index == 0 { path.move(to: cg) } else { path.addLine(to: cg) }
                         }
                         context.stroke(path, with: .color(.primary.opacity(0.7)), lineWidth: 1)
+                    }
+                    let preview = previewChoice.flatMap { elevationResolution.candidates.indices.contains($0) ? elevationResolution.candidates[$0] : nil } ?? chosenElevation
+                    let highlighted = pickedWalls + [preview?.segment.wallID, preview?.secondWall?.segment.wallID].compactMap { $0 }
+                    for segment in Set(highlighted).sorted().flatMap({ drawing.elevationIndex.segments(on: $0) }) {
+                        let a = viewport.screen(segment.a.xy), b = viewport.screen(segment.b.xy)
+                        var path = Path(); path.move(to: CGPoint(x: a.x, y: a.y)); path.addLine(to: CGPoint(x: b.x, y: b.y))
+                        context.stroke(path, with: .color(.cyan), lineWidth: 4)
                     }
                     for dot in drawing.points {
                         let p = viewport.screen(dot.xy)
@@ -419,6 +443,16 @@ struct HorizonPlanView: View {
                         .onEnded { zoom = min(100, max(0.1, zoom * $0)) })
                     .simultaneousGesture(SpatialTapGesture().onEnded { value in
                         let location = PlanPoint(x: value.location.x, y: value.location.y)
+                        if pickingWalls, let proposed {
+                            let drawingPoint = viewport.drawing(location)
+                            let nearby = drawing.elevationIndex.nearby(drawingPoint, radius: 24 / viewport.scale)
+                                .map { drawing.elevationIndex.segments[$0] }
+                            var seen = Set<String>()
+                            wallChoices = nearby.filter { seen.insert($0.wallID).inserted }
+                            if wallChoices.count == 1 { pickWall(wallChoices[0], at: proposed) }
+                            else if !wallChoices.isEmpty { showingWallChoices = true }
+                            return
+                        }
                         let hits = points.filter { record in
                             guard let x = record.coordinates?.x, let y = record.coordinates?.y else { return false }
                             let p = viewport.screen(PlanPoint(x: x, y: y))
@@ -443,15 +477,25 @@ struct HorizonPlanView: View {
                         if elevationResolution.requiresChoice || preserveManualElevation || mapping.workflow?.draft.preservesElevationOnPlanSelection == true {
                             Picker("Отметка Z", selection: $elevationChoice) {
                                 if elevationChoice == -2 { Text("Выберите источник Z").tag(-2) }
-                                Text("Сохранить ручную / по горизонту").tag(-1)
+                                Text("Без Z из DXF / сохранить ручную").tag(-1)
                                 ForEach(Array(elevationResolution.candidates.enumerated()), id: \.offset) { index, candidate in
-                                    Text("\(elevationLabel(candidate.elevationMeters)) · DXF · \(EngineeringDisplay.number(candidate.distanceMeters)) м от линии").tag(index)
+                                    Text("\(elevationLabel(candidate.elevationMeters)) · \(candidate.sourceLabel) · \(candidate.segment.layer ?? candidate.segment.handle ?? String(index + 1))").tag(index)
                                 }
                             }.accessibilityIdentifier("planElevationChoice")
+                                .onChange(of: elevationChoice) { _, value in previewChoice = value >= 0 ? value : previewChoice }
                         }
                         if let elevation = chosenElevation {
-                            Text("Z \(elevationLabel(elevation.elevationMeters)) · из DXF").font(.caption).accessibilityIdentifier("planProposedZ")
+                            Text("Z \(elevationLabel(elevation.elevationMeters)) · \(elevation.sourceLabel)").font(.caption).accessibilityIdentifier("planProposedZ")
+                            DisclosureGroup("Источники Z") { Text(elevation.sourceDetails).font(.caption) }
                         }
+                    }
+                    if automaticZ, let reason = elevationResolution.failureReason {
+                        Text(reason).font(.caption).foregroundStyle(.orange).accessibilityIdentifier("planZWarning")
+                    }
+                    if automaticZ {
+                        Button(pickingWalls ? "Выберите стену \(pickedWalls.count + 1) на плане" : "Указать две стены на плане") {
+                            pickedWalls = []; pickingWalls = true; elevationChoice = -2
+                        }.font(.caption).accessibilityIdentifier("pickElevationWalls")
                     }
                     Button("Подтвердить X/Y") {
                         do {
@@ -461,21 +505,24 @@ struct HorizonPlanView: View {
                             onSelection?()
                         } catch { self.error = error.localizedDescription }
                     }.buttonStyle(.borderedProminent).accessibilityIdentifier("confirmPlanXY").disabled(elevationChoice == -2)
-                    Button("Отменить точку") { self.proposed = nil }
+                    Button("Отменить точку") { self.proposed = nil; pickingWalls = false; pickedWalls = [] }
                 }.padding(8)
             }
+        }.confirmationDialog("Выберите стену · возможны перекрытия в плане", isPresented: $showingWallChoices, titleVisibility: .visible) {
+            ForEach(wallChoices, id: \.wallID) { wall in
+                if let proposed, let p = wall.projection(proposed), let factor = PlanElevationSnap.metersPerUnit(plan) {
+                    Button("\(wall.layer ?? "0") · #\(wall.handle ?? String(wall.entityOrdinal)) · Z \(elevationLabel(p.z * factor))") { pickWall(wall, at: proposed) }
+                }
+            }
+            Button("Отмена", role: .cancel) {}
         }.onChange(of: plan) { _, _ in if let proposed { propose(proposed) } }
             .onChange(of: automaticZ) { _, _ in if let proposed { propose(proposed) } }
-            .onChange(of: snapTolerance) { _, _ in if let proposed { propose(proposed) } }
             .navigationTitle(plan.file?.originalFilename ?? "DXF").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 Menu {
                     Button("Сведения о плане", systemImage: "info.circle") { properties = true }
                     if selecting {
                         Toggle("Предлагать Z из DXF", isOn: $automaticZ)
-                        Picker("Расстояние поиска Z, м", selection: $snapTolerance) {
-                            ForEach([0.5, 1.0, 2.0, 5.0], id: \.self) { Text(EngineeringDisplay.number($0)).tag($0) }
-                        }
                     }
                     Picker("Выработка", selection: $filter) {
                         Text("Все выработки").tag(nil as UUID?)
@@ -563,7 +610,7 @@ struct HorizonPlanView: View {
                                     if let distance = elevationResolution.nearestDistanceMeters {
                                         LabeledContent("До ближайшей высотной линии, м", value: EngineeringDisplay.number(distance))
                                     }
-                                    if elevationResolution.requiresChoice { Text("Близкие сегменты имеют разные Z: требуется выбор источника.") }
+                                    if elevationResolution.requiresChoice { Text("Неоднозначное сечение: требуется подтверждение стен.") }
                                     if !automaticZ { Text("Автоматическое предложение Z отключено.") }
                                     if preserveManualElevation { Text("Сохранена ручная отметка; замена требует выбора источника.") }
                                 } else if drawing.elevationSegments.isEmpty { Text("Нет допустимых сегментов с явной высотой. См. причины исключения объектов.") }

@@ -10,3 +10,9 @@ build/
 *.cer
 
 Config/LocalSigning.xcconfig
+
+# Synthetic survey DXFs are generated on demand; retain controls/manifest/geometry.
+/Tests/Fixtures/underground_survey_500.dxf
+/Tests/Fixtures/underground_survey_600.dxf
+/Tests/Fixtures/underground_survey_700.dxf
+__pycache__/

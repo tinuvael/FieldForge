@@ -214,7 +214,10 @@ struct MappingObservationDetail: View {
                     }
                     LabeledContent("СК", value: c.crs); LabeledContent("Оси / высоты", value: c.axes)
                     Text(c.provenance)
-                    LabeledContent("Источник Z", value: c.zOrigin?.title ?? "Не указан в исходной записи")
+                    LabeledContent("Источник Z", value: c.zPlanGeometry?.sourceLabel ?? c.zOrigin?.title ?? "Не указан в исходной записи")
+                    if let geometry = c.zPlanGeometry {
+                        DisclosureGroup("Стены — источники Z") { Text(geometry.sourceDetails).font(.caption) }
+                    }
                     if let level = c.zHorizonElevation { Text("Исходная отметка: \(ElevationInput.label(level)); система: \(c.zDatum ?? "unknown")") }
                     DisclosureGroup("Полная точность координат") {
                         LabeledContent("X", value: c.x.map { CSVExporter.engineeringNumber($0) } ?? "Неизвестно")

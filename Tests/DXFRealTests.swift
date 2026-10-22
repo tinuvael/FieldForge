@@ -85,7 +85,7 @@ final class DXFRealTests: XCTestCase {
             w.draft.observedAtOverride = Date(timeIntervalSince1970: 1234)
             // Numeric horizon is +393, independent of the source ramp's varying Z.
             try w.selectPlanPoint(selected, planID: plan.id)
-            XCTAssertEqual(w.draft.z, "393"); XCTAssertEqual(w.draft.zOrigin, .horizonDefault)
+            XCTAssertEqual(w.draft.z, ""); XCTAssertNil(w.draft.zOrigin)
             w.draft.z = "-12.125"
             try w.selectPlanPoint(c.first.xy, planID: plan.id)
             XCTAssertEqual(w.draft.z, "-12.125"); XCTAssertEqual(w.draft.picket, "\(c.level)")

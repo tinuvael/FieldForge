@@ -28,9 +28,9 @@ final class PlanElevationSnapTests: XCTestCase {
         XCTAssertEqual(c.selectedXY, PlanPoint(x: 2.5, y: 1)); XCTAssertEqual(c.segment.handle, "AB")
         XCTAssertEqual(try resolve(line(-20, 20), point: PlanPoint(x: -1, y: 0)).automatic?.elevationMeters, -20)
         XCTAssertEqual(try resolve(line(-20, 20), point: PlanPoint(x: 11, y: 0)).automatic?.elevationMeters, 20)
-        // Distance is XY: a very high line closer in XY wins over a low, more distant one.
+        // Distance is XY: opposing walls contribute even when their elevations differ greatly.
         let closest = try resolve(line(10000, 10000) + line(0, 0, y: 2), point: PlanPoint(x: 5, y: 0.2))
-        XCTAssertEqual(closest.automatic?.elevationMeters, 10000)
+        XCTAssertEqual(closest.automatic?.elevationMeters, 9000)
     }
     func testConstantZeroIsExplicitButMissingOneOrBothCodesAreIneligible() throws {
         XCTAssertEqual(try resolve(line(393, 393)).automatic?.elevationMeters, 393)
@@ -46,7 +46,7 @@ final class PlanElevationSnapTests: XCTestCase {
         XCTAssertTrue(try resolve(line(0, 0), policy: PlanElevationSnapPolicy(toleranceMeters: 0.5)).candidates.isEmpty)
         let ambiguous = try resolve(line(100, 100) + line(200, 200, y: 0.05))
         XCTAssertTrue(ambiguous.requiresChoice); XCTAssertNil(ambiguous.automatic); XCTAssertEqual(ambiguous.candidates.count, 2)
-        XCTAssertEqual(try resolve(line(100, 100) + line(100.1, 100.1)).automatic?.elevationMeters, 100)
+        XCTAssertTrue(try resolve(line(100, 100) + line(100.1, 100.1)).requiresChoice)
         let extremes = try resolve(line(100, 100) + line(100.4, 100.4) + line(99.6, 99.6))
         XCTAssertTrue(extremes.requiresChoice) // Compare the full range, not just each candidate with the first.
         XCTAssertTrue(try resolve(line(0, 0), policy: PlanElevationSnapPolicy(toleranceMeters: .nan)).candidates.isEmpty)
@@ -115,9 +115,9 @@ final class PlanElevationSnapTests: XCTestCase {
         let unchanged = reopened.draft
         XCTAssertThrowsError(try reopened.selectPlanPoint(xy, planID: b.id, elevation: z)); XCTAssertEqual(reopened.draft, unchanged)
         XCTAssertThrowsError(try reopened.selectPlanPoint(PlanPoint(x: 3, y: 1), planID: b.id, elevation: zb))
-        // Deliberately selecting a distant point clears stale geometry and falls back to the horizon.
+        // A distant plan tap clears stale geometry; the nominal horizon is not point Z.
         try reopened.selectPlanPoint(PlanPoint(x: 100, y: 100), planID: b.id)
-        XCTAssertEqual(reopened.draft.z, "393"); XCTAssertEqual(reopened.draft.zOrigin, .horizonDefault)
+        XCTAssertEqual(reopened.draft.z, ""); XCTAssertNil(reopened.draft.zOrigin)
         var noHorizon = MappingDraft(); try noHorizon.selectPlanPoint(xy, plan: a, elevation: z)
         try noHorizon.selectPlanPoint(PlanPoint(x: 100, y: 100), plan: b)
         XCTAssertEqual(noHorizon.z, ""); XCTAssertNil(noHorizon.zOrigin)

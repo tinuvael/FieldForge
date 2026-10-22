@@ -26,7 +26,7 @@ Selecting/reopening a known horizon suggests its nominal elevation for the next 
 
 ## Offline plans and import
 
-Each immutable `MappingPlanReference` belongs to a horizon UUID and thereby one project. Any number of plans/revisions can share a horizon; original filenames are display metadata, not identities. Import from Files uses a security-scoped URL and coordinated read; parsing is prepared off the main actor. Maximum source size is 10 MB, 300,000 group-code pairs and 200,000 display vertices. Larger/unsupported files require CAD preprocessing.
+Each immutable `MappingPlanReference` belongs to a horizon UUID and thereby one project. Any number of plans/revisions can share a horizon; original filenames are display metadata, not identities. Import from Files uses a security-scoped URL and coordinated read; parsing is prepared off the main actor. Maximum source size is 10 MB, 1,000,000 group-code pairs and 200,000 display vertices (current local-search parser budget; see [spatial search](two-wall-elevation.md)). Larger/unsupported files require CAD preprocessing.
 
 Plan setup asks once for version and XY units: unknown (default), metres, or millimetres. Original `$INSUNITS` is shown as CAD insertion-unit metadata, **not treated as verified drawing scale**. The user explicitly selects units, with no automatic numerical conversion. Unknown XY remains `drawing` units, not metres. Optional CRS and axis description stay in plan properties and default to `unknown`. Z is always a separate metre value. Feet/other source units may be viewed as unknown drawing units; convert and verify externally before assigning a metric interpretation.
 

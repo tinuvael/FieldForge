@@ -1,6 +1,12 @@
 # FieldForge
 
-Interactive **GSI** now uses a native chart with digitized Read & Stacey (2009), Table 5.34 contours, direct taps/drags, an integer estimate and exact saved marker position. Legacy categorical assessments remain evidence. Optional nearby DXF segment Z proposals preserve manual control, source revision and unit conversion. See [calibration, supported DXF geometry, compatibility and verification](docs/gsi-chart-dxf-elevation.md). Q, RMR89, JCond76 and Priest–Hudson SD calculations and the three-sheet enterprise workbook structure are unchanged.
+DXF elevation search now uses a cached XY BVH with an expanding local query. Distant walls and drawing-wide segment counts no longer prevent an automatic result; 10,000/100,000-segment stress controls verify the same local two-wall Z. See [search strategy and performance](docs/two-wall-elevation.md#local-search-verification).
+
+DXF plan taps now interpolate floor **Z from two corresponding excavation walls**, preserving exact tap X/Y. Open/curved/ramp walls and widths beyond 5 m are supported; ambiguous intersections and overlapping levels require highlighted wall confirmation or manual Z. The inline Z source opens both wall elevations/distances. A nominal horizon is never used as plan-tap elevation. See [algorithm, limits and verification](docs/two-wall-elevation.md).
+
+Synthetic underground surveys **500 / 600 / 700** include 90 individual-wall projection controls and 45 independently calculated two-wall floor controls, reproducible generation and plan/ramp previews. See [fixtures](docs/underground-survey-z-verification.md).
+
+Interactive **GSI** now uses a native chart with digitized Read & Stacey (2009), Table 5.34 contours, direct taps/drags, an integer estimate and exact saved marker position. Legacy categorical assessments remain evidence. DXF Z proposals preserve manual control, both wall sources, revision and unit conversion. See [calibration, supported DXF geometry, compatibility and verification](docs/gsi-chart-dxf-elevation.md). Q, RMR89, JCond76 and Priest–Hudson SD calculations and the three-sheet enterprise workbook structure are unchanged.
 
 Final field polish: Mapping uses plain X/Y/Z rows with one-decimal display and exact editing/storage. Wedges has consistent geometry rows, degree-display/edit transitions and a full-width keyboard dismissal bar. Plan properties separate readable information from collapsed diagnostics. RMR89 now provides a versioned preliminary **basic** rating from explicit Bieniawski 1989 categories, with legacy input-only snapshots retained. The default export is **one Excel workbook**, led by five Russian field sheets; complete technical tables remain available, hidden by default. See [method, workbook contract and focused verification](docs/final-field-polish.md). Orientation-adjusted RMR and automatic Z snapping remain unavailable.
 
@@ -115,6 +121,11 @@ xcodebuild -project FieldForge.xcodeproj -scheme FieldForge \
   -destination 'platform=iOS Simulator,id=<available-device-UUID>' \
   -derivedDataPath /tmp/FieldForge-DerivedData CODE_SIGNING_ALLOWED=NO test
 ```
+
+Synthetic underground survey tests generate their DXF streams in memory from a
+compact coordinate resource and verify the original manifest hashes on macOS and
+iOS. No large generated survey DXFs are committed or required before running tests.
+For standalone DXFs and independent audits, see [survey reproduction](docs/underground-survey-z-verification.md#reproduction).
 
 Set `DEVELOPER_DIR` to a supported Xcode installation when necessary. Project generation uses Python 3 only and is deterministic. Machine-local signing overrides belong in ignored `Config/LocalSigning.xcconfig` (`DEVELOPMENT_TEAM = your Team`), optionally included by `Config/Signing.xcconfig`; they survive regeneration. Identifier and deployment settings remain unchanged. Core tests run via Swift Package Manager on macOS; managed-plan/photo integrity uses system CryptoKit and photo decoding uses ImageIO, while UI and Core Motion use Apple SDKs. Linux plan-store builds are not qualified. Debug UI tests use separate journals and UUID-scoped mapping/plan/photo stores, never physical-device journals.
 

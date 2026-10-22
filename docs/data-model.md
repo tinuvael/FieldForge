@@ -1,3 +1,5 @@
+> DXF Z provenance now supports optional second-wall source samples and explicit wall confirmation within schema 8. See [two-wall source contract](two-wall-elevation.md#persistence-and-evidence). Historical single-segment records remain readable; no migration or evidence rewrite is introduced.
+
 # Future geomechanical domain schema
 
 Current chart/DXF elevation model: [exact graphical GSI positions and computed Z provenance](gsi-chart-dxf-elevation.md).

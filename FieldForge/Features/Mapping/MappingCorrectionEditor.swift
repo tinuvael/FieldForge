@@ -46,7 +46,8 @@ struct MappingCorrectionEditor: View {
                     MappingCoordinateField(title: "X", text: $draft.fields.x, identifier: "correctionX", focus: $coordinateFocus)
                     MappingCoordinateField(title: "Y", text: $draft.fields.y, identifier: "correctionY", focus: $coordinateFocus)
                     MappingCoordinateField(title: "Z", text: $draft.fields.z, identifier: "correctionZ", focus: $coordinateFocus,
-                        source: (try? ElevationInput.meters(draft.fields.z)) != nil ? draft.fields.zOrigin?.fieldLabel : nil)
+                        source: (try? ElevationInput.meters(draft.fields.z)) != nil ? (draft.fields.zPlanGeometry?.sourceLabel ?? draft.fields.zOrigin?.fieldLabel) : nil,
+                        sourceDetails: draft.fields.zPlanGeometry?.sourceDetails)
                     Button("Выбрать на плане") { focused = false; coordinateFocus = nil; showPlans = true }.accessibilityIdentifier("correctionSelectPlan")
                     DisclosureGroup("СК, оси и происхождение") {
                         TextField("СК", text: $draft.fields.crs).focused($focused).disabled(draft.fields.planID != nil)
@@ -94,8 +95,7 @@ struct MappingCorrectionEditor: View {
                             ForEach(mapping.workflow?.journal.plans.filter { $0.horizonID == draft.baseline.horizonID && $0.file != nil && $0.isAvailable } ?? []) { plan in
                                 NavigationLink {
                                     HorizonPlanLoader(plan: plan, selecting: true, onSelection: { showPlans = false }, onPointSelection: { point, plan, elevation in
-                                        try draft.fields.selectPlanPoint(point, plan: plan, elevation: elevation,
-                                            fallback: mapping.workflow?.journal.horizons.first { $0.id == draft.baseline.horizonID })
+                                        try draft.fields.selectPlanPoint(point, plan: plan, elevation: elevation)
                                     }, preserveManualElevation: draft.fields.preservesElevationOnPlanSelection)
                                 } label: {
                                     VStack(alignment: .leading) {

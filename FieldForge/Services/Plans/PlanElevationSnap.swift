@@ -12,6 +12,9 @@ struct DXFElevationSegment: Codable, Equatable {
     let segmentIndex: Int
     var blockPath: [String]? = nil
     var extractionVersion: String? = nil
+    var layer: String? = nil
+
+    var wallID: String { "\(entityOrdinal):" + (blockPath ?? []).joined(separator: "/") }
 
     func projection(_ point: PlanPoint) -> (t: Double, distance: Double, z: Double)? {
         guard [a.x, a.y, a.z, b.x, b.y, b.z, point.x, point.y].allSatisfy(\.isFinite) else { return nil }
@@ -35,6 +38,7 @@ struct PlanElevationSnapPolicy: Codable, Equatable {
 
 struct PlanGeometryElevation: Codable, Equatable {
     static let version = "DXF-WCS-XY-segment-projection/1"
+    static let twoWallVersion = "DXF-WCS-two-wall-section/1"
     var method = Self.version
     let planID: UUID
     let planRevision: String
@@ -51,8 +55,27 @@ struct PlanGeometryElevation: Codable, Equatable {
     var verticalDatum = "unknown"
     let policy: PlanElevationSnapPolicy
 
+    /// Optional additions preserve schema-8 evidence written by the previous single-segment method.
+    var secondWall: PlanElevationWallSample? = nil
+    var confirmedByUser: Bool? = nil
+    var isTwoWall: Bool { method == Self.twoWallVersion }
+    var sourceLabel: String {
+        if isTwoWall { return confirmedByUser == true ? "DXF · 2 стены ≈" : "DXF · 2 стены" }
+        return "DXF · 1 стена ≈"
+    }
+    var firstWallElevationMeters: Double { segment.projection(selectedXY)!.z * metersPerDrawingUnit }
+    var sourceDetails: String {
+        func wall(_ segment: DXFElevationSegment, _ z: Double, _ d: Double) -> String {
+            "\(segment.layer ?? "DXF") · #\(segment.handle ?? String(segment.entityOrdinal)): Z \(EngineeringDisplay.number(z, decimals: 3)) м; d \(EngineeringDisplay.number(d, decimals: 3)) м"
+        }
+        var text = wall(segment, firstWallElevationMeters, distanceMeters)
+        if let secondWall { text += "\n" + wall(secondWall.segment, secondWall.elevationMeters, secondWall.distanceMeters) }
+        return text + "\n" + (confirmedByUser == true ? "Источники подтверждены пользователем; оценка требует проверки. " : "") + "Высотная система неизвестна."
+    }
+    func confirmed() -> Self { var copy = self; copy.confirmedByUser = true; return copy }
+
     func validate(plan: MappingPlanReference) throws {
-        guard method == Self.version, planID == plan.id, planRevision == plan.version,
+        guard [Self.version, Self.twoWallVersion].contains(method), planID == plan.id, planRevision == plan.version,
               let file = plan.file, planSHA256 == file.sha256,
               metersPerDrawingUnit == PlanElevationSnap.metersPerUnit(plan), unitDeclaration == plan.elevationUnitDeclaration,
               unitConfirmedAt == plan.elevationUnitConfirmation?.confirmedAt,
@@ -62,8 +85,17 @@ struct PlanGeometryElevation: Codable, Equatable {
               segment.extractionVersion == nil || segment.extractionVersion == DXFDocument.elevationExtractionVersion,
               segment.blockPath == nil || (segment.blockPath?.isEmpty == false && segment.blockPath!.count <= 8),
               let p = segment.projection(selectedXY), parameter == p.t,
-              distanceMeters == p.distance * metersPerDrawingUnit, distanceMeters <= policy.toleranceMeters,
-              elevationMeters == p.z * metersPerDrawingUnit, elevationMeters.isFinite else { throw StorageError.invalidRecord }
+              distanceMeters == p.distance * metersPerDrawingUnit,
+              elevationMeters.isFinite else { throw StorageError.invalidRecord }
+        if isTwoWall {
+            guard let secondWall, secondWall.valid(at: selectedXY, factor: metersPerDrawingUnit),
+                  PlanWallSection.compatible(segment, secondWall.segment, at: selectedXY),
+                  elevationMeters == PlanWallSection.elevation(p.z * metersPerDrawingUnit, secondWall.elevationMeters,
+                      distanceMeters, secondWall.distanceMeters) else { throw StorageError.invalidRecord }
+        } else {
+            guard secondWall == nil, distanceMeters <= policy.toleranceMeters,
+                  elevationMeters == p.z * metersPerDrawingUnit else { throw StorageError.invalidRecord }
+        }
     }
 }
 
@@ -116,23 +148,22 @@ enum PlanElevationSnap {
                 ? "Нет допустимой высотной геометрии: есть неподдерживаемые объекты. См. исключения ниже."
                 : "Нет сегментов с явными достоверными Z; 2D-геометрия и подписи отметок не задают высоту.")
         }
-        let nearby = document.elevationSegments.compactMap { segment -> PlanGeometryElevation? in
-            guard let p = segment.projection(point), p.distance * factor <= policy.toleranceMeters else { return nil }
-            return PlanGeometryElevation(planID: plan.id, planRevision: plan.version, planSHA256: file.sha256,
-                segment: segment, selectedXY: point, parameter: p.t, distanceMeters: p.distance * factor,
-                elevationMeters: p.z * factor, metersPerDrawingUnit: factor, unitDeclaration: plan.elevationUnitDeclaration, unitConfirmedAt: plan.elevationUnitConfirmation?.confirmedAt, policy: policy)
-        }.sorted {
-            if $0.distanceMeters != $1.distanceMeters { return $0.distanceMeters < $1.distanceMeters }
-            if $0.segment.entityOrdinal != $1.segment.entityOrdinal { return $0.segment.entityOrdinal < $1.segment.entityOrdinal }
-            return $0.segment.segmentIndex < $1.segment.segmentIndex
-        }
-        guard let first = nearby.first else {
-            let nearest = document.elevationSegments.compactMap { $0.projection(point).map { $0.distance * factor } }.min()
-            return failure("Ближайший высотный сегмент дальше допуска \(EngineeringDisplay.number(policy.toleranceMeters)) м.", distance: nearest)
-        }
-        let similar = nearby.filter { $0.distanceMeters <= first.distanceMeters + policy.similarDistanceMeters }
-        let z = similar.map(\.elevationMeters)
-        let ambiguous = (z.max()! - z.min()!) > policy.distinctElevationMeters
-        return PlanElevationResolution(candidates: ambiguous ? similar : [first], requiresChoice: ambiguous)
+        return PlanWallSection.resolve(point, document: document, plan: plan, factor: factor, policy: policy)
+    }
+}
+
+struct PlanElevationWallSample: Codable, Equatable {
+    let segment: DXFElevationSegment
+    let parameter: Double
+    let distanceMeters: Double
+    let elevationMeters: Double
+
+    func valid(at point: PlanPoint, factor: Double) -> Bool {
+        guard ["LINE", "POLYLINE", "LWPOLYLINE"].contains(segment.entityType),
+              segment.entityOrdinal >= 0, segment.segmentIndex >= 0,
+              segment.extractionVersion == nil || segment.extractionVersion == DXFDocument.elevationExtractionVersion,
+              segment.blockPath == nil || (segment.blockPath?.isEmpty == false && segment.blockPath!.count <= 8),
+              let p = segment.projection(point) else { return false }
+        return parameter == p.t && distanceMeters == p.distance * factor && elevationMeters == p.z * factor
     }
 }
