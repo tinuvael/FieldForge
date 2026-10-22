@@ -114,7 +114,7 @@ struct HorizonPlansView: View {
                     let preview = MappingPlanReference(id: UUID(), horizonID: item.horizonID, attachmentID: UUID(), version: version,
                         file: ManagedPlanFile(originalFilename: item.filename, sha256: ManagedPlanStore.digest(item.data), byteCount: item.data.count,
                             importedAt: Date(), units: units, crs: crs.isEmpty ? "unknown" : crs, axes: axes.isEmpty ? "unknown" : axes,
-                            unitDeclaration: "userConfirmedAtImport", insertionUnits: item.drawing.insertionUnits), frameConfirmation: confirmation)
+                            unitDeclaration: PlanUnits.declared(by: item.drawing.insertionUnits) == units ? "dxfINSUNITS" : "userConfirmedAtImport", insertionUnits: item.drawing.insertionUnits), frameConfirmation: confirmation)
                     try PlanCoordinateCompatibility.validate((mapping.workflow?.journal.plans ?? []) + [preview])
                     return try await Task.detached(priority: .userInitiated) {
                         try files.stage(data: item.data, filename: item.filename, horizonID: item.horizonID,
@@ -236,10 +236,16 @@ private struct PlanImportSetup: View {
                             .accessibilityIdentifier("planVersion").disabled(staged != nil || busy)
                     }
                     LabeledContent("Единицы в DXF · $INSUNITS", value: item.drawing.insertionUnits.map(String.init) ?? "Не заданы")
-                    Picker("Единицы XY · подтвердите источник", selection: $units) {
-                        ForEach(PlanUnits.allCases, id: \.self) { Text($0.label).tag($0) }
-                    }.accessibilityIdentifier("planUnits").disabled(staged != nil || busy)
-                    Text("XY сохраняются без пересчёта. Подтвердите единицы по источнику. Неизвестная СК не означает съёмочные координаты. Z — в метрах.")
+                    if let declared = PlanUnits.declared(by: item.drawing.insertionUnits) {
+                        LabeledContent("Единицы XY", value: declared.label)
+                    } else {
+                        Picker("Единицы DXF · подтвердите источник", selection: $units) {
+                            Text("Уточните единицы").tag(PlanUnits.unknown)
+                            Text("Метры").tag(PlanUnits.meters)
+                            Text("Миллиметры").tag(PlanUnits.millimeters)
+                        }.accessibilityIdentifier("planUnits").disabled(staged != nil || busy)
+                    }
+                    Text("XY сохраняются без пересчёта. Неизвестная СК не означает съёмочные координаты. Z — в метрах.")
                         .font(.caption)
                 }
                 if let previousPlan, let file = previousPlan.file {
@@ -248,7 +254,7 @@ private struct PlanImportSetup: View {
                             .disabled(staged != nil || busy || file.units == .unknown)
                             .accessibilityIdentifier("planSameCoordinateFrame")
                             .onChange(of: sameFrame) { _, on in
-                                if on { units = file.units; crs = file.crs; axes = file.axes }
+                                if on { crs = file.crs; axes = file.axes }
                             }
                         Text("Предыдущая ревизия: \(previousPlan.version)").font(.caption)
                         if file.units == .unknown {
@@ -278,11 +284,12 @@ private struct PlanImportSetup: View {
                             try register(staged); dismiss()
                         } catch { self.error = error.localizedDescription }
                     }
-                }.disabled(busy || !confirmedHorizon).accessibilityIdentifier("savePlanImport")
+                }.disabled(busy || !confirmedHorizon || units == .unknown).accessibilityIdentifier("savePlanImport")
             }.navigationTitle("Импорт DXF").interactiveDismissDisabled(busy)
                 .onAppear {
                     guard !initializedVersion else { return }
                     initializedVersion = true
+                    units = PlanUnits.declared(by: item.drawing.insertionUnits) ?? .unknown
                     do { version = try PlanRevisionNumber.next(existingVersions) }
                     catch { self.error = error.localizedDescription }
                 }
@@ -299,14 +306,13 @@ struct HorizonPlanLoader: View {
     let selecting: Bool
     let onSelection: (() -> Void)?
     var onPointSelection: ((PlanPoint, MappingPlanReference, PlanGeometryElevation?) throws -> Void)? = nil
-    var preserveManualElevation = false
     @EnvironmentObject private var mapping: MappingModel
     private var currentPlan: MappingPlanReference { mapping.workflow?.journal.plans.first { $0.id == plan.id } ?? plan }
     @State private var drawing: DXFDocument?
     @State private var error: String?
     var body: some View {
         Group {
-            if let drawing { HorizonPlanView(plan: currentPlan, drawing: drawing, selecting: selecting, onSelection: onSelection, onPointSelection: onPointSelection, preserveManualElevation: preserveManualElevation) }
+            if let drawing { HorizonPlanView(plan: currentPlan, drawing: drawing, selecting: selecting, onSelection: onSelection, onPointSelection: onPointSelection) }
             else if let error { ContentUnavailableView("План недоступен", systemImage: "exclamationmark.triangle", description: Text(error)) }
             else { ProgressView("Проверка оригинала…") }
         }.task(id: plan.id) {
@@ -327,10 +333,7 @@ struct HorizonPlanView: View {
     let selecting: Bool
     let onSelection: (() -> Void)?
     var onPointSelection: ((PlanPoint, MappingPlanReference, PlanGeometryElevation?) throws -> Void)? = nil
-    var preserveManualElevation = false
-    @State private var automaticZ = true
     @State private var elevationResolution = PlanElevationResolution(candidates: [], requiresChoice: false)
-    @State private var elevationChoice = -1
     @EnvironmentObject private var mapping: MappingModel
     @State private var zoom = 1.0
     @GestureState private var magnification = 1.0
@@ -355,18 +358,9 @@ struct HorizonPlanView: View {
     private func elevationLabel(_ value: Double) -> String {
         (value >= 0 ? "+" : "") + EngineeringDisplay.number(value, decimals: 2) + " м"
     }
-    private var chosenElevation: PlanGeometryElevation? {
-        guard automaticZ, elevationResolution.candidates.indices.contains(elevationChoice) else { return nil }
-        let candidate = elevationResolution.candidates[elevationChoice]
-        return preservingManualElevation ? candidate.confirmed() : candidate
-    }
-    private var preservingManualElevation: Bool {
-        preserveManualElevation || (onPointSelection == nil && mapping.workflow?.draft.preservesElevationOnPlanSelection == true)
-    }
     private func propose(_ point: PlanPoint) {
         proposed = point
         elevationResolution = PlanElevationSnap.resolve(point, document: drawing, plan: plan)
-        elevationChoice = !automaticZ || preservingManualElevation || elevationResolution.automatic == nil ? -1 : 0
     }
 
     private var needsUnitConfirmation: Bool {
@@ -461,42 +455,28 @@ struct HorizonPlanView: View {
                 VStack {
                     Text("Новая: X \(EngineeringDisplay.coordinate(proposed.x)), Y \(EngineeringDisplay.coordinate(proposed.y))")
                         .font(.caption).accessibilityIdentifier("planProposedXY")
-                    if automaticZ, let elevation = elevationResolution.automatic {
+                    if let elevation = elevationResolution.automatic {
                         Text("Z ≈ \(elevationLabel(elevation.elevationMeters))")
                             .font(.caption).accessibilityIdentifier("planProposedZ")
-                        Text("DXF · расчётная отметка").font(.caption).foregroundStyle(.secondary)
-                        if preservingManualElevation {
-                            Picker("Ручная отметка Z", selection: $elevationChoice) {
-                                Text("Сохранить ручную Z").tag(-1)
-                                Text("Заменить ручную Z расчётной").tag(0)
-                            }.accessibilityIdentifier("planElevationChoice")
-                        }
+                    } else {
+                        Text("Z недоступна").font(.caption).foregroundStyle(.secondary)
+                            .accessibilityIdentifier("planZWarning")
                     }
-                    if automaticZ, needsUnitConfirmation {
-                        unitConfirmation
-                    } else if automaticZ, let reason = elevationResolution.failureReason {
-                        Text(reason).font(.caption).foregroundStyle(.orange).accessibilityIdentifier("planZWarning")
-                    }
-                    Button(chosenElevation == nil ? "Подтвердить X/Y" : "Подтвердить X/Y/Z") {
+                    Button("Использовать точку") {
                         do {
                             guard mapping.workflow != nil else { throw StorageError.writesBlocked }
-                            if let onPointSelection { try onPointSelection(proposed, plan, chosenElevation) }
-                            else { try mapping.workflow!.selectPlanPoint(proposed, planID: plan.id, elevation: chosenElevation) }
+                            if let onPointSelection { try onPointSelection(proposed, plan, elevationResolution.automatic) }
+                            else { try mapping.workflow!.selectPlanPoint(proposed, planID: plan.id, elevation: elevationResolution.automatic) }
                             onSelection?()
                         } catch { self.error = error.localizedDescription }
                     }.buttonStyle(.borderedProminent).accessibilityIdentifier("confirmPlanXY")
-                    Button("Отменить точку") { self.proposed = nil }
                 }.padding(8)
             }
         }.onChange(of: plan) { _, _ in if let proposed { propose(proposed) } }
-            .onChange(of: automaticZ) { _, _ in if let proposed { propose(proposed) } }
             .navigationTitle(plan.file?.originalFilename ?? "DXF").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 Menu {
                     Button("Сведения о плане", systemImage: "info.circle") { properties = true }
-                    if selecting {
-                        Toggle("Предлагать Z из DXF", isOn: $automaticZ)
-                    }
                     Picker("Выработка", selection: $filter) {
                         Text("Все выработки").tag(nil as UUID?)
                         ForEach(mapping.workflow?.journal.excavations.filter { $0.horizonIDs.contains(plan.horizonID) } ?? []) {
@@ -537,6 +517,7 @@ struct HorizonPlanView: View {
                             if let file = plan.file {
                                 LabeledContent("Дата импорта", value: file.importedAt.formatted(date: .numeric, time: .shortened))
                                 LabeledContent("Единицы XY", value: file.units.label)
+                                if needsUnitConfirmation { unitConfirmation }
                             }
                         }
                         Section("Совместимость") {
@@ -557,7 +538,6 @@ struct HorizonPlanView: View {
                                 LabeledContent("Оси", value: plan.file?.axes ?? "Неизвестно")
                                 Text("Z предлагается из явной высотной геометрии DXF; XY остаются в выбранной точке чертежа. Вертикальная система отсчёта DXF неизвестна.")
                                 LabeledContent("Сегменты с достоверной Z", value: String(drawing.elevationSegments.count))
-                                if needsUnitConfirmation { unitConfirmation }
                                 LabeledContent("Источники Z", value: drawing.elevationEntityTypes.isEmpty ? "Нет" : drawing.elevationEntityTypes.joined(separator: ", "))
                                 LabeledContent("Не использовано для Z", value: String(drawing.elevationExclusions.values.reduce(0, +)))
                                 LabeledContent("Единицы высоты", value: plan.elevationUnitConfirmation?.units.label ?? plan.file?.units.label ?? "Неизвестно")
@@ -571,8 +551,6 @@ struct HorizonPlanView: View {
                                     if let distance = elevationResolution.nearestDistanceMeters {
                                         LabeledContent("До ближайшей высотной линии, м", value: EngineeringDisplay.number(distance))
                                     }
-                                    if !automaticZ { Text("Автоматическое предложение Z отключено.") }
-                                    if preserveManualElevation { Text("Сохранена ручная отметка; замена требует выбора источника.") }
                                 } else if drawing.elevationSegments.isEmpty { Text("Нет допустимых сегментов с явной высотой. См. причины исключения объектов.") }
                                 ForEach(drawing.elevationExclusions.keys.sorted(), id: \.self) { reason in
                                     Text("\(reason): \(drawing.elevationExclusions[reason] ?? 0)")

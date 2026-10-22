@@ -180,7 +180,8 @@ struct MappingJournal: Codable, Equatable {
                   (p.file.map { f in !f.originalFilename.isEmpty && !f.crs.isEmpty && !f.axes.isEmpty &&
                       f.sha256.range(of: #"^[a-f0-9]{64}$"#, options: .regularExpression) != nil &&
                       (1...10_000_000).contains(f.byteCount) && f.importedAt.timeIntervalSinceReferenceDate.isFinite &&
-                      f.unitDeclaration == "userConfirmedAtImport" } ?? true) }),
+                      (f.unitDeclaration == "userConfirmedAtImport" ||
+                       (f.unitDeclaration == "dxfINSUNITS" && PlanUnits.declared(by: f.insertionUnits) == f.units)) } ?? true) }),
               validContext(selection) else { throw StorageError.invalidRecord }
         for plan in plans {
             try plan.validateManagement()
@@ -418,8 +419,7 @@ struct MappingDraft: Equatable {
         guard let file = plan.file, point.x.isFinite, point.y.isFinite else { throw StorageError.invalidRecord }
         if let elevation {
             try elevation.validate(plan: plan)
-            guard elevation.selectedXY == point,
-                  !preservesElevationOnPlanSelection || elevation.confirmedByUser == true else { throw StorageError.invalidRecord }
+            guard elevation.selectedXY == point else { throw StorageError.invalidRecord }
         }
         if zOrigin == .planGeometry || zOrigin == .horizonDefault {
             // A horizon identifies the plan, never the actual floor at a tapped location.
@@ -431,7 +431,7 @@ struct MappingDraft: Equatable {
         planID = plan.id; xyUnits = file.units.coordinateUnits; xySource = "plan"
         crs = file.crs; axes = file.axes
         coordinateProvenance = "plan \(plan.id.uuidString); revision \(plan.version); SHA-256 \(file.sha256); drawing WCS XY; user selected; accuracy unknown; \(file.unitDeclaration)"
-        if let elevation {
+        if let elevation, !preservesElevationOnPlanSelection {
             z = ElevationInput.text(elevation.elevationMeters)
             zOrigin = .planGeometry; zPlanGeometry = elevation
         }
@@ -453,7 +453,7 @@ struct MappingDraft: Equatable {
         zDatum = zOrigin == nil ? nil : horizon?.elevationDatum
     }
     var preservesElevationOnPlanSelection: Bool {
-        zOrigin == .manualOverride || (zOrigin == nil && !z.isEmpty)
+        !z.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (zOrigin == .manualOverride || zOrigin == nil)
     }
     var hasChanges: Bool {
         !photos.isEmpty || !photoSessions.isEmpty || ![picket, chainageOriginAndDirection, x, y, crs, axes, coordinateProvenance, notes].allSatisfy(\.isEmpty) ||

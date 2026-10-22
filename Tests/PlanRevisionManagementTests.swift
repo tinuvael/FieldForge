@@ -154,6 +154,31 @@ final class PlanRevisionManagementTests: XCTestCase {
         let reopened = try FileMappingStore(url: store.url).load(); try reopened.validate()
         XCTAssertEqual(reopened.plans.first?.elevationUnitConfirmation?.units, .meters)
     }
+    func testImportedUnitsPersistAndAutomaticZUsesResolvedDeclaration() throws {
+        let directory = root(); defer { try? FileManager.default.removeItem(at: directory) }
+        let (store, files, initial) = try configured(directory); var w = initial
+        for (index, header) in [6, 4, 0, 1].enumerated() {
+            let declared = PlanUnits.declared(by: header)
+            XCTAssertEqual(declared, header == 6 ? .meters : header == 4 ? .millimeters : nil)
+            let units = declared ?? .meters // The user confirms headers 0 and 1 at import.
+            let bytes = DXFFixtures.drawing("0\nLINE\n10\n0\n20\n0\n30\n1000\n11\n10\n21\n0\n31\n1000\n", units: header)
+            let p = try files.stage(data: bytes, filename: "units.dxf", horizonID: XCTUnwrap(w.context.horizonID),
+                version: String(index + 1), units: units, crs: "mine grid", axes: "WCS XYZ")
+            try w.registerPlan(p)
+            let reopened = try XCTUnwrap(store.load().plans.first { $0.id == p.id })
+            XCTAssertEqual(reopened, p); XCTAssertEqual(try files.read(p), bytes)
+            XCTAssertEqual(p.file?.unitDeclaration, declared == nil ? "userConfirmedAtImport" : "dxfINSUNITS")
+            let z = try XCTUnwrap(PlanElevationSnap.resolve(PlanPoint(x: 5, y: 0),
+                document: DXFDocument.parse(bytes), plan: reopened).automatic)
+            XCTAssertEqual(z.elevationMeters, header == 4 ? 1 : 1000)
+            try z.validate(plan: reopened)
+        }
+        XCTAssertNil(PlanUnits.declared(by: nil))
+        let missing = String(decoding: DXFFixtures.drawing(DXFFixtures.line), as: UTF8.self)
+            .replacingOccurrences(of: "9\n$INSUNITS\n70\n6\n", with: "")
+        XCTAssertNil(try DXFDocument.parse(Data(missing.utf8)).insertionUnits)
+    }
+
     @MainActor func testActiveSelectionFilteringRelaunchAndExplicitReplacement() async throws {
         let directory = root(); defer { try? FileManager.default.removeItem(at: directory) }
         let (_, files, initial) = try configured(directory); var w = initial

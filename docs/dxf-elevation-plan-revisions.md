@@ -86,19 +86,32 @@ Plan → menu → «Сведения о плане» → «Технически�
 count, source types (including BLOCK/INSERT), per-reason excluded-entity counts,
 source units / $INSUNITS and confirmation status. After a tap it also shows the
 selected XY and failure reason, nearest-segment distance when outside tolerance,
-ambiguity or disabled automatic search. Exclusions count unusable entities, not
+or ambiguity. Automatic search is always enabled. Exclusions count unusable entities, not
 approximated display chords. A partially usable polyline remains a source if at
 least one nondegenerate segment has both explicit elevations.
 
 Every opening re-reads and hash-checks the stored original and runs the current
-parser. No geometry cache or reimport is required. Previously unknown units can
-be explicitly confirmed for **new Z proposals only**, in the technical sheet.
-Metres / millimetres must agree with $INSUNITS 6 / 4; absent or 0 declarations need
-user confirmation. Other/conflicting units remain unsupported. Confirmation is
-one-time, timestamped optional plan metadata. It never relabels existing XY in
-`drawing` units, mutates original observation coordinates or changes the managed
-file declaration. Newly accepted provenance records `userConfirmedAtPlanReview`.
-Already confirmed imports continue to use `userConfirmedAtImport`.
+parser. No geometry cache or reimport is required. New imports use supported
+$INSUNITS 6 / 4 automatically and persist `dxfINSUNITS` with metres / millimetres.
+Missing, unitless or unsupported declarations require an explicit source-unit
+choice during import (`userConfirmedAtImport`); unknown cannot be saved through
+the import UI. Supported declarations cannot be contradicted by a manual choice.
+Other declarations use the user's explicit metres/millimetres interpretation,
+without converting original XY. There is no unit confirmation on the point screen.
+
+Previously unknown units can be confirmed once in plan properties for **new Z
+proposals only**, using timestamped `userConfirmedAtPlanReview` metadata. This
+never relabels existing XY in `drawing` units, changes CRS, mutates observations
+or changes the managed file declaration. Historical imports remain readable.
+
+A tap immediately resolves approximate Z with the unchanged nearest-segment
+algorithm. The point screen shows XY, approximate Z or «Z недоступна» and one
+«Использовать точку» action, returning to Mapping without another dialog.
+Ambiguous geometry remains unavailable; no source picker can bypass it. Manual
+Z always survives subsequent point selections (including correction drafts).
+Explicitly clearing it permits automatic Z on the next tap. Without a manual
+override, a new tap replaces automatic Z or clears it if unavailable. Detailed
+provenance remains available from Mapping and plan properties.
 
 Mapping and the correction editor use one editable Z row with a trailing «DXF»,
 «Горизонт» or «Вручную», from the actual `ElevationOrigin`. Empty/invalid Z has no

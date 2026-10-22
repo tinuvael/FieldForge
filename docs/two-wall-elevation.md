@@ -62,24 +62,23 @@ GPS never supplies plan-tap Z.
 
 ## Units and field UI
 
-Units explicitly confirmed at import are reused. `$INSUNITS`, when present, must
-agree: metres=6, millimetres=4; missing/0 permits an explicit confirmation, while
-other codes/conflicts cannot silently become metric units.
+Supported `$INSUNITS` metres=6 / millimetres=4 are resolved automatically at
+import and saved as `dxfINSUNITS`. Missing, unitless or unsupported declarations
+require one explicit metres/millimetres source choice during import. Resolved
+units are reused; supported declarations cannot be contradicted by a manual choice.
 
-For an existing plan with unknown units, the point panel immediately offers
-metres/millimetres and an explicit confirmation button. The existing plan-scoped
-`elevationUnitConfirmation` persists the decision/time; it does not relabel saved
-XY, CRS, the original file or observations. Updating the loaded plan recalculates
-the current proposed point automatically. A contradiction is refused.
+Existing unknown-unit plans have one-time confirmation in plan properties.
+The existing `elevationUnitConfirmation` persists the decision/time for new Z
+proposals without relabelling saved XY, CRS, original files or observations.
+Updating the loaded plan recalculates the current proposed point automatically.
 
-After a tap the primary panel displays X, Y, approximate Z when available,
-«DXF · расчётная отметка» and a brief warning only when needed. The button says
-«Подтвердить X/Y/Z» when applying the proposal, otherwise «Подтвердить X/Y».
-Technical details remain in plan properties and Mapping's Z-source popover.
-A pre-existing manual Z, including deliberate empty input, defaults to preservation.
-Replacing it requires choosing «Заменить ручную Z расчётной» and confirming the
-point. The domain also rejects an unconfirmed automatic replacement. Manual Z
-entry remains in Mapping; no saved observation changes just by reopening a plan.
+A tap displays X/Y and approximate Z, or «Z недоступна». The single primary
+button «Использовать точку» transfers the point and returns to Mapping. Search
+is always enabled and ambiguity safeguards remain unchanged. Detailed provenance
+stays in plan properties and Mapping's Z-source popover. Manual Z always takes
+priority over a new estimate, without a picker or dialog. Clearing manual Z
+permits automatic filling on the next selection; subsequent automatic selections
+replace previous automatic Z. Reopening a plan never changes saved observations.
 
 ## Provenance and historical compatibility
 

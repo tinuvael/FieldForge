@@ -96,7 +96,7 @@ struct MappingCorrectionEditor: View {
                                 NavigationLink {
                                     HorizonPlanLoader(plan: plan, selecting: true, onSelection: { showPlans = false }, onPointSelection: { point, plan, elevation in
                                         try draft.fields.selectPlanPoint(point, plan: plan, elevation: elevation)
-                                    }, preserveManualElevation: draft.fields.preservesElevationOnPlanSelection)
+                                    })
                                 } label: {
                                     VStack(alignment: .leading) {
                                         Text(plan.file?.originalFilename ?? "DXF")
