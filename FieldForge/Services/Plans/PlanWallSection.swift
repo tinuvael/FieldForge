@@ -49,12 +49,6 @@ enum PlanWallSection {
         let t = cross(delta, v) / denominator, u = cross(delta, r) / denominator
         return t > epsilon && t < 1 - epsilon && u >= -epsilon && u <= 1 + epsilon
     }
-    private static func nearest(_ segments: [DXFElevationSegment], _ point: PlanPoint) -> DXFElevationSegment? {
-        segments.filter { $0.projection(point) != nil }.min {
-            let a = $0.projection(point)!.distance, b = $1.projection(point)!.distance
-            return a == b ? $0.segmentIndex < $1.segmentIndex : a < b
-        }
-    }
     private static func proposal(_ a: DXFElevationSegment, _ b: DXFElevationSegment?, _ point: PlanPoint,
                                  _ plan: MappingPlanReference, _ factor: Double, _ policy: PlanElevationSnapPolicy) -> PlanGeometryElevation {
         let p = a.projection(point)!
@@ -83,21 +77,25 @@ enum PlanWallSection {
     /// Check continuation half a local width in both directions. Independent vertex spacing
     /// is handled by reprojecting on each complete source wall, never matching vertex indices.
     private static func supported(_ a: DXFElevationSegment, _ b: DXFElevationSegment, _ p: PlanPoint,
-                                  _ groups: [String: [DXFElevationSegment]], _ all: [DXFElevationSegment]) -> Bool {
+                                  _ index: PlanElevationIndex) -> Bool {
         let width = a.projection(p)!.distance + b.projection(p)!.distance
         var tb = tangent(b); let ta = tangent(a)
         if dot(ta, tb) < 0 { tb = scaled(tb, -1) }
         let sum = PlanPoint(x: ta.x + tb.x, y: ta.y + tb.y), direction = scaled(sum, 1 / length(sum))
         for sign in [-1.0, 1.0] {
             let offset = scaled(direction, sign * width / 2), probe = PlanPoint(x: p.x + offset.x, y: p.y + offset.y)
-            guard let aa = nearest(groups[a.wallID]!, probe), let bb = nearest(groups[b.wallID]!, probe),
+            guard let aa = index.nearest(probe, wallID: a.wallID), let bb = index.nearest(probe, wallID: b.wallID),
                   compatible(aa, bb, at: probe) else { return false }
             let w = aa.projection(probe)!.distance + bb.projection(probe)!.distance
             guard w >= width / 2, w <= width * 2 else { return false }
             let qa = position(aa, at: probe), qb = position(bb, at: probe)
-            if all.contains(where: { $0.wallID != a.wallID && $0.wallID != b.wallID && intersects(qa, qb, $0) }) { return false }
+            if blocked(qa, qb, a, b, index) { return false }
         }
         return true
+    }
+    private static func blocked(_ qa: PlanPoint, _ qb: PlanPoint, _ a: DXFElevationSegment,
+                                _ b: DXFElevationSegment, _ index: PlanElevationIndex) -> Bool {
+        index.anyCrossing(qa, qb, excluding: [a.wallID, b.wallID]) { intersects(qa, qb, $0) }
     }
     /// Explicit plan wall picks retain the original location. Confirmation permits overlap
     /// review but never bypasses local transverse/opposite-side geometry validation.
@@ -105,25 +103,28 @@ enum PlanWallSection {
                               plan: MappingPlanReference) -> PlanGeometryElevation? {
         guard walls.count == 2, let factor = PlanElevationSnap.metersPerUnit(plan),
               plan.file?.insertionUnits == document.insertionUnits,
-              let a = nearest(document.elevationSegments.filter { $0.wallID == walls[0] }, point),
-              let b = nearest(document.elevationSegments.filter { $0.wallID == walls[1] }, point),
+              let a = document.elevationIndex.nearest(point, wallID: walls[0]),
+              let b = document.elevationIndex.nearest(point, wallID: walls[1]),
               compatible(a, b, at: point) else { return nil }
         return proposal(a, b, point, plan, factor, PlanElevationSnapPolicy()).confirmed()
     }
     static func resolve(_ point: PlanPoint, document: DXFDocument, plan: MappingPlanReference,
                         factor: Double, policy: PlanElevationSnapPolicy) -> PlanElevationResolution {
-        let all = document.elevationSegments.filter { $0.projection(point) != nil }
-        let groups = Dictionary(grouping: all, by: \.wallID)
-        let walls = groups.values.compactMap { nearest($0, point) }.sorted {
-            let a = $0.projection(point)!.distance, b = $1.projection(point)!.distance
-            return a == b ? $0.entityOrdinal < $1.entityOrdinal : a < b
-        }
-        guard let first = walls.first else {
+        let index = document.elevationIndex
+        var metrics = PlanElevationIndex.QueryMetrics()
+        guard let firstID = index.nearest(point, metrics: &metrics) else {
             return PlanElevationResolution(candidates: [], requiresChoice: false, failureReason: "Нет сегментов с явными достоверными Z.")
         }
-        let nearestDistance = first.projection(point)!.distance * factor
+        let first = index.segments[firstID], nearestDistance = first.projection(point)!.distance * factor
+        func walls(within radius: Double) -> [DXFElevationSegment] {
+            var seen = Set<String>()
+            return index.nearby(point, radius: radius).compactMap {
+                let segment = index.segments[$0]
+                return seen.insert(segment.wallID).inserted ? segment : nil
+            }
+        }
         // A wall hit needs no width interpolation. Preserve all distinct coincident levels.
-        let onWall = walls.filter { $0.projection(point)!.distance <= epsilon && $0.projection(point)!.distance * factor <= policy.toleranceMeters }
+        let onWall = walls(within: min(epsilon, policy.toleranceMeters / factor))
         if !onWall.isEmpty {
             let values = onWall.map { proposal($0, nil, point, plan, factor, policy) }
             let z = values.map(\.elevationMeters)
@@ -131,39 +132,70 @@ enum PlanWallSection {
             return PlanElevationResolution(candidates: ambiguous ? values : [values[0]], requiresChoice: ambiguous,
                 failureReason: ambiguous ? "Совпадающие в плане стены имеют разные Z. Выберите источник." : nil, nearestDistanceMeters: nearestDistance)
         }
-        // Resource bound, not a distance radius. A truncated search can never auto-accept.
-        let local = Array(walls.prefix(64))
-        guard all.count * local.count * local.count <= 2_000_000 else {
-            return PlanElevationResolution(candidates: [], requiresChoice: false,
-                failureReason: "Слишком много конкурирующей геометрии. Укажите две стены на плане.", nearestDistanceMeters: nearestDistance)
-        }
         func uniquePosition(_ wall: DXFElevationSegment) -> Bool {
-            let closest = wall.projection(point)!.distance
-            return !groups[wall.wallID]!.contains {
-                abs($0.segmentIndex - wall.segmentIndex) > 1 && $0.projection(point)!.distance <= closest + policy.similarDistanceMeters / factor
+            let radius = wall.projection(point)!.distance + policy.similarDistanceMeters / factor
+            return !index.nearby(point, radius: radius).contains {
+                let s = index.segments[$0]
+                return s.wallID == wall.wallID && abs(s.segmentIndex - wall.segmentIndex) > 1
             }
         }
-        var pairs: [PlanGeometryElevation] = [], automaticIDs = Set<Int>()
-        for i in local.indices {
-            for j in local.indices where j > i {
-                let a = local[i], b = local[j]
-                guard compatible(a, b, at: point) else { continue }
-                let qa = position(a, at: point), qb = position(b, at: point)
-                guard !all.contains(where: { $0.wallID != a.wallID && $0.wallID != b.wallID && intersects(qa, qb, $0) }) else { continue }
-                let value = proposal(a, b, point, plan, factor, policy)
-                let width = (value.distanceMeters + value.secondWall!.distanceMeters) / factor
-                // Multiple nearby parallel rails without semantic correspondence can also
-                // bound rock between drives. Require confirmation instead of inventing topology.
-                let extraRails = local.contains { s in
-                    s.wallID != a.wallID && s.wallID != b.wallID && s.projection(point)!.distance <= 2 * width && abs(dot(tangent(s), tangent(a))) >= alignment
+        func sections(_ local: [DXFElevationSegment]) -> (pairs: [PlanGeometryElevation], automaticIDs: Set<Int>) {
+            let distances = local.map { $0.projection(point)!.distance }
+            var bins = Array(repeating: [Int](), count: 16), sectors: [Int] = []
+            for i in local.indices {
+                let q = position(local[i], at: point)
+                let angle = atan2(q.y - point.y, q.x - point.x) + .pi
+                let sector = min(15, Int(angle / (2 * .pi) * 16))
+                sectors.append(sector); bins[sector].append(i)
+            }
+            var pairs: [PlanGeometryElevation] = [], automaticIDs = Set<Int>()
+            var minimumWidth = Double.infinity
+            for i in local.indices {
+                guard distances[i] <= minimumWidth * 1.5 else { break }
+                // Only opposite angular bins can satisfy the existing <=30° opposition
+                // test. Extra boundary bins prevent false negatives at sector boundaries.
+                for offset in 6...10 {
+                    for j in bins[(sectors[i] + offset) % 16] where j > i {
+                        if distances[i] + distances[j] > minimumWidth * 1.5 { break }
+                        let a = local[i], b = local[j]
+                        guard compatible(a, b, at: point) else { continue }
+                        let qa = position(a, at: point), qb = position(b, at: point)
+                        guard !blocked(qa, qb, a, b, index) else { continue }
+                        let value = proposal(a, b, point, plan, factor, policy)
+                        let width = distances[i] + distances[j]
+                        minimumWidth = min(minimumWidth, width)
+                        let extraRails = walls(within: 2 * width).contains { s in
+                            s.wallID != a.wallID && s.wallID != b.wallID && abs(dot(tangent(s), tangent(a))) >= alignment
+                        }
+                        if width * factor <= maximumAutomaticWidthMeters && matchingHint(a, b) != false
+                            && (!extraRails || matchingHint(a, b) == true) && uniquePosition(a) && uniquePosition(b)
+                            && supported(a, b, point, index) {
+                            automaticIDs.insert(pairs.count)
+                        }
+                        pairs.append(value)
+                    }
                 }
-                if width * factor <= maximumAutomaticWidthMeters && matchingHint(a, b) != false && (!extraRails || matchingHint(a, b) == true)
-                    && uniquePosition(a) && uniquePosition(b) && supported(a, b, point, groups, all) && walls.count <= 64 {
-                    automaticIDs.insert(pairs.count)
-                }
-                pairs.append(value)
+            }
+            return (pairs, automaticIDs)
+        }
+        // Seed from the exact nearest segment, then expand geometrically. No drawing-wide
+        // wall count or fixed distance cutoff participates in automatic acceptance.
+        let extent = index.extent(from: point)
+        var radius = min(extent, max(epsilon, 2 * first.projection(point)!.distance))
+        var local = walls(within: radius), result = sections(local)
+        while result.pairs.isEmpty && radius < extent {
+            radius = min(extent, max(radius * 2, radius.nextUp))
+            local = walls(within: radius); result = sections(local)
+        }
+        if let width = result.pairs.map({ $0.distanceMeters + $0.secondWall!.distanceMeters }).min() {
+            // A competitor can only affect selection within 1.5 section widths;
+            // parallel-rail ambiguity uses 2 widths. Query the larger complete halo.
+            let completeRadius = 2 * width / factor
+            if radius < completeRadius {
+                local = walls(within: completeRadius); result = sections(local)
             }
         }
+        let pairs = result.pairs, automaticIDs = result.automaticIDs
         if !pairs.isEmpty {
             // Any competing local section requires choice, even when its elevations agree.
             let minimumWidth = pairs.map { $0.distanceMeters + $0.secondWall!.distanceMeters }.min()!
@@ -174,11 +206,11 @@ enum PlanWallSection {
         }
         // Single-wall estimate is offered only when one source is genuinely isolated. A failed
         // pair/intersection must not silently degrade to the nearest of several unrelated walls.
-        if walls.count == 1, nearestDistance <= policy.toleranceMeters {
+        if local.count == 1, nearestDistance <= policy.toleranceMeters {
             return PlanElevationResolution(candidates: [proposal(first, nil, point, plan, factor, policy)], requiresChoice: false,
                 failureReason: "Одна стена: приблизительная Z без поперечной интерполяции.", nearestDistanceMeters: nearestDistance)
         }
-        let similar = walls.filter { $0.projection(point)!.distance * factor <= nearestDistance + policy.similarDistanceMeters }
+        let similar = local.filter { $0.projection(point)!.distance * factor <= nearestDistance + policy.similarDistanceMeters }
         if similar.count > 1, nearestDistance <= policy.toleranceMeters {
             return PlanElevationResolution(candidates: similar.map { proposal($0, nil, point, plan, factor, policy) }, requiresChoice: true,
                 failureReason: "Пара стен не определена: возможны только отдельные одностенные оценки. Выберите источник явно.", nearestDistanceMeters: nearestDistance)

@@ -401,7 +401,7 @@ struct HorizonPlanView: View {
                     }
                     let preview = previewChoice.flatMap { elevationResolution.candidates.indices.contains($0) ? elevationResolution.candidates[$0] : nil } ?? chosenElevation
                     let highlighted = pickedWalls + [preview?.segment.wallID, preview?.secondWall?.segment.wallID].compactMap { $0 }
-                    for segment in drawing.elevationSegments where highlighted.contains(segment.wallID) {
+                    for segment in Set(highlighted).sorted().flatMap({ drawing.elevationIndex.segments(on: $0) }) {
                         let a = viewport.screen(segment.a.xy), b = viewport.screen(segment.b.xy)
                         var path = Path(); path.move(to: CGPoint(x: a.x, y: a.y)); path.addLine(to: CGPoint(x: b.x, y: b.y))
                         context.stroke(path, with: .color(.cyan), lineWidth: 4)
@@ -445,8 +445,8 @@ struct HorizonPlanView: View {
                         let location = PlanPoint(x: value.location.x, y: value.location.y)
                         if pickingWalls, let proposed {
                             let drawingPoint = viewport.drawing(location)
-                            let nearby = drawing.elevationSegments.filter { ($0.projection(drawingPoint)?.distance ?? .infinity) * viewport.scale <= 24 }
-                                .sorted { $0.projection(drawingPoint)!.distance < $1.projection(drawingPoint)!.distance }
+                            let nearby = drawing.elevationIndex.nearby(drawingPoint, radius: 24 / viewport.scale)
+                                .map { drawing.elevationIndex.segments[$0] }
                             var seen = Set<String>()
                             wallChoices = nearby.filter { seen.insert($0.wallID).inserted }
                             if wallChoices.count == 1 { pickWall(wallChoices[0], at: proposed) }

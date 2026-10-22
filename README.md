@@ -1,5 +1,7 @@
 # FieldForge
 
+DXF elevation search now uses a cached XY BVH with an expanding local query. Distant walls and drawing-wide segment counts no longer prevent an automatic result; 10,000/100,000-segment stress controls verify the same local two-wall Z. See [search strategy and performance](docs/two-wall-elevation.md#local-search-verification).
+
 DXF plan taps now interpolate floor **Z from two corresponding excavation walls**, preserving exact tap X/Y. Open/curved/ramp walls and widths beyond 5 m are supported; ambiguous intersections and overlapping levels require highlighted wall confirmation or manual Z. The inline Z source opens both wall elevations/distances. A nominal horizon is never used as plan-tap elevation. See [algorithm, limits and verification](docs/two-wall-elevation.md).
 
 Synthetic underground surveys **500 / 600 / 700** include 90 individual-wall projection controls and 45 independently calculated two-wall floor controls, reproducible generation and plan/ramp previews. See [fixtures](docs/underground-survey-z-verification.md).

@@ -63,7 +63,17 @@ struct DXFDocument {
     let bounds: PlanBounds
     let insertionUnits: Int?
     let warnings: [String]
-    var elevationSegments: [DXFElevationSegment] = []
+    let elevationSegments: [DXFElevationSegment]
+    let elevationIndex: PlanElevationIndex
+
+    init(paths: [[PlanPoint]], polylines: [DXFPolyline], points: [DXFVertex], labels: [DXFLabel],
+         bounds: PlanBounds, insertionUnits: Int?, warnings: [String],
+         elevationSegments: [DXFElevationSegment] = [], elevationExclusions: [String: Int] = [:]) {
+        self.paths = paths; self.polylines = polylines; self.points = points; self.labels = labels
+        self.bounds = bounds; self.insertionUnits = insertionUnits; self.warnings = warnings
+        self.elevationSegments = elevationSegments; self.elevationExclusions = elevationExclusions
+        elevationIndex = PlanElevationIndex(segments: elevationSegments)
+    }
     /// One entry per unusable entity, not per display chord or missing vertex.
     var elevationExclusions: [String: Int] = [:]
     var elevationEntityTypes: [String] { Array(Set(elevationSegments.map { $0.blockPath == nil ? $0.entityType : "BLOCK/INSERT → " + $0.entityType })).sorted() }
@@ -79,7 +89,7 @@ struct DXFDocument {
         var lines = source.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
             .components(separatedBy: "\n")
         while lines.last?.trimmingCharacters(in: .whitespaces).isEmpty == true { lines.removeLast() }
-        guard lines.count.isMultiple(of: 2), lines.count <= 600_000 else { throw invalid("повреждены пары код/значение или превышен лимит.") }
+        guard lines.count.isMultiple(of: 2), lines.count <= 2_000_000 else { throw invalid("повреждены пары код/значение или превышен лимит.") }
         struct Pair { let code: Int; let value: String }
         var pairs: [Pair] = []
         for i in stride(from: 0, to: lines.count, by: 2) {

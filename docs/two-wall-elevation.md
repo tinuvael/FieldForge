@@ -26,24 +26,42 @@ provenance. On a plan tap without usable Z, a nominal-horizon suggestion is clea
 an existing deliberate manual entry or deliberate empty manual value is preserved.
 Historical observations and their nominal-horizon values are never rewritten.
 
-## Wall correspondence policy v1
+## Wall correspondence policy and local spatial search
 
 The distance-weighted expression is applied only after local geometry validation:
 
-1. Group segments by expanded entity ordinal and block-instance path, **not**
-   handle alone, layer, filename, vertex count or array position. Find each source
-   wall's nearest position independently. Adjacent vertices may have different
-   spacing/counts. Non-adjacent, equally close portions of a folded wall prevent
-   automatic acceptance (distance tie allowance: the existing 0.1 m picking policy).
-2. Enumerate pairs of distinct walls without a 2 m or 5 m candidate radius.
+1. The loaded `DXFDocument` owns one immutable `PlanElevationIndex`. Its XY
+   bounding-volume hierarchy (BVH) stores complete segment AABBs, not just source
+   vertices or centres. Document value copies share the same index reference;
+   taps do not build indexes or regroup the drawing. Source-wall membership is
+   grouped once by expanded entity ordinal and block-instance path, **not** handle,
+   layer, filename or vertex count. Walls with more than eight segments have an
+   additional per-wall BVH for independent continuation projections.
+2. Find the exact nearest eligible segment using point-to-AABB lower bounds and
+   branch-and-bound traversal. Query a disk initially twice that segment's XY
+   distance, doubling it until a transverse candidate exists or all source bounds
+   have been covered. There is no fixed candidate radius or drawing-wide count
+   cutoff. A discovered section of width W closes the search with an exact 2W
+   disk: this includes every competing section allowed by the 1.5W rule and every
+   extra parallel rail allowed by the 2W rule. Distant geometry outside this local
+   envelope cannot change the result. Query results sort by exact segment distance,
+   entity ordinal, segment index, wall identity and original array index.
+   Deduplicate walls only after that ordering, preserving nearest source positions.
+   Angular bins limit pairing to opposite projection directions; an incumbent
+   minimum width prunes pairs beyond the competitive distance. Adjacent vertices
+   may have different spacing/counts. Non-adjacent, equally close portions of a
+   folded wall prevent automatic acceptance (existing 0.1 m tie allowance).
+   Evaluate pairs of distinct local walls without a 2 m or 5 m candidate radius.
    Tangents must align within 30 degrees, independent of vertex order. Projection
    vectors from the tap must oppose within 30 degrees; their connecting section
    must lie within 30 degrees of perpendicular to **both** local tangents.
    Zero-width/coincident walls cannot form a pair. This also prevents extrapolation
    past an open dead end from automatically becoming a transverse floor section.
 3. Reject automatic sections crossing any intervening eligible wall geometry,
-   even when that geometry has a different Z. Collinear overlaps and shared
-   intervening endpoints also block a section. This prevents skipping a nearer
+   even when that geometry has a different Z. An indexed chord-AABB query supplies
+   only potentially intersecting segments to the unchanged exact intersection
+   predicate; no pair scans the full segment collection. Collinear overlaps and
+   shared intervening endpoints also block a section. This prevents skipping a nearer
    boundary to reach another drive or overpass.
 4. Reproject independently on each complete source wall at probe points half a
    local width forward and backward along the mean tangent. Each must retain a
@@ -66,12 +84,29 @@ The distance-weighted expression is applied only after local geometry validation
    naming convention is mandatory. Two isolated unnamed wall polylines work.
 
 These dimensionless angles/ratios, numerical XY coincidence tolerance (1e-8
-source units), 50 m review guard, resource bounds and tie policy are **application picking heuristics**,
+source units), 50 m review guard and tie policy are **application picking heuristics**,
 not published geological coefficients, survey tolerances or excavation design
-criteria. The 64 nearest source walls bound enumeration; truncated searches
-cannot auto-accept. A conservative upper bound of 2,000,000 segment checks stops
-complex searches and asks for explicit wall selection. Neither resource limit is
-a radius; explicit wall picks search the whole eligible geometry.
+criteria. The former 64-wall cutoff and 2,000,000-operation guard are removed.
+Neither total wall count nor total segment count participates in acceptance.
+The 50 m *section-width review* guard is retained; it does not stop search or
+prevent explicit source selection. Manual wall hit testing uses the same global
+index, and highlighting uses cached per-wall membership rather than full scans.
+
+The BVH uses deterministic longest-axis median splits and at most eight segments
+per leaf. Storage is linear in source segment count, with shared source arrays;
+construction sorts subranges, taking O(N log² N) worst-case work once on the
+existing background DXF-loading path. Typical nearest/disk/chord queries prune
+unrelated nodes; a dense local overlap can still require many exact predicates.
+Worst-case query work is data-dependent, rather than a universal logarithmic or
+physical-iPhone timing guarantee. Local geometric ambiguity still requires review;
+distant source complexity never constitutes ambiguity by itself.
+
+To make an actual 100,000-LINE DXF loadable, the ASCII parser's pair budget is
+raised from 300,000 to 1,000,000 (2,000,000 text lines). The 10 MB source cap,
+200,000 display vertices, 200,000 expanded records, 1,000,000 expansion-work budget,
+and all numeric/geometry validation remain in force. A stress source with 100,000
+segments is 6,100,047 bytes and has exactly 200,000 display vertices. The index is
+transient; it adds no database fields, migration, dependencies or evidence rewrite.
 
 A single isolated wall within the existing 2 m single-source estimate tolerance
 can supply a clearly marked `DXF · 1 стена ≈` estimate. That limit does not restrict
@@ -124,6 +159,52 @@ optional source record. Old schema-8 journals decode without rewriting. No mappi
 migration, reset or older-schema support is added. Manual corrections create the
 existing append-only observation revision and retain original derived evidence.
 
+## Local-search verification
+
+`PlanElevationIndexTests` covers 10,000 and 100,000 independent segment/wall sources
+with a two-wall ramp near the tap and unrelated sources on both sides far away.
+Each size compares 20 repeated results with the complete small baseline record,
+requires automatic Z=108 (Z1=105, Z2=120, d1=2, d2=8), and preserves exact XY.
+Disk-query projection counts verify spatial pruning; index identity verifies reuse.
+Additional controls cover real 100,000-segment DXF loading, expanding beyond the
+initial disk, complete long-segment bounds, deterministic ties versus independent
+brute-force ordering, invalid segments, crossing/adjacent ambiguity, and explicit
+wall confirmation. Wall/index arrays and process resident-memory deltas are
+reported separately; array payload counts do not pretend to measure Dictionary,
+String, allocator or parser peak memory. Timing assertions are broad test-host
+regression ceilings, not a claimed survey-device performance specification.
+
+Local-search revision, 2026-10-22: **60 focused SwiftPM tests and 38 focused
+Xcode simulator tests, zero failures**. This selection covers DXF extraction,
+indexing, two-wall geometry, provenance, persistence and plan revisions; no whole-
+project regression run was performed for this revision. The app/test bundles
+build successfully for iPhone 17 Pro Simulator, iOS 26.5, Xcode 26.6.
+
+Final simulator stress measurements (debug build, 20 complete resolutions each):
+
+| Segments / independent walls | Index construction | Average resolution | Index array payload | Added resident bytes | Disk query projections |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 10,000 | 0.170 s | 0.983 ms | 538,656 B | 0 B incremental* | 9 |
+| 100,000 | 3.933 s | 1.186 ms | 5,059,744 B | 22,712,320 B | 12 |
+
+*The allocator reused already resident memory in the 10k case; this does not mean
+zero memory consumption. Payload counts exclude source arrays, dictionaries and
+strings. Both stress sizes additionally verify local competing drives remain
+ambiguous and explicit confirmation recovers the expected Z=108 at unchanged XY.
+
+The actual 100k-segment DXF imported and indexed in **8.385 s** in the final
+simulator run. The concurrent final SwiftPM import took **41.654 s**; earlier
+isolated runs took 7.884 s, demonstrating test-host scheduling sensitivity. Loading
+stays on the existing background task. These are service/loader measurements;
+Canvas redraw, Files-provider latency and physical-device performance are not
+timed or claimed. Source geometry outside the local query envelope is pruned
+regardless of the total drawing size.
+
+The independent 45-point Decimal control check passes. Consecutive Xcode project
+and scheme generations match; current project SHA-256:
+`ca16ae9a24dfb4fdd0070eabe4b20b7bfdf9c438d4a3a6e3a6501e0746203026`.
+The earlier whole-suite results below are historical.
+
 ## Independent validation
 
 `TwoWallElevationTests` contains hand-calculated straight, asymmetric, sloping,
@@ -151,7 +232,7 @@ python3 scripts/generate_project.py
 swift test
 ```
 
-Verification on 2026-10-22:
+Earlier two-wall verification on 2026-10-22 (before the local-search revision):
 
 - SwiftPM: **347 tests, 0 failures, 2 existing opt-in workbook skips**.
 - Xcode simulator core suite: **347 tests, 0 failures, the same 2 skips**;
@@ -176,7 +257,8 @@ these synthetic numerical/UI checks.
 
 - Christer Ericson, *Real-Time Collision Detection*, 2005, §§3.4 (barycentric/linear
   interpolation), 5.1.2 (closest point on a line segment), 5.1.9 (segment
-  intersection): [publisher/author contents](https://realtimecollisiondetection.net/books/rtcd/toc/).
+  intersection), 6.2.1 (top-down BVH construction), 6.3 (hierarchy traversal),
+  and 6.6.1 (array representation): [publisher/author contents](https://realtimecollisiondetection.net/books/rtcd/toc/).
 - Autodesk AutoCAD DXF 2018 [VERTEX group codes](https://help.autodesk.com/cloudhelp/2018/ENU/AutoCAD-DXF/files/GUID-0741E831-599E-4CBF-91E1-8ADBCFD6556D.htm):
   explicit WCS XYZ for 3D polyline vertices; the existing supported extraction
   subset and exclusions remain as documented in [DXF revisions](dxf-elevation-plan-revisions.md).
