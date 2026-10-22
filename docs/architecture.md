@@ -1,5 +1,7 @@
 # Architecture foundation (Phase 2)
 
+Current enterprise geotechnical extension: see [versioned SD, ROCK, field strength, JCond76, categorical GSI and three-sheet workbook](enterprise-geotechnical.md). Optional fields extend the shared schema-8 graph; no migration/reset or original-measurement journal change.
+
 ## Final field polish
 
 [Current contract](final-field-polish.md): `RMR89Basic.swift` is a Foundation-only category evaluator. Optional `RMR89Input.basicSelections` and `RMR89Assessment.calculation` add the exact `Bieniawski-RMR89/basic-categories-v1` method; input-only-v1 records retain their old validation. New result, component ratings and missing lists are revalidated against exact input/method. Schema remains 8, with no mapping migration/reset or standalone-measurement changes.

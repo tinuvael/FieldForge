@@ -50,6 +50,8 @@ struct MappingRatingsDetail: View {
                             value(parameter.title, "\(choice.title) · \(choice.rating) балл.")
                         }
                     }
+                    if let field = rmr.input.fieldStrength { value("Полевая прочность", "\(field.grade.rawValue) · \(field.grade.interval) МПа · \(field.rating) балл.") }
+                    if let jcond = rmr.input.jcond76 { value("JCond76 · отдельно от RMR89", "\(jcond.category.title) · \(jcond.rating)") }
                     value("Испытание прочности", rmr.input.strengthTest?.title ?? "")
                     value("Прочность, МПа", rmr.input.strengthMPa); value("Источник испытания", rmr.input.strengthEvidence)
                     value("RQD исходное, %", rmr.input.rqd); value("Источник RQD", rmr.input.rqdEvidence)
@@ -64,6 +66,16 @@ struct MappingRatingsDetail: View {
                     Text("Отсутствуют: \(rmr.missing.joined(separator: ", "))").font(.caption)
                 }
             } else { Text("RMR89: исходные данные не вводились.") }
+            if let gsi = ratings?.gsi {
+                DisclosureGroup("GSI · геологическая оценка") {
+                    Text(gsi.selection.structure.title + " · " + gsi.selection.surface.title)
+                    Text("Интервал GSI: \(EngineeringDisplay.number(gsi.lower))–\(EngineeringDisplay.number(gsi.upper))")
+                    if let value = gsi.finalValue { Text("Уточнённый GSI: \(EngineeringDisplay.number(value))") }
+                    Text("Оценено: \(MeasurementDateText.format(gsi.assessedAt, detailed: true))").font(.caption)
+                    Text(GSIAssessment.reference).font(.caption)
+                    Text(GSIAssessment.limitation).font(.caption)
+                }
+            }
         }
     }
     private func value(_ title: String, _ text: String) -> some View {

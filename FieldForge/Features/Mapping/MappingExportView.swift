@@ -55,6 +55,12 @@ struct MappingExportView: View {
                     .accessibilityIdentifier("mappingExportLastDay")
             }.disabled(busy || sharing)
             Section {
+                Picker("Выгрузка", selection: $format) {
+                    Text("Полная книга Excel").tag(MappingExportFormat.xlsx)
+                    Text("Геотехническое картирование — регламент").tag(MappingExportFormat.enterpriseGeotechnical)
+                    Text("CSV · технический").tag(MappingExportFormat.csv)
+                    Text("Фотографии + Excel").tag(MappingExportFormat.photoPackage)
+                }.accessibilityIdentifier("mappingExportKind")
                 DisclosureGroup("Дополнительные параметры") {
                     NavigationLink {
                         ExportTimeZoneSelection(selection: $timeZoneID)
@@ -69,7 +75,7 @@ struct MappingExportView: View {
             }.disabled(busy || sharing)
             Section {
                 Text("Наблюдений: \(selectedCount)").accessibilityIdentifier("mappingExportPointCount")
-                Button(format == .xlsx ? "Экспортировать Excel" : format == .csv ? "Экспортировать CSV" : "Экспортировать фотографии ZIP") {
+                Button(format == .enterpriseGeotechnical ? "Экспортировать по регламенту" : format == .xlsx ? "Экспортировать Excel" : format == .csv ? "Экспортировать CSV" : "Экспортировать фотографии ZIP") {
                     if let preview { shareOrConfirm(preview) } else { prepare(shareWhenReady: true) }
                 }.disabled(busy || sharing || selection == nil).accessibilityIdentifier("mappingExportShare")
                 if busy {
@@ -100,7 +106,9 @@ struct MappingExportView: View {
             Section {
                 Text("Одна книга Excel; оригиналы фото — отдельный ZIP. Выгрузка не является полной резервной копией.").font(.caption)
                 DisclosureGroup("Состав и ограничения") {
-                    if format == .photoPackage {
+                    if format == .enterpriseGeotechnical {
+                        Text("Ровно три листа: «Геотех картирование», «Справочники», «Исходные данные». Одна строка на актуальное наблюдение; SD — среднее сохранённых значений J1–J5. Исходный лист содержит записи и историю исправлений. Оригиналы фото не включены.")
+                    } else if format == .photoPackage {
                         Text("ZIP: оригиналы, FieldForge-Mapping.xlsx с реестром photo_register и manifest.json. Файлы проверяются по размеру и SHA-256. Путь и статус каждого оригинала указаны в реестре.")
                         Text("Оригиналы сохраняют все исходные байты, включая личные EXIF/GPS и сведения об авторе. Передавайте архив только доверенным получателям. Неизвестное место и время съёмки остаются неизвестными.")
                     } else {
@@ -154,11 +162,12 @@ struct MappingExportView: View {
         guard !busy, !sharing, let selection else { return }
         let photoRoot = mapping.photoStore?.root
         let wantsPhotos = format == .photoPackage
+        let wantsEnterprise = format == .enterpriseGeotechnical
         let journal = journal // value snapshot, taken before asynchronous work
         busy = true; errorMessage = nil; preview = nil; photoPreview = nil
         operation = Task { @MainActor in
             let worker = Task.detached(priority: .userInitiated) {
-                let snapshot = try MappingCSVExport.prepare(journal: journal, selection: selection)
+                let snapshot = try MappingCSVExport.prepare(journal: journal, selection: selection, includeEnterprise: wantsEnterprise)
                 var photos: PhotoPackageExport?
                 if wantsPhotos {
                     guard let photoRoot else { throw MappingError.invalid("Хранилище фотографий недоступно.") }

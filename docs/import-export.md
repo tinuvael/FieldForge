@@ -1,5 +1,7 @@
 # Import/export and spatial integration boundaries
 
+Current enterprise geotechnical extension: see [versioned SD, ROCK, field strength, JCond76, categorical GSI and three-sheet workbook](enterprise-geotechnical.md). Optional fields extend the shared schema-8 graph; no migration/reset or original-measurement journal change.
+
 **Current update (2026-10-21):** [Final field polish](final-field-polish.md) supersedes the historical default-export, sheet-order and input-only RMR descriptions below. Excel is the default, with five Russian field sheets and preserved technical sheets. Verified preliminary RMRbasic categories are available under a separate method version; legacy inputs stay unchanged.
 
 **P5.1 implemented:** [Project mapping CSV contract](p5-1-mapping-csv.md) defines project/optional horizon/excavation selection, inclusive field dates in an explicit time zone, a frozen effective-version snapshot, 14 related CSV tables and manifest, native sharing, photo metadata only and precision/formula handling. This is separate from the standalone measurement CSV below. **P5.2 implemented:** [Native offline XLSX](p5-2-mapping-xlsx.md) uses that same typed snapshot, adding a Russian summary, 14 relational sheets, styles, filters and exact-text precision protection. Original-photo packages remain planned.

@@ -131,9 +131,10 @@ struct MappingView: View {
                     }
                         .disabled(w.context.horizonID == nil).accessibilityIdentifier("selectHorizonPlan")
                 } header: { Text("Координаты") }
+                if let projectID = w.context.projectID { RockLithologyField(rock: draft(\.rock, fallback: nil), projectID: projectID) }
                 MappingJointSetsSection { geologyEditor = $0 }
                 MappingRatingsForm(q: draft(\.bartonQ, fallback: BartonQInput()),
-                                   rmr: draft(\.rmr89, fallback: RMR89Input()), focus: $focused)
+                                   rmr: draft(\.rmr89, fallback: RMR89Input()), gsi: draft(\.gsi, fallback: nil), focus: $focused)
                 Section("Примечания") {
                     TextField("Полевые примечания", text: draft(\.notes, fallback: ""), axis: .vertical)
                         .lineLimit(3...8).focused($focused).accessibilityIdentifier("mappingNotes")

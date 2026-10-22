@@ -1,5 +1,7 @@
 # Future geomechanical domain schema
 
+Current enterprise geotechnical extension: see [versioned SD, ROCK, field strength, JCond76, categorical GSI and three-sheet workbook](enterprise-geotechnical.md). Optional fields extend the shared schema-8 graph; no migration/reset or original-measurement journal change.
+
 ## Third iPhone review contract
 
 [Third iPhone review](third-iphone-review.md) supersedes earlier capture/plan presentation: immutable editor and coordinate-selection requests, decimal canonical pickets with exact historical validation, owner-defined Q presentation, and qualified cross-revision overlays. Schema stays 8; the optional plan `frameConfirmation` records a predecessor UUID/time at import, with units/frame/axes, relationship, cycle and transitive-conflict validation. Missing declarations imply no confirmation. Original plans/coordinates/evidence and correction history remain immutable; no migration, reset or coordinate transformation is introduced.

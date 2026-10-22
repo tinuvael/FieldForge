@@ -112,7 +112,7 @@ struct MappingCorrectionDraft: Equatable {
         let geologyUnchanged = fields.startPicket == initial.startPicket && fields.endPicket == initial.endPicket &&
             fields.jointSets == initial.jointSets && fields.tectonicStructures == initial.tectonicStructures &&
             fields.observationPosition == initial.observationPosition
-        let ratings = q == nil && rmr == nil ? nil : MappingRatings(bartonQ: q, rmr89: rmr)
+        let ratings = q == nil && rmr == nil && fields.gsi == nil ? nil : MappingRatings(bartonQ: q, rmr89: rmr, gsi: fields.gsi)
         // Preserve exact historic offset (including historic zone rules) unless field date/zone changes.
         let unchangedTime = date == old.observedAt && fields.timeZoneID == old.observedTimeZoneID
         let origin = fields.chainageOriginAndDirection.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -126,8 +126,8 @@ struct MappingCorrectionDraft: Equatable {
             coordinates: fields == initial ? old.coordinates : try correctedCoordinates(),
             measurementIDs: old.measurementIDs, notes: fields.notes,
             geology: geologyUnchanged ? old.geology : geology,
-            ratings: fields.bartonQ == initial.bartonQ && fields.rmr89 == initial.rmr89 ? old.ratings : ratings,
-            picketConvention: old.picketConvention)
+            ratings: fields.bartonQ == initial.bartonQ && fields.rmr89 == initial.rmr89 && fields.gsi == initial.gsi ? old.ratings : ratings,
+            picketConvention: old.picketConvention, rock: fields.rock)
     }
     private func correctedCoordinates() throws -> MappingCoordinates? {
         // A no-op edit must not invent provenance on legacy or unknown locations.

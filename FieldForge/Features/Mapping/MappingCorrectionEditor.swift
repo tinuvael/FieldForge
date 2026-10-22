@@ -63,9 +63,10 @@ struct MappingCorrectionEditor: View {
                         NavigationLink { MeasurementDetailView(record: reading) } label: { MeasurementSummary(reading: reading) }
                     }
                 }
+                RockLithologyField(rock: $draft.fields.rock, projectID: draft.baseline.projectID)
                 MappingGeologyForm(sets: $draft.fields.jointSets, structures: $draft.fields.tectonicStructures,
-                    measurements: draft.initial.measurements, addSet: { draft.fields.addJointSet() })
-                MappingRatingsForm(q: $draft.fields.bartonQ, rmr: $draft.fields.rmr89, focus: $focused)
+                    measurements: draft.initial.measurements, addSet: { draft.fields.addJointSet() }, spacingRQD: draft.fields.spacingRQD)
+                MappingRatingsForm(q: $draft.fields.bartonQ, rmr: $draft.fields.rmr89, gsi: $draft.fields.gsi, focus: $focused)
                 Section("Примечания") {
                     TextField("Примечания", text: $draft.fields.notes, axis: .vertical).focused($focused).accessibilityIdentifier("correctionNotes")
                 }

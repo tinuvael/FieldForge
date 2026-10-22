@@ -33,6 +33,7 @@ enum MappingObservationDifference {
             changed("\(label) · ориентация и север", old?.representative, new?.representative)
             changed("\(label) · ссылки на исходные замеры", old?.measurementIDs, new?.measurementIDs)
             changed("\(label) · расстояние", old?.spacingMeters, new?.spacingMeters)
+            changed("\(label) · источник SD", old?.spacingProvenance, new?.spacingProvenance)
             changed("\(label) · протяжённость", old?.persistenceMeters, new?.persistenceMeters)
             changed("\(label) · раскрытие", old?.apertureMillimeters, new?.apertureMillimeters)
             changed("\(label) · шероховатость", old?.roughness, new?.roughness)
@@ -51,7 +52,9 @@ enum MappingObservationDifference {
         }
         if newFaults.contains(where: { new in !oldFaults.contains { $0.id == new.id } }) { result.append("Добавлены тектонические структуры") }
         changed("Barton Q · исходные данные и оценка NGI 2025", before.ratings?.bartonQ, after.ratings?.bartonQ)
-        changed("RMR89 · исходные данные (без расчёта)", before.ratings?.rmr89, after.ratings?.rmr89)
+        changed("RMR89 · исходные данные и базовая оценка", before.ratings?.rmr89, after.ratings?.rmr89)
+        changed("GSI · геологическая оценка", before.ratings?.gsi, after.ratings?.gsi)
+        changed("ROCK · код и название", before.rock, after.rock)
         changed("Примечания", before.notes, after.notes)
         return result.isEmpty ? ["Полевые значения не изменены"] : result
     }

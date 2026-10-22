@@ -98,7 +98,9 @@ extension RMR89Input {
         var missing: [String] = [], components: [String: Int] = [:]
         if strengthTest == nil { missing.append("Метод испытания прочности") }
         for parameter in RMR89Parameter.allCases where parameter != .overallCondition {
-            if let choice = selected[parameter] { components[parameter.rawValue] = choice.rating }
+            if parameter == .strength, strengthTest == .fieldEstimate, let fieldStrength {
+                components[parameter.rawValue] = fieldStrength.rating
+            } else if let choice = selected[parameter] { components[parameter.rawValue] = choice.rating }
             else { missing.append(parameter.title) }
         }
         // Table E footnote: gouge can mask roughness; use A.4 directly, never

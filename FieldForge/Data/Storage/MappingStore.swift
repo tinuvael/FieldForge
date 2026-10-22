@@ -34,7 +34,9 @@ final class FileMappingStore: MappingStore {
         // Original observations are append-only; names/metadata can be managed separately.
         if let loadedBytes {
             let previous = try JSONDecoder().decode(MappingJournal.self, from: loadedBytes)
-            guard previous.photos.allSatisfy({ journal.photos.contains($0) }),
+            guard previous.projects.allSatisfy({ old in
+                      (old.lithologies ?? []).allSatisfy { rock in journal.projects.first { $0.id == old.id }?.lithologies?.contains(rock) == true }
+                  }), previous.photos.allSatisfy({ journal.photos.contains($0) }),
                   previous.photoAttachments.allSatisfy({ journal.photoAttachments.contains($0) }),
                   previous.photoRevisions.allSatisfy({ journal.photoRevisions.contains($0) }),
                   previous.revisions.allSatisfy({ journal.revisions.contains($0) }),
@@ -140,6 +142,17 @@ struct MappingWorkflow {
         guard let i = next.projects.firstIndex(where: { $0.id == id }) else { throw StorageError.invalidRecord }
         next.projects[i].name = try validName(name); try commit(next)
     }
+    mutating func addLithology(_ rock: RockLithology, projectID: UUID) throws {
+        try rock.validate()
+        var next = journal
+        guard let index = next.projects.firstIndex(where: { $0.id == projectID }),
+              !(next.projects[index].lithologies ?? []).contains(where: { $0.code == rock.code }) else {
+            throw MappingError.invalid("Такой код ROCK уже существует в проекте.")
+        }
+        var dictionary = next.projects[index].lithologies ?? []
+        dictionary.append(rock); next.projects[index].lithologies = dictionary
+        try commit(next)
+    }
     mutating func updateHorizon(id: UUID, elevation: String, datum: String) throws {
         var next = journal
         guard let i = next.horizons.firstIndex(where: { $0.id == id }) else { throw StorageError.invalidRecord }
@@ -201,7 +214,7 @@ struct MappingWorkflow {
             observedAt: observed, observedTimeZoneID: zone.identifier,
             observedUTCOffsetSeconds: zone.secondsFromGMT(for: observed), createdAt: now, updatedAt: now,
             coordinates: try draft.coordinates(), measurementIDs: draft.measurements.map(\.id), notes: draft.notes,
-            geology: try draft.geology(now: now), ratings: try draft.ratings(now: now), picketConvention: draft.picketConvention)
+            geology: try draft.geology(now: now), ratings: try draft.ratings(now: now), picketConvention: draft.picketConvention, rock: draft.rock)
     }
     @discardableResult mutating func save(now: Date = Date(), preparedPhotos: [PhotoImportOperation] = []) throws -> MappingObservation {
         guard draft.photoSessions.isEmpty else { throw MappingError.invalid("Дождитесь завершения выбора и получения всех фотографий.") }
@@ -268,7 +281,8 @@ extension MappingWorkflow {
         try validateOwner(request)
         var next = draft
         for reading in originals { try next.addMeasurement(reading) }
-        if let updated {
+        if var updated {
+            updated.updateSpacingEstimate(next.spacingRQD)
             guard updated.id == request.initial.id, updated.identifier == request.initial.identifier else { throw StorageError.invalidRecord }
             try updated.record(now: Date()).validate(pointMeasurementIDs: next.measurements.map(\.id))
             next.jointSets.removeAll { $0.id == updated.id }

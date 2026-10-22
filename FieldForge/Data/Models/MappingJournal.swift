@@ -3,6 +3,7 @@ import Foundation
 struct MappingProject: Codable, Equatable, Identifiable {
     let id: UUID
     var name: String
+    var lithologies: [RockLithology]? = nil
 }
 
 struct MappingHorizon: Codable, Equatable, Identifiable {
@@ -107,6 +108,7 @@ struct MappingObservation: Codable, Equatable, Identifiable {
     let geology: MappingGeology?
     var ratings: MappingRatings? = nil
     var picketConvention: PicketConvention? = nil
+    var rock: RockLithology? = nil
 }
 
 struct MappingJournal: Codable, Equatable {
@@ -178,8 +180,14 @@ struct MappingJournal: Codable, Equatable {
         guard unique(measurements.map(\.id)), unique(linkedIDs),
               Set(linkedIDs) == Set(measurements.map(\.id)),
               measurements.allSatisfy(\.isSavable) else { throw StorageError.invalidRecord }
+        for project in projects {
+            let codes = project.lithologies ?? []
+            guard Set(codes.map(\.code)).count == codes.count else { throw StorageError.invalidRecord }
+            for code in codes { try code.validate() }
+        }
         for o in observations {
             try o.ratings?.validate()
+            try o.rock?.validate()
             try o.geology?.validate(pointMeasurementIDs: o.measurementIDs)
             if includingRevisions, o.geology?.jointSets.contains(where: { $0.revision != 1 }) == true { throw StorageError.invalidRecord }
             guard validContext(MappingContext(projectID: o.projectID, horizonID: o.horizonID, excavationID: o.excavationID)),
@@ -350,8 +358,14 @@ struct MappingDraft: Equatable {
         measurements.removeAll { $0.id == id }
         for index in jointSets.indices { jointSets[index].measurementIDs.removeAll { $0 == id } }
     }
-    var bartonQ = BartonQInput()
-    var rmr89 = RMR89Input()
+    var bartonQ = BartonQInput() { didSet {
+        if bartonQ.rqd != oldValue.rqd || bartonQ.rqdSource != oldValue.rqdSource || bartonQ.rqdEvidence != oldValue.rqdEvidence { updateSpacingEstimates() }
+    } }
+    var rmr89 = RMR89Input() { didSet {
+        if rmr89.rqd != oldValue.rqd || rmr89.rqdEvidence != oldValue.rqdEvidence { updateSpacingEstimates() }
+    } }
+    var gsi: GSIAssessment?
+    var rock: RockLithology?
     var jointSets: [JointSetDraft] = []
     var tectonicStructures: [TectonicStructureDraft] = []
     var startPicket = "", endPicket = ""
@@ -399,7 +413,7 @@ struct MappingDraft: Equatable {
     var hasChanges: Bool {
         !photos.isEmpty || !photoSessions.isEmpty || ![picket, chainageOriginAndDirection, x, y, crs, axes, coordinateProvenance, notes].allSatisfy(\.isEmpty) ||
             observedAtOverride != nil || zOrigin == .manualOverride || !measurements.isEmpty ||
-            bartonQ.hasChanges || rmr89.hasChanges || !jointSets.isEmpty || !tectonicStructures.isEmpty || !startPicket.isEmpty || !endPicket.isEmpty || observationPosition != nil
+            rock != nil || gsi != nil || bartonQ.hasChanges || rmr89.hasChanges || !jointSets.isEmpty || !tectonicStructures.isEmpty || !startPicket.isEmpty || !endPicket.isEmpty || observationPosition != nil
     }
     func coordinates() throws -> MappingCoordinates? {
         func number(_ text: String) throws -> Double? {
@@ -432,6 +446,9 @@ extension MappingDraft {
             crs = c.crs; axes = c.axes; coordinateProvenance = c.provenance
             zOrigin = c.zOrigin; zHorizonID = c.zHorizonID; zHorizonElevation = c.zHorizonElevation; zDatum = c.zDatum
         }
+        bartonQ = observation.ratings?.bartonQ?.input ?? BartonQInput()
+        rmr89 = observation.ratings?.rmr89?.input ?? RMR89Input()
+        gsi = observation.ratings?.gsi; rock = observation.rock
         if let g = observation.geology {
             startPicketConvention = g.start?.convention ?? .legacyMeters
             endPicketConvention = g.end?.convention ?? .legacyMeters
@@ -439,8 +456,6 @@ extension MappingDraft {
             jointSets = g.jointSets.map(JointSetDraft.init)
             tectonicStructures = g.tectonicStructures.map(TectonicStructureDraft.init)
         }
-        bartonQ = observation.ratings?.bartonQ?.input ?? BartonQInput()
-        rmr89 = observation.ratings?.rmr89?.input ?? RMR89Input()
     }
 }
 

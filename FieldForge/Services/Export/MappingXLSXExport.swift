@@ -1,6 +1,7 @@
 import Foundation
 
 enum MappingExportFormat: String, CaseIterable {
+    case enterpriseGeotechnical = "Геотехническое картирование — регламент"
     case csv = "CSV", xlsx = "Excel (.xlsx)", photoPackage = "Фотографии + Excel (.zip)"
 }
 
@@ -14,14 +15,21 @@ enum MappingXLSXExport {
 
     static func write(_ snapshot: MappingCSVExport, to url: URL,
                       photoPackageStatus: String? = nil,
-                      showTechnicalSheets: Bool = false,
+                      showTechnicalSheets: Bool = false, enterprise: Bool = false,
                       append: @escaping (Data, FileHandle) throws -> Void = { try $1.write(contentsOf: $0) }) throws {
         try Task.checkCancellation()
         let summary = try summary(snapshot, photoPackageStatus: photoPackageStatus)
         let fieldSheets = snapshot.fieldTables.filter { $0.name != "field_links" }
-        let sheets = fieldSheets + [summary] + snapshot.tables + snapshot.fieldTables.filter { $0.name == "field_links" }
-        let summaryIndex = fieldSheets.count
-        let technicalVisible = showTechnicalSheets || photoPackageStatus != nil
+        let sheets = enterprise ? snapshot.enterpriseTables : fieldSheets + [summary] + snapshot.tables + snapshot.fieldTables.filter { $0.name == "field_links" }
+        if enterprise { guard sheets.map(\.name) == ["Геотех картирование", "Справочники", "Исходные данные"] else { throw StorageError.invalidRecord } }
+        let summaryIndex = enterprise ? -1 : fieldSheets.count
+        let numericSheetCount = enterprise ? 1 : fieldSheets.count
+        let technicalVisible = enterprise || showTechnicalSheets || photoPackageStatus != nil
+        func width(_ sheet: Int, _ columnIndex: Int) -> Int {
+            if enterprise && sheet == 1 { return [26, 40, 100, 14, 90][columnIndex] }
+            if enterprise && sheet == 2 { return [32, 39, 39, 39, 12, 30, 22, 28, 18, 27, 60, 18, 24, 100][columnIndex] }
+            return sheet == summaryIndex ? (columnIndex == 0 ? 37 : 105) : columnWidth(sheets[sheet].columns[columnIndex])
+        }
         let archive = try XLSXArchive(url: url, append: append)
         defer { archive.close() }
         func part(_ name: String, _ xml: String) throws { try archive.part(name) { try $0(declaration + xml) } }
@@ -76,8 +84,8 @@ enum MappingXLSXExport {
                 <sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/><selection pane="bottomLeft" activeCell="A2" sqref="A2"/></sheetView></sheetViews>
                 <sheetFormatPr defaultRowHeight="30"/><cols>
                 """)
-                for (i, name) in table.columns.enumerated() {
-                    let width = index == summaryIndex ? (i == 0 ? 37 : 105) : columnWidth(name)
+                for i in table.columns.indices {
+                    let width = width(index, i)
                     try emit("<col min=\"\(i + 1)\" max=\"\(i + 1)\" width=\"\(width)\" customWidth=\"1\"/>")
                 }
                 try emit("</cols><sheetData><row r=\"1\" ht=\"36\" customHeight=\"1\">")
@@ -90,10 +98,10 @@ enum MappingXLSXExport {
                     guard row.count == table.columns.count else { throw StorageError.invalidRecord }
                     let r = i + 2
                     let height: Int
-                    if index < summaryIndex {
+                    if enterprise || index < numericSheetCount {
                         let lines = row.enumerated().map { column, value -> Int in
                             guard case .text(let text) = value else { return 1 }
-                            let width = max(1, columnWidth(table.columns[column]) - 3)
+                            let width = max(1, width(index, column) - 3)
                             return text.split(separator: "\n", omittingEmptySubsequences: false).map { max(1, Int(ceil(Double($0.count) / Double(width)))) }.reduce(0, +)
                         }.max() ?? 1
                         height = min(300, max(30, lines * 15 + 6))
@@ -101,7 +109,7 @@ enum MappingXLSXExport {
                     try emit("<row r=\"\(r)\" ht=\"\(height)\" customHeight=\"1\">")
                     for (j, value) in row.enumerated() {
                         let reference = column(j + 1) + String(r)
-                        if index < summaryIndex {
+                        if index < numericSheetCount {
                             // Civil dates in the selected zone; exact UTC remains on raw sheets.
                             if case .timestamp(let date) = value {
                                 let zone = TimeZone(identifier: snapshot.selection.timeZoneID) ?? .gmt

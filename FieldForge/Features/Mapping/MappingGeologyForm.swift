@@ -50,6 +50,7 @@ struct MappingGeologyForm: View {
     @Binding var structures: [TectonicStructureDraft]
     let measurements: [Measurement]
     let addSet: () -> Void
+    var spacingRQD = SpacingRQD(q: BartonQInput(), rmr: RMR89Input())
     var body: some View {
         Section {
             DisclosureGroup("Системы трещин: \(sets.count)/5") {
@@ -57,7 +58,7 @@ struct MappingGeologyForm: View {
                     .font(.caption).foregroundStyle(.secondary)
                 ForEach($sets) { $set in
                     HStack {
-                        NavigationLink { JointSetEditor(draft: $set, measurements: measurements) } label: {
+                        NavigationLink { JointSetEditor(draft: $set, measurements: measurements, spacingRQD: spacingRQD) } label: {
                             VStack(alignment: .leading) {
                                 Text("\(set.identifier.rawValue) · интерпретация")
                                 GeologyOrientationSummary(input: set.representative)
@@ -101,6 +102,7 @@ struct MappingTectonicsForm: View {
 private struct JointSetEditor: View {
     @Binding var draft: JointSetDraft
     let measurements: [Measurement]
+    var spacingRQD = SpacingRQD(q: BartonQInput(), rmr: RMR89Input())
     @FocusState private var focused: Bool
     var body: some View {
         Form {
@@ -121,7 +123,7 @@ private struct JointSetEditor: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Полевые характеристики · необязательно") {
-                GeologyField(title: "Расстояние между трещинами, м", text: $draft.spacing, identifier: "jointSpacing", nonnegative: true, focus: $focused)
+                JointSpacingField(draft: $draft, rqd: spacingRQD)
                 GeologyField(title: "Протяжённость, м", text: $draft.persistence, identifier: "jointPersistence", nonnegative: true, focus: $focused)
                 GeologyField(title: "Раскрытие, мм", text: $draft.aperture, identifier: "jointAperture", nonnegative: true, focus: $focused)
                 TextField("Шероховатость · описание, без рейтинга", text: $draft.roughness, axis: .vertical).focused($focused).accessibilityIdentifier("jointRoughness")
