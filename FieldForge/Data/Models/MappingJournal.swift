@@ -167,28 +167,29 @@ struct MappingJournal: Codable, Equatable {
 
     func validateGraph(includingRevisions: Bool) throws {
         guard schemaVersion == Self.currentSchemaVersion else { throw MappingDatabaseError.incompatibleVersion(schemaVersion) }
+        let context = MappingValidationContext(self)
         func unique(_ ids: [UUID]) -> Bool { Set(ids).count == ids.count }
         guard unique(projects.map(\.id)), unique(horizons.map(\.id)),
               unique(excavations.map(\.id)), unique(plans.map(\.id)), unique(observations.map(\.id)),
               projects.allSatisfy({ !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
-              horizons.allSatisfy({ h in projects.contains { $0.id == h.projectID } && !h.name.isEmpty &&
+              horizons.allSatisfy({ h in context.projects.contains(h.projectID) && !h.name.isEmpty &&
                   (h.elevationMeters?.isFinite ?? true) && !h.elevationDatum.isEmpty }),
-              excavations.allSatisfy({ e in projects.contains { $0.id == e.projectID } && !e.name.isEmpty &&
-                  !e.horizonIDs.isEmpty && e.horizonIDs.allSatisfy { id in horizons.contains { $0.id == id && $0.projectID == e.projectID } } }),
+              excavations.allSatisfy({ e in context.projects.contains(e.projectID) && !e.name.isEmpty &&
+                  !e.horizonIDs.isEmpty && e.horizonIDs.allSatisfy { id in context.horizons[id]?.projectID == e.projectID } }),
               unique(plans.filter { $0.file != nil }.map(\.attachmentID)),
-              plans.allSatisfy({ p in horizons.contains { $0.id == p.horizonID } && !p.version.isEmpty &&
+              plans.allSatisfy({ p in context.horizons[p.horizonID] != nil && !p.version.isEmpty &&
                   (p.file.map { f in !f.originalFilename.isEmpty && !f.crs.isEmpty && !f.axes.isEmpty &&
                       f.sha256.range(of: #"^[a-f0-9]{64}$"#, options: .regularExpression) != nil &&
                       (1...10_000_000).contains(f.byteCount) && f.importedAt.timeIntervalSinceReferenceDate.isFinite &&
                       (f.unitDeclaration == "userConfirmedAtImport" ||
                        (f.unitDeclaration == "dxfINSUNITS" && PlanUnits.declared(by: f.insertionUnits) == f.units)) } ?? true) }),
-              validContext(selection) else { throw StorageError.invalidRecord }
+              context.validContext(selection) else { throw StorageError.invalidRecord }
         for plan in plans {
             try plan.validateManagement()
             if plan.isDeleted, !planDependencies(plan.id).isEmpty { throw StorageError.invalidRecord }
             for event in plan.managementHistory ?? [] {
-                guard let from = horizons.first(where: { $0.id == event.previousHorizonID }),
-                      horizons.contains(where: { $0.id == event.horizonID && $0.projectID == from.projectID }) else { throw StorageError.invalidRecord }
+                guard let from = context.horizons[event.previousHorizonID],
+                      context.horizons[event.horizonID]?.projectID == from.projectID else { throw StorageError.invalidRecord }
             }
         }
         try PlanCoordinateCompatibility.validate(plans)
@@ -206,44 +207,51 @@ struct MappingJournal: Codable, Equatable {
             for code in codes { try code.validate() }
         }
         for o in observations {
-            try o.ratings?.validate()
-            try o.rock?.validate()
-            try o.geology?.validate(pointMeasurementIDs: o.measurementIDs)
+            try validateObservation(o, context: context)
             if includingRevisions, o.geology?.jointSets.contains(where: { $0.revision != 1 }) == true { throw StorageError.invalidRecord }
-            guard validContext(MappingContext(projectID: o.projectID, horizonID: o.horizonID, excavationID: o.excavationID)),
-                  o.chainageMeters.isFinite, o.chainageMeters >= 0,
-                  (o.picketConvention ?? .legacyMeters).matches(o.picket, meters: o.chainageMeters),
-                  !o.chainageOriginAndDirection.isEmpty,
-                  o.observedAt.timeIntervalSinceReferenceDate.isFinite,
-                  o.createdAt.timeIntervalSinceReferenceDate.isFinite,
-                  o.updatedAt == o.createdAt,
-                  TimeZone(identifier: o.observedTimeZoneID) != nil,
-                  (-18 * 3600...18 * 3600).contains(o.observedUTCOffsetSeconds),
-                  unique(o.measurementIDs) else { throw StorageError.invalidRecord }
-            if let c = o.coordinates {
-                guard ([c.x, c.y, c.z].contains(where: { $0 != nil }) || c.zOrigin == .manualOverride),
-                      [c.x, c.y, c.z].allSatisfy({ $0?.isFinite ?? true }),
-                      !c.crs.isEmpty, !c.axes.isEmpty, ["m", "mm", "drawing"].contains(c.units), ["manual", "plan", "manualInPlan"].contains(c.source), !c.provenance.isEmpty else {
-                    throw StorageError.invalidRecord
-                }
-                if let planID = c.planID {
-                    guard ["plan", "manualInPlan"].contains(c.source), let plan = plans.first(where: { $0.id == planID && !$0.isDeleted }),
-                          plan.horizonID == o.horizonID, let file = plan.file, (c.source != "plan" || (c.x != nil && c.y != nil)),
-                          c.units == file.units.coordinateUnits, c.crs == file.crs, c.axes == file.axes else { throw StorageError.invalidRecord }
-                } else if c.source != "manual" || c.units != "m" { throw StorageError.invalidRecord }
-                if c.zOrigin == .horizonDefault {
-                    guard c.zHorizonID == o.horizonID, let elevation = c.zHorizonElevation,
-                          elevation.isFinite, c.z == elevation, c.zDatum?.isEmpty == false else { throw StorageError.invalidRecord }
-                } else if c.zHorizonID != nil || c.zHorizonElevation != nil || c.zDatum != nil { throw StorageError.invalidRecord }
-                if c.zOrigin == .planGeometry {
-                    guard let elevation = c.zPlanGeometry, c.z == elevation.elevationMeters,
-                          c.planID == elevation.planID, let plan = plans.first(where: { $0.id == elevation.planID }) else { throw StorageError.invalidRecord }
-                    try elevation.validate(plan: plan)
-                    if c.source == "plan", (c.x != elevation.selectedXY.x || c.y != elevation.selectedXY.y) { throw StorageError.invalidRecord }
-                } else if c.zPlanGeometry != nil { throw StorageError.invalidRecord }
-            }
         }
-        if includingRevisions { try validateRevisions(); try validatePhotos() }
+        if includingRevisions { try validateRevisions(context: context); try validatePhotos() }
+    }
+
+    /// The same complete snapshot checks apply to originals and every historical revision.
+    /// Global uniqueness/evidence membership are checked once by validateGraph; revision
+    /// identity/ownership checks guarantee that replacing a point cannot change those links.
+    func validateObservation(_ o: MappingObservation, context: MappingValidationContext) throws {
+        try o.ratings?.validate()
+        try o.rock?.validate()
+        try o.geology?.validate(pointMeasurementIDs: o.measurementIDs)
+        guard context.validContext(MappingContext(projectID: o.projectID, horizonID: o.horizonID, excavationID: o.excavationID)),
+              o.chainageMeters.isFinite, o.chainageMeters >= 0,
+              (o.picketConvention ?? .legacyMeters).matches(o.picket, meters: o.chainageMeters),
+              !o.chainageOriginAndDirection.isEmpty,
+              o.observedAt.timeIntervalSinceReferenceDate.isFinite,
+              o.createdAt.timeIntervalSinceReferenceDate.isFinite,
+              o.updatedAt == o.createdAt,
+              TimeZone(identifier: o.observedTimeZoneID) != nil,
+              (-18 * 3600...18 * 3600).contains(o.observedUTCOffsetSeconds),
+              Set(o.measurementIDs).count == o.measurementIDs.count else { throw StorageError.invalidRecord }
+        if let c = o.coordinates {
+            guard ([c.x, c.y, c.z].contains(where: { $0 != nil }) || c.zOrigin == .manualOverride),
+                  [c.x, c.y, c.z].allSatisfy({ $0?.isFinite ?? true }),
+                  !c.crs.isEmpty, !c.axes.isEmpty, ["m", "mm", "drawing"].contains(c.units), ["manual", "plan", "manualInPlan"].contains(c.source), !c.provenance.isEmpty else {
+                throw StorageError.invalidRecord
+            }
+            if let planID = c.planID {
+                guard ["plan", "manualInPlan"].contains(c.source), let plan = context.plans[planID], !plan.isDeleted,
+                      plan.horizonID == o.horizonID, let file = plan.file, (c.source != "plan" || (c.x != nil && c.y != nil)),
+                      c.units == file.units.coordinateUnits, c.crs == file.crs, c.axes == file.axes else { throw StorageError.invalidRecord }
+            } else if c.source != "manual" || c.units != "m" { throw StorageError.invalidRecord }
+            if c.zOrigin == .horizonDefault {
+                guard c.zHorizonID == o.horizonID, let elevation = c.zHorizonElevation,
+                      elevation.isFinite, c.z == elevation, c.zDatum?.isEmpty == false else { throw StorageError.invalidRecord }
+            } else if c.zHorizonID != nil || c.zHorizonElevation != nil || c.zDatum != nil { throw StorageError.invalidRecord }
+            if c.zOrigin == .planGeometry {
+                guard let elevation = c.zPlanGeometry, c.z == elevation.elevationMeters,
+                      c.planID == elevation.planID, let plan = context.plans[elevation.planID] else { throw StorageError.invalidRecord }
+                try elevation.validate(plan: plan)
+                if c.source == "plan", (c.x != elevation.selectedXY.x || c.y != elevation.selectedXY.y) { throw StorageError.invalidRecord }
+            } else if c.zPlanGeometry != nil { throw StorageError.invalidRecord }
+        }
     }
 
     func validContext(_ c: MappingContext) -> Bool {
@@ -253,6 +261,31 @@ struct MappingJournal: Codable, Equatable {
         guard horizons.contains(where: { $0.id == h && $0.projectID == p }) else { return false }
         guard let e = c.excavationID else { return true }
         return excavations.contains { $0.id == e && $0.projectID == p && $0.horizonIDs.contains(h) }
+    }
+}
+
+/// Transient indexes for one validation pass; never cached or encoded. First-value
+/// construction is deliberate: malformed duplicate IDs must throw, never trap.
+struct MappingValidationContext {
+    let projects: Set<UUID>
+    let horizons: [UUID: MappingHorizon]
+    let excavations: [UUID: MappingExcavation]
+    let plans: [UUID: MappingPlanReference]
+
+    init(_ journal: MappingJournal) {
+        projects = Set(journal.projects.map(\.id))
+        horizons = Dictionary(journal.horizons.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        excavations = Dictionary(journal.excavations.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        plans = Dictionary(journal.plans.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    func validContext(_ c: MappingContext) -> Bool {
+        guard let p = c.projectID else { return c.horizonID == nil && c.excavationID == nil }
+        guard projects.contains(p) else { return false }
+        guard let h = c.horizonID else { return c.excavationID == nil }
+        guard horizons[h]?.projectID == p else { return false }
+        guard let e = c.excavationID else { return true }
+        return excavations[e].map { $0.projectID == p && $0.horizonIDs.contains(h) } ?? false
     }
 }
 

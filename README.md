@@ -131,6 +131,10 @@ The opt-in [A2 storage baseline](docs/storage-performance-baseline.md) generates
 synthetic schema-8 journals with 100/1,000/5,000 points entirely in temporary
 storage: `FIELD_FORGE_STORAGE_BENCHMARKS=1 swift test -c release --filter MappingStorageBenchmarkTests`.
 It reports storage/validation/query timings without changing application behavior.
+[A3 validation/storage optimization](docs/storage-performance-a3.md) retains full
+schema-8 validation and exact evidence equality using transient UUID indexes.
+Add `FIELD_FORGE_STORAGE_A3=1` to the command for the limited A2-fixture comparison
+(validation, effective queries, append-only verification, new saves and revision saves).
 
 Synthetic underground survey tests generate their DXF streams in memory from a
 compact coordinate resource and verify the original manifest hashes on macOS and

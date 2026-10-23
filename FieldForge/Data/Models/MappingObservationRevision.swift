@@ -18,13 +18,21 @@ extension MappingJournal {
         revisions.filter { $0.observationID == observationID }
     }
     func effectiveObservation(id: UUID) -> MappingObservation? {
-        history(for: id).last?.snapshot ?? observations.first { $0.id == id }
+        revisions.last { $0.observationID == id }?.snapshot ?? observations.first { $0.id == id }
     }
     var effectiveObservations: [MappingObservation] {
         let latest = Dictionary(revisions.map { ($0.observationID, $0.snapshot) }, uniquingKeysWith: { _, last in last })
         return observations.map { latest[$0.id] ?? $0 }
     }
     func validateRevisions() throws {
+        // Standalone diagnostics also validate the authoritative base once. The full
+        // validator passes its existing context and does not repeat this work.
+        if !revisions.isEmpty { try validateGraph(includingRevisions: false) }
+        try validateRevisions(context: MappingValidationContext(self))
+    }
+
+    func validateRevisions(context: MappingValidationContext) throws {
+        let originals = Dictionary(observations.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         guard Set(revisions.map(\.id)).count == revisions.count else {
             throw StorageError.invalidRecord
         }
@@ -46,7 +54,7 @@ extension MappingJournal {
             }
         }
         for revision in revisions {
-            guard let original = observations.first(where: { $0.id == revision.observationID }) else { throw StorageError.invalidRecord }
+            guard let original = originals[revision.observationID] else { throw StorageError.invalidRecord }
             let previous = latest[original.id]
             let snapshot = revision.snapshot
             guard revision.version == (previous?.version ?? 1) + 1,
@@ -58,10 +66,10 @@ extension MappingJournal {
                   snapshot.horizonID == original.horizonID, snapshot.excavationID == original.excavationID,
                   snapshot.measurementIDs == original.measurementIDs,
                   snapshot.createdAt == original.createdAt, snapshot.updatedAt == original.updatedAt else { throw StorageError.invalidRecord }
-            // Reuse the same complete graph validator without making snapshots new owners.
-            var graph = self; graph.revisions = []
-            graph.observations = observations.map { $0.id == original.id ? snapshot : $0 }
-            try graph.validateGraph(includingRevisions: false)
+            // Evidence IDs and immutable context match the original. Global geological
+            // ownership above plus per-snapshot uniqueness replace the old whole-graph
+            // substitution, including UUID collisions between points and record kinds.
+            try validateObservation(snapshot, context: context)
             for set in snapshot.geology?.jointSets ?? [] {
                 if let old = latestSets[set.id] {
                     guard set == old || (old.revision < Int.max && set.revision == old.revision + 1 && set.interpretedAt == revision.correctedAt) else {

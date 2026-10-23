@@ -15,7 +15,7 @@ import Darwin
 
     /// Fixed-density profile: two originals/point; J1–J5, Q/RMR and a photo every
     /// tenth point; two corrections every twentieth point. No random IDs/dates.
-    private static func fixture(_ count: Int) throws -> MappingJournal {
+    static func fixture(_ count: Int) throws -> MappingJournal {
         var journal = MappingJournal()
         for group in 0..<4 {
             let p = id(1 + group), h = id(11 + group), e = id(21 + group)
@@ -125,6 +125,9 @@ import Darwin
         defer { try? FileManager.default.removeItem(at: root) }
         print("BASELINE environment: \(ProcessInfo.processInfo.operatingSystemVersionString); CPUs=\(ProcessInfo.processInfo.processorCount); RAM=\(ProcessInfo.processInfo.physicalMemory); schema=\(MappingJournal.currentSchemaVersion)")
         print("BASELINE,size,operation,n,median_ms,p95_ms,min_ms,max_ms")
+        // A3 reuses the exact fixtures, timing helper and three write commits, but
+        // omits unrelated diagnostics/queries/encoding/I/O microbenchmarks.
+        let limited = ProcessInfo.processInfo.environment["FIELD_FORGE_STORAGE_A3"] == "1"
         for size in [100, 1_000, 5_000] {
             let journal = try Self.fixture(size)
             XCTAssertEqual(journal, try Self.fixture(size))
@@ -133,15 +136,17 @@ import Darwin
             let url = root.appendingPathComponent("\(size).json")
             try bytes.write(to: url, options: .atomic)
             print("BASELINE fixture: N=\(size), R=\(journal.revisions.count), M=\(journal.measurements.count), photos=\(journal.photos.count), bytes=\(bytes.count)")
-            try measure(size, "read+decode", repetitions: 10, {
-                try JSONDecoder().decode(MappingJournal.self, from: Data(contentsOf: url))
-            }, check: { XCTAssertEqual($0, journal) })
-            try measure(size, "decode", repetitions: 10, {
-                try JSONDecoder().decode(MappingJournal.self, from: bytes)
-            }, check: { XCTAssertEqual($0, journal) })
-            try measure(size, "cold-store-load", repetitions: 3, {
-                try FileMappingStore(url: url).load()
-            }, check: { XCTAssertEqual($0, journal) })
+            if !limited {
+                try measure(size, "read+decode", repetitions: 10, {
+                    try JSONDecoder().decode(MappingJournal.self, from: Data(contentsOf: url))
+                }, check: { XCTAssertEqual($0, journal) })
+                try measure(size, "decode", repetitions: 10, {
+                    try JSONDecoder().decode(MappingJournal.self, from: bytes)
+                }, check: { XCTAssertEqual($0, journal) })
+                try measure(size, "cold-store-load", repetitions: 3, {
+                    try FileMappingStore(url: url).load()
+                }, check: { XCTAssertEqual($0, journal) })
+            }
             try measure(size, "validate-full", repetitions: 3, { try journal.validate() }, check: { _ in })
             try measure(size, "validate-base-graph", repetitions: 3, {
                 try journal.validateGraph(includingRevisions: false)
@@ -153,33 +158,34 @@ import Darwin
             let lastID = journal.observations.last!.id
             try measure(size, "effective-single-last", repetitions: 100, { journal.effectiveObservation(id: lastID) },
                 check: { XCTAssertEqual($0?.id, lastID) })
-            var query = MappingJournalQuery(); query.byPicket = true
-            try measure(size, "query-project-sort", repetitions: 100, { query.apply(effective, projectID: Self.id(1)) },
-                check: { XCTAssertEqual($0.count, size / 4) })
-            query.horizonID = Self.id(11); query.excavationID = Self.id(21); query.picket = "2"
-            query.startDate = Self.epoch; query.endDate = Self.epoch.addingTimeInterval(Double(size * 60))
-            var calendar = Calendar(identifier: .gregorian); calendar.timeZone = TimeZone(secondsFromGMT: 0)!
-            let expected = query.apply(effective, projectID: Self.id(1), calendar: calendar)
-            try measure(size, "effective+query-filter", repetitions: 100, {
-                query.apply(journal.effectiveObservations, projectID: Self.id(1), calendar: calendar)
-            }, check: { XCTAssertEqual($0, expected); XCTAssertFalse($0.isEmpty) })
+            if !limited {
+                var query = MappingJournalQuery(); query.byPicket = true
+                try measure(size, "query-project-sort", repetitions: 100, { query.apply(effective, projectID: Self.id(1)) },
+                    check: { XCTAssertEqual($0.count, size / 4) })
+                query.horizonID = Self.id(11); query.excavationID = Self.id(21); query.picket = "2"
+                query.startDate = Self.epoch; query.endDate = Self.epoch.addingTimeInterval(Double(size * 60))
+                var calendar = Calendar(identifier: .gregorian); calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+                let expected = query.apply(effective, projectID: Self.id(1), calendar: calendar)
+                try measure(size, "effective+query-filter", repetitions: 100, {
+                    query.apply(journal.effectiveObservations, projectID: Self.id(1), calendar: calendar)
+                }, check: { XCTAssertEqual($0, expected); XCTAssertFalse($0.isEmpty) })
+            }
             try measure(size, "append-only-membership", repetitions: 3, {
-                journal.observations.allSatisfy { journal.observations.contains($0) } &&
-                journal.measurements.allSatisfy { journal.measurements.contains($0) } &&
-                journal.revisions.allSatisfy { journal.revisions.contains($0) } &&
-                journal.photos.allSatisfy { journal.photos.contains($0) } &&
-                journal.photoAttachments.allSatisfy { journal.photoAttachments.contains($0) }
+                journal.preservesEvidence(from: journal)
             }, check: { XCTAssertTrue($0) })
-            try measure(size, "encode", repetitions: 10, { try encoder.encode(journal) },
-                check: { XCTAssertEqual($0, bytes) })
-            let diskURL = root.appendingPathComponent("\(size)-disk.json")
-            try measure(size, "atomic-json+previous", repetitions: 100, {
-                try bytes.write(to: diskURL.appendingPathExtension("previous"), options: .atomic)
-                try bytes.write(to: diskURL, options: .atomic)
-            }, check: { _ in XCTAssertEqual(try Data(contentsOf: diskURL), bytes) })
+            if !limited {
+                try measure(size, "encode", repetitions: 10, { try encoder.encode(journal) },
+                    check: { XCTAssertEqual($0, bytes) })
+                let diskURL = root.appendingPathComponent("\(size)-disk.json")
+                try measure(size, "atomic-json+previous", repetitions: 100, {
+                    try bytes.write(to: diskURL.appendingPathExtension("previous"), options: .atomic)
+                    try bytes.write(to: diskURL, options: .atomic)
+                }, check: { _ in XCTAssertEqual(try Data(contentsOf: diskURL), bytes) })
+            }
             // Each write metric starts from the same baseline; three successive commits
             // add at most three points/revisions. Initialization is outside timing.
-            for operation in ["save-no-op", "save-new", "save-revision", "switch-context"] {
+            let operations = limited ? ["save-new", "save-revision"] : ["save-no-op", "save-new", "save-revision", "switch-context"]
+            for operation in operations {
                 let writeURL = root.appendingPathComponent("\(size)-\(operation).json")
                 try bytes.write(to: writeURL, options: .atomic)
                 let store = FileMappingStore(url: writeURL)

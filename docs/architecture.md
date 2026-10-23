@@ -37,6 +37,29 @@ The [field interaction contract](field-ui-refinement.md) updates presentation wi
 **P1 implementation update:** [Mapping workflow and persistence](p1-mapping.md) describes the implemented project/horizon/multi-horizon-excavation/point graph, context/draft state machine, atomic JSON decision, immutable observations and protected legacy inbox. The Phase 2 descriptions and larger future schema below are historical/design context; they do not override P1's implemented scope.
 
 
+## A3 mapping validation and storage performance
+
+Schema 8 still uses full authoritative validation on load and every save. One
+validation pass builds transient project/horizon/excavation/plan indexes, validates
+the original graph once, then checks every historical snapshot through the same
+observation validator. Revision lookup uses an original UUID map; the existing
+chain, geological ownership and latest-interpretation maps retain ordered history
+and cross-point/cross-kind protection. Exact original context, evidence links and
+creation timestamps must match before validating a snapshot. Global measurement
+membership cannot change through a correction; geological UUID ownership plus
+local snapshot uniqueness replaces repeated global uniqueness scans.
+
+Append-only storage checks index each current evidence table by UUID and compare
+complete prior records, including original measurements, observation revisions,
+photos, attachments and photo metadata revisions. Plan/lithology retention checks,
+previous-byte decoding, encoded round-trip equality, both external-change guards,
+atomic writes and exact `.previous` handling remain in place. Indexes live only
+for their call; no cache, new persistence layer, schema or JSON field is added.
+Single effective lookup searches backward for its latest revision without
+allocating a filtered history. Bulk resolution already uses a local O(N+R) map;
+full history remains ordered in journal order. See the [A3 measurements and
+limits](storage-performance-a3.md) and [A2 baseline](storage-performance-baseline.md).
+
 ## P3.3 implemented observation revisions
 
 [Saved observation corrections](p3-3-revisions.md) extends the same JSON aggregate to schema 6 with `MappingObservationRevision` snapshots. `observations` and `measurements` remain append-only originals. Each correction has a stable observation FK, unique revision UUID, sequential version starting at 2, predecessor UUID, exact correction instant, optional manual author and required reason. `MappingCorrectionDraft` freezes the current baseline and evidence; `saveCorrection` validates and commits before publishing. `effectiveObservations` supplies one snapshot per original UUID to journal queries, details and DXF overlays. Unchanged interpretation/assessment metadata is retained; changed J sets increment their local revision and Q uses the frozen NGI 2025 implementation. Historical snapshots keep exact input/evidence/plan references. There is no project reassignment or raw evidence editing.

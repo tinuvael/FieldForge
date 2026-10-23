@@ -37,12 +37,7 @@ final class FileMappingStore: MappingStore {
             try journal.validatePlanChanges(from: previous)
             guard previous.projects.allSatisfy({ old in
                       (old.lithologies ?? []).allSatisfy { rock in journal.projects.first { $0.id == old.id }?.lithologies?.contains(rock) == true }
-                  }), previous.photos.allSatisfy({ journal.photos.contains($0) }),
-                  previous.photoAttachments.allSatisfy({ journal.photoAttachments.contains($0) }),
-                  previous.photoRevisions.allSatisfy({ journal.photoRevisions.contains($0) }),
-                  previous.revisions.allSatisfy({ journal.revisions.contains($0) }),
-                  previous.observations.allSatisfy({ old in journal.observations.contains(old) }),
-                  previous.measurements.allSatisfy({ old in journal.measurements.contains(old) }) else {
+                  }), journal.preservesEvidence(from: previous) else {
                 throw StorageError.invalidRecord
             }
         }
@@ -54,6 +49,20 @@ final class FileMappingStore: MappingStore {
         guard try bytes() == loadedBytes else { throw StorageError.changedFile }
         try data.write(to: url, options: .atomic)
         loadedBytes = data
+    }
+}
+
+extension MappingJournal {
+    /// Call after authoritative validation has rejected duplicate IDs. Compare full
+    /// values, not just membership of UUIDs; array order itself is not evidence.
+    func preservesEvidence(from previous: MappingJournal) -> Bool {
+        func retains<Record: Identifiable & Equatable>(_ old: [Record], _ current: [Record]) -> Bool where Record.ID == UUID {
+            let byID = Dictionary(current.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            return old.allSatisfy { byID[$0.id] == $0 }
+        }
+        return retains(previous.observations, observations) && retains(previous.measurements, measurements) &&
+            retains(previous.revisions, revisions) && retains(previous.photos, photos) &&
+            retains(previous.photoAttachments, photoAttachments) && retains(previous.photoRevisions, photoRevisions)
     }
 }
 
