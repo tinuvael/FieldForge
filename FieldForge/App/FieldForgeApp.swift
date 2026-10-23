@@ -1,10 +1,24 @@
 import SwiftUI
 
 @main struct FieldForgeApp: App {
-    @StateObject private var model = AppModel()
-    @StateObject private var mapping = MappingModel()
+    @StateObject private var session = ApplicationSession()
     var body: some Scene {
-        WindowGroup { RootView().environmentObject(model).environmentObject(mapping).environment(\.locale, Locale(identifier: "ru_RU")) }
+        WindowGroup {
+            Group {
+                if session.busy { ProgressView("Проверка и открытие данных…") }
+                else if let model = session.measurements, let mapping = session.mapping {
+                    RootView().id(session.generation).environmentObject(model).environmentObject(mapping)
+                } else if let failure = session.failure {
+                    ContentUnavailableView("Данные сохранены", systemImage: "externaldrive.badge.exclamationmark", description: Text(failure))
+                } else { ProgressView("Открытие данных…") }
+            }
+            .environmentObject(session)
+            .environment(\.locale, Locale(identifier: "ru_RU"))
+            .disabled(session.busy)
+            .alert("Резервное копирование", isPresented: Binding(get: { session.message != nil }, set: { if !$0 { session.message = nil } })) {
+                Button("Понятно", role: .cancel) { session.message = nil }
+            } message: { Text(session.message ?? "") }
+        }
     }
 }
 

@@ -51,7 +51,27 @@ final class FileMeasurementStore: MeasurementStore {
     private var hasLoaded = false
     private var writesBlocked = false
     private var loadedBytes: Data?
+    private var writeEpoch: UUID?
+    /// Accessed only under fileAccess, including every read and mutation below.
+    private final class Epochs: @unchecked Sendable { var values: [String: UUID] = [:] }
+    private static let epochs = Epochs()
+    static func invalidateWriters(at url: URL) {
+        fileAccess.lock(); defer { fileAccess.unlock() }
+        epochs.values[url.path] = UUID()
+    }
+    private var currentEpoch: UUID {
+        if let value = Self.epochs.values[url.path] { return value }
+        let value = UUID(); Self.epochs.values[url.path] = value; return value
+    }
     init(url: URL) { self.url = url }
+
+    /// Adopt only a fully validated load result; later saves still compare exact
+    /// bytes and the restore epoch before writing. No decoding on MainActor.
+    init(opened: OpenedMeasurements) {
+        url = opened.source.url
+        Self.fileAccess.lock(); defer { Self.fileAccess.unlock() }
+        loadedBytes = opened.source.expectedBytes; hasLoaded = true; writeEpoch = currentEpoch
+    }
 
     static func applicationStore() throws -> FileMeasurementStore {
         let directory = try FileManager.default.url(for: .applicationSupportDirectory,
@@ -61,8 +81,15 @@ final class FileMeasurementStore: MeasurementStore {
     }
 
     func load() throws -> [Measurement] {
+        try load(preservingLegacy: FileManager.default.fileExists(atPath: url.deletingLastPathComponent().appendingPathComponent(OfflineRestore.marker).path))
+    }
+    /// Restore never migrates its source bytes. A durable dataset marker retains
+    /// this read behavior across launches; ordinary saves still use deployed v2.
+    func loadRestored() throws -> [Measurement] { try load(preservingLegacy: true) }
+    private func load(preservingLegacy: Bool) throws -> [Measurement] {
         Self.fileAccess.lock(); defer { Self.fileAccess.unlock() }
         do {
+            writeEpoch = currentEpoch
             let bytes = try currentBytes()
             guard let bytes else {
                 hasLoaded = true; writesBlocked = false; loadedBytes = nil
@@ -75,6 +102,10 @@ final class FileMeasurementStore: MeasurementStore {
             case 1:
                 records = try decoder.decode(LegacyEnvelope.self, from: bytes).measurements.map(\.migrated)
                 try validate(records)
+                if preservingLegacy {
+                    loadedBytes = bytes; hasLoaded = true; writesBlocked = false
+                    return records.sorted { $0.timestamp > $1.timestamp }
+                }
                 let migratedBytes = try encoded(records)
                 // Validate a full round trip before touching either file.
                 guard try decoder.decode(Envelope.self, from: migratedBytes).measurements == records else {
@@ -108,6 +139,7 @@ final class FileMeasurementStore: MeasurementStore {
         Self.fileAccess.lock(); defer { Self.fileAccess.unlock() }
         guard !writesBlocked else { throw StorageError.writesBlocked }
         if !hasLoaded { _ = try load() }
+        guard writeEpoch == currentEpoch else { throw StorageError.writesBlocked }
         try validate(measurements)
         guard try currentBytes() == loadedBytes else { throw StorageError.changedFile }
         let data = try encoded(measurements)
@@ -117,7 +149,7 @@ final class FileMeasurementStore: MeasurementStore {
     }
     func backupSource() throws -> MeasurementBackupSource {
         Self.fileAccess.lock(); defer { Self.fileAccess.unlock() }
-        guard hasLoaded, !writesBlocked else { throw StorageError.writesBlocked }
+        guard hasLoaded, !writesBlocked, writeEpoch == currentEpoch else { throw StorageError.writesBlocked }
         return MeasurementBackupSource(url: url, expectedBytes: loadedBytes)
     }
 
@@ -148,4 +180,9 @@ final class FileMeasurementStore: MeasurementStore {
             throw StorageError.invalidRecord
         }
     }
+}
+
+struct OpenedMeasurements: Sendable {
+    let records: [Measurement]
+    let source: MeasurementBackupSource
 }

@@ -33,7 +33,7 @@ enum MeasurementMode: String, CaseIterable {
     }
     var canSaveManual: Bool { storageWritable && !backupInProgress && savedManual == nil && manualValidationMessage == nil }
 
-    init(captureOnly: Bool = false) {
+    init(captureOnly: Bool = false, opened: OpenedMeasurements? = nil, openingError: String? = nil) {
         #if targetEnvironment(simulator)
         acquisition = MeasurementAcquisition(provider: MockSensorProvider())
         #else
@@ -43,25 +43,34 @@ enum MeasurementMode: String, CaseIterable {
             acquisition.onChange = { [weak self] in self?.objectWillChange.send() }
             return
         }
+        if let openingError {
+            errorMessage = "Не удалось открыть журнал: \(openingError) Запись заблокирована для сохранности файла."
+            acquisition.onChange = { [weak self] in self?.objectWillChange.send() }
+            return
+        }
         do {
-            let fileStore = try FileMeasurementStore.applicationStore()
-            #if DEBUG && targetEnvironment(simulator)
-            let namespace = ProcessInfo.processInfo.environment["FIELD_FORGE_TEST_RUN_ID"].flatMap(UUID.init(uuidString:)).map { "-" + $0.uuidString } ?? ""
-            #else
-            let namespace = ""
-            #endif
-            #if DEBUG
-            let selectedStore = ProcessInfo.processInfo.arguments.contains("--ui-testing")
-                ? FileMeasurementStore(url: fileStore.url.deletingLastPathComponent().appendingPathComponent("ui-testing\(namespace).json"))
-                : fileStore
-            #else
-            let selectedStore = fileStore
-            #endif
-            records = try selectedStore.load()
-            store = selectedStore
-            storageWritable = true
+            let loaded = try opened ?? Self.openJournal()
+            records = loaded.records; store = FileMeasurementStore(opened: loaded); storageWritable = true
         } catch { errorMessage = "Не удалось открыть журнал: \(error.localizedDescription) Запись заблокирована для сохранности файла." }
         acquisition.onChange = { [weak self] in self?.objectWillChange.send() }
+    }
+
+    nonisolated static func openJournal() throws -> OpenedMeasurements {
+        let fileStore = try FileMeasurementStore.applicationStore()
+        #if DEBUG && targetEnvironment(simulator)
+        let namespace = ProcessInfo.processInfo.environment["FIELD_FORGE_TEST_RUN_ID"].flatMap(UUID.init(uuidString:)).map { "-" + $0.uuidString } ?? ""
+        #else
+        let namespace = ""
+        #endif
+        #if DEBUG
+        let selectedStore = ProcessInfo.processInfo.arguments.contains("--ui-testing")
+            ? FileMeasurementStore(url: fileStore.url.deletingLastPathComponent().appendingPathComponent("ui-testing\(namespace).json"))
+            : fileStore
+        #else
+        let selectedStore = fileStore
+        #endif
+        let records = try selectedStore.load()
+        return OpenedMeasurements(records: records, source: try selectedStore.backupSource())
     }
 
     func beginBackup() throws -> MeasurementBackupSource {
@@ -71,6 +80,10 @@ enum MeasurementMode: String, CaseIterable {
         return source
     }
     func endBackup() { backupInProgress = false }
+    func retireForRestore() {
+        storageWritable = false; backupInProgress = true
+        acquisition.setVisible(false); acquisition.reset()
+    }
 
     func measurementScreenVisibilityChanged(_ visible: Bool) {
         measurementScreenVisible = visible

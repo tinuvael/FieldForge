@@ -145,7 +145,7 @@ import Combine
     init(workflow: MappingWorkflow, storage: MappingStorageOwner? = nil, photoStore: ManagedPhotoStore, planStore: ManagedPlanStore? = nil, preferences: UserDefaults = .standard) {
         self.preferences = preferences
         activePlanIDs = preferences.dictionary(forKey: "FieldForge.activePlans.v1") as? [String: String] ?? [:]
-        self.storage = storage ?? MappingStorageOwner(store: workflow.persistenceStore)
+        self.storage = storage ?? MappingStorageOwner(store: workflow.persistenceStore, committed: workflow.committed)
         self.workflow = MappingWorkflow(snapshot: workflow.snapshot); self.photoStore = photoStore; self.planStore = planStore
         Task { await refreshPhotoRecovery() }
     }
@@ -177,6 +177,8 @@ import Combine
             }
         } catch { self.error = "Не удалось открыть картирование. Запись заблокирована: \(error.localizedDescription)" }
     }
+    func waitUntilOpened() async { await opening?.value }
+
     /// Volatile callbacks must propagate refusal so their editor stays open.
     func performThrowing(_ action: (inout MappingWorkflow) throws -> Void) throws {
         guard workflow != nil else { throw StorageError.writesBlocked }
