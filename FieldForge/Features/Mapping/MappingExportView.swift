@@ -129,9 +129,10 @@ struct MappingExportView: View {
             // A zone change keeps the chosen calendar labels, rather than shifting the day.
             var oldCalendar = Calendar(identifier: .gregorian)
             oldCalendar.timeZone = TimeZone(identifier: old) ?? .gmt
+            let newCalendar = calendar
             func rebase(_ date: Date) -> Date {
                 let parts = oldCalendar.dateComponents([.year, .month, .day], from: date)
-                return calendar.date(from: parts) ?? date
+                return newCalendar.date(from: parts) ?? date
             }
             firstDay = rebase(firstDay); lastDay = rebase(lastDay)
         }
@@ -144,7 +145,7 @@ struct MappingExportView: View {
             Text("Недоступных оригиналов: \(photoPreview?.unavailableCount ?? 0). Они останутся в Excel и manifest.json с UUID и причиной. Пакет будет помечен INCOMPLETE.")
         }
         .onDisappear { if !sharing { operation?.cancel() } }
-        .sheet(isPresented: $sharing, onDismiss: { files?.cleanup(); files = nil }) {
+        .sheet(isPresented: $sharing, onDismiss: { files = nil }) {
             if let files { MappingExportShareSheet(files: files) }
         }
     }
@@ -202,7 +203,7 @@ struct MappingExportView: View {
             defer { busy = false }
             do {
                 let result = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
-                if Task.isCancelled { result.cleanup(); return }
+                if Task.isCancelled { return }
                 files = result; sharing = true
             } catch is CancellationError { }
             catch let missing as PhotoPackageConfirmationRequired {

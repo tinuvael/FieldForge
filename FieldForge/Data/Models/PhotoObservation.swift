@@ -1,7 +1,7 @@
 import Foundation
 
-enum PhotoSource: String, Codable { case camera, photos, files }
-enum PhotoCategory: String, Codable, CaseIterable {
+enum PhotoSource: String, Codable, Sendable { case camera, photos, files }
+enum PhotoCategory: String, Codable, CaseIterable, Sendable {
     case roof, leftWall, rightWall, face, joint, fault, generalCondition, other
     var label: String {
         switch self {
@@ -17,14 +17,14 @@ enum PhotoCategory: String, Codable, CaseIterable {
     }
 }
 
-enum PhotoLocationBasis: String, Codable {
+enum PhotoLocationBasis: String, Codable, Sendable {
     case pointRevision
     case unknownBeforeFirstSave
 }
 
 /// Version 1 identifies the original point UUID; later versions identify the exact P3.3 revision.
 /// No copy of the point, coordinates or geological evidence is created.
-struct PhotoContext: Codable, Equatable {
+struct PhotoContext: Codable, Equatable, Sendable {
     let projectID: UUID
     let horizonID: UUID
     let excavationID: UUID
@@ -34,7 +34,7 @@ struct PhotoContext: Codable, Equatable {
     var locationBasis: PhotoLocationBasis = .pointRevision
 }
 
-struct PhotoMetadata: Codable, Equatable {
+struct PhotoMetadata: Codable, Equatable, Sendable {
     var name: String
     var number = ""
     var description = ""
@@ -44,7 +44,7 @@ struct PhotoMetadata: Codable, Equatable {
     }
 }
 
-struct PhotoObservation: Codable, Equatable, Identifiable {
+struct PhotoObservation: Codable, Equatable, Identifiable, Sendable {
     let id: UUID
     let attachmentID: UUID
     let context: PhotoContext
@@ -57,7 +57,7 @@ struct PhotoObservation: Codable, Equatable, Identifiable {
     let metadata: PhotoMetadata
 }
 
-struct PhotoMetadataRevision: Codable, Equatable, Identifiable {
+struct PhotoMetadataRevision: Codable, Equatable, Identifiable, Sendable {
     let id: UUID
     let photoID: UUID
     let previousRevisionID: UUID?
@@ -67,7 +67,7 @@ struct PhotoMetadataRevision: Codable, Equatable, Identifiable {
     let metadata: PhotoMetadata
 }
 
-struct PhotoAttachment: Codable, Equatable, Identifiable {
+struct PhotoAttachment: Codable, Equatable, Identifiable, Sendable {
     let id: UUID
     let originalFilename: String?
     let sha256: String

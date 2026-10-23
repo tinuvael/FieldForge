@@ -1,11 +1,11 @@
 import Foundation
 
-struct PlanPoint: Codable, Equatable {
+struct PlanPoint: Codable, Equatable, Sendable {
     var x: Double
     var y: Double
 }
 
-struct PlanBounds: Equatable {
+struct PlanBounds: Equatable, Sendable {
     let minX: Double, minY: Double, maxX: Double, maxY: Double
     var center: PlanPoint { PlanPoint(x: minX + (maxX - minX) / 2, y: minY + (maxY - minY) / 2) }
 }
@@ -36,17 +36,17 @@ struct PlanViewport {
 }
 
 /// Source WCS geometry is distinct from the XY display and from observation coordinates.
-struct DXFVertex: Codable, Equatable {
+struct DXFVertex: Codable, Equatable, Sendable {
     let x: Double, y: Double, z: Double
     var xy: PlanPoint { PlanPoint(x: x, y: y) }
 }
-struct DXFPolyline {
+struct DXFPolyline: Sendable {
     let vertices: [DXFVertex] // Original order/count; closure is a display edge, not an extra source vertex.
     let layer: String
     let closed: Bool
     let is3D: Bool
 }
-struct DXFLabel {
+struct DXFLabel: Sendable {
     let position: DXFVertex
     let text: String
     let height: Double
@@ -54,7 +54,7 @@ struct DXFLabel {
     let topAligned: Bool
 }
 
-struct DXFDocument {
+struct DXFDocument: Sendable {
     static let elevationExtractionVersion = "Autodesk-DXF-2018-straight-WCS-blocks/2"
     let paths: [[PlanPoint]]
     let polylines: [DXFPolyline]

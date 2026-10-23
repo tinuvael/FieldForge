@@ -1,6 +1,6 @@
 import Foundation
 
-struct ReceivedPhoto {
+struct ReceivedPhoto: Sendable {
     let data: Data
     let filename: String?
     let source: PhotoSource
@@ -12,7 +12,7 @@ struct ReceivedPhoto {
 
 /// Volatile fallback owned by the shared model, not by a dismissed picker or observation card.
 /// It cannot survive process termination unless staging/original bytes were actually written.
-struct RetainedPhotoImport {
+struct RetainedPhotoImport: Sendable {
     let operation: PhotoImportOperation
     let data: Data
 }

@@ -30,13 +30,13 @@ enum PriestHudsonSpacing {
 
 }
 
-enum JointSpacingSource: String, Codable { case estimatedFromRQD, manual, unknownLegacy
+enum JointSpacingSource: String, Codable, Sendable { case estimatedFromRQD, manual, unknownLegacy
     var title: String {
         switch self { case .estimatedFromRQD: return "Оценка по RQD"; case .manual: return "Вручную"; case .unknownLegacy: return "Прежнее значение · источник неизвестен" }
     }
 }
-enum SpacingRQDSource: String, Codable { case bartonQOriginal, rmr89Fallback }
-struct SpacingRQD: Equatable {
+enum SpacingRQDSource: String, Codable, Sendable { case bartonQOriginal, rmr89Fallback }
+struct SpacingRQD: Equatable, Sendable {
     let value: Double?
     let source: SpacingRQDSource?
     let evidence: String?
@@ -59,7 +59,7 @@ struct SpacingRQD: Equatable {
         }
     }
 }
-struct JointSpacingProvenance: Codable, Equatable {
+struct JointSpacingProvenance: Codable, Equatable, Sendable {
     let source: JointSpacingSource
     let method: String
     let originalRQD: Double?
@@ -88,7 +88,7 @@ struct JointSpacingProvenance: Codable, Equatable {
     }
 
 }
-struct JointSpacingMean: Equatable {
+struct JointSpacingMean: Equatable, Sendable {
     let value: Double?
     let count: Int
     let includesEstimates: Bool
@@ -102,7 +102,7 @@ struct JointSpacingMean: Equatable {
 }
 
 /// Numeric identifier kept as exact text (including leading zeroes), never a fabricated dictionary.
-struct RockLithology: Codable, Equatable, Identifiable {
+struct RockLithology: Codable, Equatable, Identifiable, Sendable {
     let code: String
     let name: String?
     var id: String { code }
@@ -115,7 +115,7 @@ struct RockLithology: Codable, Equatable, Identifiable {
 }
 
 /// Enterprise Appendix 6, Table 6; ISRM field grades. Intervals are estimates, not exact UCS.
-enum FieldStrengthGrade: String, Codable, CaseIterable {
+enum FieldStrengthGrade: String, Codable, CaseIterable, Sendable {
     case R0, R1, R2, R3, R4, R5, R6
     static let version = "ISRM-R0-R6/enterprise-table6-v1"
     var rating: Int { [0, 1, 2, 4, 7, 12, 15][Self.allCases.firstIndex(of: self)!] }
@@ -132,7 +132,7 @@ enum FieldStrengthGrade: String, Codable, CaseIterable {
         }
     }
 }
-struct FieldStrengthAssessment: Codable, Equatable {
+struct FieldStrengthAssessment: Codable, Equatable, Sendable {
     let grade: FieldStrengthGrade
     let rating: Int
     let method: String
@@ -142,7 +142,7 @@ struct FieldStrengthAssessment: Codable, Equatable {
 
 /// Bieniawski (1976), reproduced by Hoek, Carter & Diederichs (2013), Table 2.
 /// Independent historical score; never added to RMR89 basic.
-enum JCond76Category: String, Codable, CaseIterable {
+enum JCond76Category: String, Codable, CaseIterable, Sendable {
     case roughClosedHard, slightlyRoughHard, slightlyRoughSoft, slickensidedOrThinGouge, thickSoftGouge
     static let version = "Bieniawski-1976/JCond76-Hoek2013-table2-v1"
     var rating: Int { [25, 20, 12, 6, 0][Self.allCases.firstIndex(of: self)!] }
@@ -156,7 +156,7 @@ enum JCond76Category: String, Codable, CaseIterable {
         }
     }
 }
-struct JCond76Assessment: Codable, Equatable {
+struct JCond76Assessment: Codable, Equatable, Sendable {
     let category: JCond76Category
     let rating: Int
     let method: String

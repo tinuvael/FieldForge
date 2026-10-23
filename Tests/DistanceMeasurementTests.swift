@@ -6,6 +6,27 @@ import XCTest
 #endif
 
 final class DistanceMeasurementTests: XCTestCase {
+    func testCallbackLifetimeRejectsEndedAndPreviousSessionsButAllowsInterruptionRecovery() {
+        let oldSession = NSObject(), currentSession = NSObject()
+        let old = ObjectIdentifier(oldSession), current = ObjectIdentifier(currentSession)
+        var callbacks = DistanceCallbackLifetime()
+        callbacks.start(old)
+        XCTAssertTrue(callbacks.interrupt(old))
+        callbacks.pause() // Controller pauses while retaining this interruption's recovery.
+        XCTAssertFalse(callbacks.accepts(old))
+        XCTAssertTrue(callbacks.endInterruption(old))
+        XCTAssertFalse(callbacks.endInterruption(old))
+        callbacks.start(current)
+        XCTAssertFalse(callbacks.accepts(old))
+        XCTAssertFalse(callbacks.interrupt(old))
+        XCTAssertFalse(callbacks.endInterruption(old))
+        XCTAssertTrue(callbacks.accepts(current))
+        XCTAssertTrue(callbacks.interrupt(current))
+        callbacks.invalidate() // Background, dismissal, retake or failure cancels recovery.
+        XCTAssertFalse(callbacks.endInterruption(current))
+        XCTAssertFalse(callbacks.accepts(current))
+    }
+
     func testIndependentSpatialReferenceDistancesAndPrecision() throws {
         // Axis length; 3-4-12 right triangle; translated/negative endpoints.
         for (a, b, expected) in [

@@ -6,9 +6,10 @@
 has one `MappingStorageOwner`, backed by a private FIFO DispatchQueue. A queue block
 never suspends: an actor alone would not provide that guarantee across `await`.
 `@Sendable` closures explicitly cross the execution boundary; the owner's unchecked
-Sendable conformance relies on queue confinement of its committed snapshot. The
-photo store's unchecked conformance covers its immutable root and queue-confined
-mutations; its test-only failure hook is configured while operations are idle.
+Sendable conformance relies on queue confinement of its committed snapshot and
+working store. [A5](swift6-concurrency-a5.md) replaces workflow/store transfers with
+value snapshots and the photo store's unchecked conformance with compiler-checked
+Sendable plus a synchronized test hook.
 
 On admission, the model assigns an operation UUID, freezes its complete workflow
 input and publishes `saving(id)`. Durable commands and volatile draft edits are

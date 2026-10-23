@@ -3,7 +3,7 @@ import CryptoKit
 import UniformTypeIdentifiers
 
 /// Results describe received managed originals, not a claim about a camera/library master.
-struct PhotoOriginalCheck: Codable {
+struct PhotoOriginalCheck: Codable, Sendable {
     let status: String
     let actualByteCount: Int?
     let actualSHA256: String?
@@ -73,10 +73,10 @@ struct PhotoPackageConfirmationRequired: Error {
 /// Selection is exclusively inherited from the existing typed mapping snapshot.
 /// Originals are rechecked into private staging before entering the ZIP. Only one
 /// original is staged at a time; source changes can never corrupt an included entry.
-struct PhotoPackageExport {
+struct PhotoPackageExport: Sendable {
     static let version = "FieldForge-Photo-Export/1"
     static let prefix = "FieldForge-Photos/"
-    struct Item {
+    struct Item: Sendable {
         let photo: PhotoObservation
         let attachment: PhotoAttachment
         var check: PhotoOriginalCheck

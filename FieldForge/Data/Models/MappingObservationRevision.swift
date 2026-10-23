@@ -2,7 +2,7 @@ import Foundation
 
 /// Original observations remain in `observations`. Version 1 is that original;
 /// corrections are an append-only chain starting at version 2. Field time is in snapshot.
-struct MappingObservationRevision: Codable, Equatable, Identifiable {
+struct MappingObservationRevision: Codable, Equatable, Identifiable, Sendable {
     let id: UUID
     let observationID: UUID
     let version: Int
@@ -83,7 +83,7 @@ extension MappingJournal {
     }
 }
 
-struct MappingCorrectionDraft: Equatable {
+struct MappingCorrectionDraft: Equatable, Sendable {
     let baseline: MappingObservation
     let previousRevisionID: UUID?
     let initial: MappingDraft

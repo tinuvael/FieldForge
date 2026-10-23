@@ -36,6 +36,21 @@ import XCTest
         }
         return output
     }
+    func testTemporaryExportLivesUntilLastShareOwnerReleasesIt() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("A5-share-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        let url = directory.appendingPathComponent("snapshot.csv")
+        try Data("committed export".utf8).write(to: url)
+        var preparingOwner: MappingExportFiles? = MappingExportFiles(directory: directory, urls: [url])
+        do {
+            let sharingOwner = try XCTUnwrap(preparingOwner)
+            preparingOwner = nil
+            XCTAssertEqual(try Data(contentsOf: sharingOwner.urls[0]), Data("committed export".utf8))
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
+    }
+
     func testTwoProjectsTwoPeriodsAndOptionalScopes() async throws {
         let (_, initial, p) = try P33RevisionTests().seed(); var w = initial
         let day = instant("2023-11-14T12:00:00Z")

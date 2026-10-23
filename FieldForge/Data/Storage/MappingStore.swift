@@ -80,6 +80,21 @@ struct MappingWorkflow {
         self.store = store; journal = try store.load()
         draft.suggestElevation(selectedHorizon)
     }
+    /// Only these value fields cross the storage boundary; the store never does.
+    struct Snapshot: Sendable {
+        let journal: MappingJournal
+        let draft: MappingDraft
+        let pendingContext: MappingContext?
+        let suspendedDrafts: [(context: MappingContext, draft: MappingDraft)]
+    }
+    var snapshot: Snapshot {
+        Snapshot(journal: journal, draft: draft, pendingContext: pendingContext, suspendedDrafts: suspendedDrafts)
+    }
+    init(snapshot: Snapshot, store: any MappingStore = PresentationMappingStore()) {
+        journal = snapshot.journal; draft = snapshot.draft; pendingContext = snapshot.pendingContext
+        suspendedDrafts = snapshot.suspendedDrafts; self.store = store
+    }
+    // Used only when handing an isolated test workflow to its application owner.
     var persistenceStore: any MappingStore { store }
     mutating func prepareTransaction(journal: MappingJournal, store: any MappingStore) {
         self.journal = journal; self.store = store
@@ -316,4 +331,10 @@ extension MappingWorkflow {
         _ = try next.geology(now: Date())
         draft = next
     }
+}
+
+/// Published workflows support volatile edits only. Durable commands must use the owner.
+struct PresentationMappingStore: MappingStore {
+    func load() throws -> MappingJournal { throw StorageError.writesBlocked }
+    func save(_ journal: MappingJournal) throws { throw StorageError.writesBlocked }
 }

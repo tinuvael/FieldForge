@@ -1,6 +1,6 @@
 import Foundation
 
-struct DraftPhotoSession: Equatable {
+struct DraftPhotoSession: Equatable, Sendable {
     let id: UUID
     let context: PhotoContext
 }

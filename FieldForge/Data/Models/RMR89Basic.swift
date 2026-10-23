@@ -3,7 +3,7 @@ import Foundation
 /// Bieniawski 1989, Table 4.1 A/C/E; verified against Hoek, Practical Rock
 /// Engineering, Rock mass classification, Table 4 (pp. 9–10), accessed 2026-10-21.
 /// Explicit published categories, never an Is(50)/UCS conversion or Q correlation.
-enum RMR89Parameter: String, CaseIterable {
+enum RMR89Parameter: String, CaseIterable, Sendable {
     case strength, rqd, spacing, persistence, aperture, roughness, infill, weathering, groundwater, overallCondition
     var title: String {
         switch self {
@@ -19,7 +19,7 @@ enum RMR89Parameter: String, CaseIterable {
         case .overallCondition: return "Состояние в целом · A.4"
         }
     }
-    struct Choice: Identifiable {
+    struct Choice: Identifiable, Sendable {
         let id: String
         let title: String
         let rating: Int
@@ -61,7 +61,7 @@ enum RMR89Parameter: String, CaseIterable {
     }
 }
 
-struct RMR89BasicEvaluation: Codable, Equatable {
+struct RMR89BasicEvaluation: Codable, Equatable, Sendable {
     let components: [String: Int]
     let missing: [String]
     let value: Int?

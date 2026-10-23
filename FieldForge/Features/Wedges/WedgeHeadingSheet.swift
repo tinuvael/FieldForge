@@ -7,10 +7,13 @@ import SwiftUI
     private let provider = CoreMotionSensorProvider()
     private var timer: Timer?
     private var active = false
+    private var generation = UUID()
 
     func setActive(_ value: Bool) {
         guard value != active else { return }
         active = value
+        generation = UUID()
+        let request = generation
         if value {
             provider.onEvent = { [weak self] event in
                 guard let self, self.active else { return }
@@ -21,7 +24,10 @@ import SwiftUI
             }
             provider.start()
             timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-                Task { @MainActor [weak self] in self?.refresh() }
+                Task { @MainActor [weak self] in
+                    guard let self, self.active, self.generation == request else { return }
+                    self.refresh()
+                }
             }
         } else {
             provider.stop(); timer?.invalidate(); timer = nil; sample = nil; heading = nil
@@ -38,7 +44,7 @@ import SwiftUI
         guard active, let sample, let value = WedgePlaneGeometry.axisHeading(sample: sample, now: Date()) else { return nil }
         return WedgeAxisCapture(azimuth: value, sample: sample)
     }
-    deinit { timer?.invalidate() }
+    isolated deinit { timer?.invalidate() }
 }
 
 struct WedgeHeadingSheet: View {

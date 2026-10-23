@@ -1,9 +1,10 @@
 import Foundation
+import os
 import CryptoKit
 import ImageIO
 import UniformTypeIdentifiers
 
-struct PhotoImportOperation: Codable, Equatable, Identifiable {
+struct PhotoImportOperation: Codable, Equatable, Identifiable, Sendable {
     var id: UUID { photo.id }
     let version: Int
     let photo: PhotoObservation
@@ -17,12 +18,16 @@ struct PhotoImportOperation: Codable, Equatable, Identifiable {
 /// Mutations are confined to MappingStorageOwner in the application. Every accepted image has an intent BEFORE any byte write.
 /// Originals and operation manifests are never cleaned up implicitly. Thumbnails are disposable.
 // Immutable root; all filesystem mutations are serialized by MappingStorageOwner.
-// The failure-injection checkpoint is configured only by tests while operations are idle.
-final class ManagedPhotoStore: @unchecked Sendable {
+// The test checkpoint is synchronized independently; invoke it outside the lock.
+final class ManagedPhotoStore: Sendable {
     static let maximumBytes = 100_000_000
     enum Checkpoint { case intent, staging, promotion, thumbnail }
     let root: URL
-    var checkpoint: ((Checkpoint) throws -> Void)? // deterministic filesystem failure injection
+    private let checkpointState = OSAllocatedUnfairLock<(@Sendable (Checkpoint) throws -> Void)?>(initialState: nil)
+    var checkpoint: (@Sendable (Checkpoint) throws -> Void)? {
+        get { checkpointState.withLock { $0 } }
+        set { checkpointState.withLock { $0 = newValue } }
+    }
     init(root: URL) { self.root = root }
     func originalURL(_ attachment: PhotoAttachment) -> URL { root.appendingPathComponent(attachment.relativePath) }
     func thumbnailURL(_ attachment: PhotoAttachment) -> URL { root.appendingPathComponent(attachment.thumbnailPath) }
