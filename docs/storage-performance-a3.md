@@ -66,7 +66,7 @@ Measured 2026-10-23 on macOS 26.6.2 (25G83), x86_64, Intel Core i7-1068NG7 2.30 
 match A2. No build/test process ran concurrently with the benchmark. Background
 load, thermals and storage media were not controlled.
 
-One limited run, 10:19:46–10:20:30 UTC: **44.151 s, one test, zero failures**.
+One limited run, 05:19:46–05:20:30 UTC (10:19:46–10:20:30, UTC+05:00): **44.151 s, one test, zero failures**.
 Fixture JSON byte counts exactly match A2: 559,427 / 5,554,112 / 27,769,912.
 
 **Milliseconds, A2 median → A3 median.** Expensive rows have n=3 per size;
