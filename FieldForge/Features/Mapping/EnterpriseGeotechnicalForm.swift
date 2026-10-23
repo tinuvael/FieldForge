@@ -62,16 +62,15 @@ private struct LithologyDictionaryEditor: View {
                 TextField("Числовой код ROCK", text: $code).keyboardType(.decimalPad).focused($focused).accessibilityIdentifier("rockCode")
                 TextField("Название · необязательно", text: $name).focused($focused).accessibilityIdentifier("rockName")
                 Button("Добавить") {
-                    do {
+                    Task { do {
                         let rock = RockLithology(code: code.trimmingCharacters(in: .whitespacesAndNewlines), name: name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : name)
-                        guard mapping.workflow != nil else { throw StorageError.writesBlocked }
-                        try mapping.workflow!.addLithology(rock, projectID: projectID)
+                        try await mapping.persist { try $0.addLithology(rock, projectID: projectID) }
                         code = ""; name = ""; error = nil; focused = false
-                    } catch { self.error = error.localizedDescription }
-                }.accessibilityIdentifier("addRockCode")
+                    } catch { self.error = error.localizedDescription } }
+                }.disabled(mapping.isSaving).accessibilityIdentifier("addRockCode")
                 if let error { Text(error).foregroundStyle(.red) }
             }
-        }.navigationTitle("Коды ROCK").scrollDismissesKeyboard(.interactively)
+        }.disabled(mapping.isSaving).navigationTitle("Коды ROCK").scrollDismissesKeyboard(.interactively)
             .toolbar { ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Готово") { focused = false } } }
     }
 }

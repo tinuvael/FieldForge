@@ -27,15 +27,15 @@ import XCTest
     }
     func testContextParkingKeepsUnrelatedPendingSavedPointPhotoBytes() async throws {
         let (root, _, model, files) = try setup(); defer { try? FileManager.default.removeItem(at: root) }
-        model.workflow!.draft.picket = "1"; let point = try model.workflow!.save()
+        model.workflow!.draft.picket = "1"; let point = try await model.persist { try $0.save() }
         let image = try received()
         let operation = try files.makeOperation(data: image.data, filename: nil,
             context: model.workflow!.journal.photoContext(for: point.id), source: image.source, representation: image.representation)
         model.retainedPhotos[operation.id] = RetainedPhotoImport(operation: operation, data: image.data)
         model.workflow!.draft.notes = "Unfinished next point"
-        let other = try model.workflow!.createProject(name: "Other")
-        try model.workflow!.requestContext(MappingContext(projectID: other))
-        model.perform { try $0.preserveAndSwitch() }
+        let other = try await model.persist { try $0.createProject(name: "Other") }
+        try await model.persist { try $0.requestContext(MappingContext(projectID: other)) }
+        try await model.persist { try $0.preserveAndSwitch() }
         XCTAssertEqual(model.retainedPhotos[operation.id]?.data, image.data)
         XCTAssertEqual(model.retainedPhotos[operation.id]?.operation, operation)
     }
@@ -44,20 +44,24 @@ import XCTest
         let originalContext = model.workflow!.context, id = model.workflow!.draft.id
         model.workflow!.draft.picket = "1+7"
         let operation = try await add(model)
-        let nextExcavation = try model.workflow!.createExcavation(name: "Next", horizonIDs: [originalContext.horizonID!])
+        let nextExcavation = try await model.persist { try $0.createExcavation(name: "Next", horizonIDs: [originalContext.horizonID!]) }
         let inFlight = try model.beginDraftPhotos()
         let beforeSelection = model.workflow!.draft
-        try model.workflow!.requestContext(MappingContext(projectID: originalContext.projectID, horizonID: originalContext.horizonID, excavationID: nextExcavation))
+        do {
+            try await model.persist { try $0.requestContext(MappingContext(projectID: originalContext.projectID, horizonID: originalContext.horizonID, excavationID: nextExcavation)) }
+            XCTFail("Receiving draft photos must lock durable context changes")
+        } catch { }
         XCTAssertEqual(model.workflow!.draft, beforeSelection); XCTAssertNil(model.workflow!.pendingContext)
         await model.receiveDraftPhoto(try received(200), session: inFlight)
         model.endDraftPhotos(inFlight)
+        try await model.persist { try $0.requestContext(MappingContext(projectID: originalContext.projectID, horizonID: originalContext.horizonID, excavationID: nextExcavation)) }
         XCTAssertEqual(model.workflow!.draft.photos.count, 2)
         let expected = model.workflow!.draft
-        let other = try model.workflow!.createProject(name: "Other")
-        try model.workflow!.requestContext(MappingContext(projectID: other))
-        model.perform { try $0.preserveAndSwitch() }
+        let other = try await model.persist { try $0.createProject(name: "Other") }
+        try await model.persist { try $0.requestContext(MappingContext(projectID: other)) }
+        try await model.persist { try $0.preserveAndSwitch() }
         XCTAssertNotNil(model.retainedPhotos[operation.id])
-        model.perform { try $0.requestContext(MappingContext(projectID: originalContext.projectID, horizonID: originalContext.horizonID)) }
+        try await model.persist { try $0.requestContext(MappingContext(projectID: originalContext.projectID, horizonID: originalContext.horizonID)) }
         XCTAssertEqual(model.workflow!.draft, expected)
         await model.saveDraft(id: id)
         XCTAssertNil(model.error); XCTAssertTrue(model.success)
@@ -124,7 +128,7 @@ import XCTest
         await model.saveDraft(id: before.id)
         XCTAssertEqual(model.workflow!.journal, graph); XCTAssertEqual(model.workflow!.draft, before)
         XCTAssertEqual(try FileMappingStore(url: store.url).load(), graph)
-        XCTAssertTrue(model.retainedPhotos.isEmpty); XCTAssertEqual(try files.read(op.attachment), try received().data)
+        XCTAssertEqual(model.retainedPhotos[op.id]?.data, try received().data); XCTAssertEqual(try files.read(op.attachment), try received().data)
         let restarted = MappingModel(workflow: try MappingWorkflow(store: FileMappingStore(url: store.url)), photoStore: files)
         await restarted.retryPhoto(op)
         XCTAssertEqual(restarted.workflow!.journal, graph) // Never invent a point from a disk intent.
@@ -138,21 +142,23 @@ import XCTest
     func testPhotosAloneContextCancelDiscardAndLateCompletionCannotResurrect() async throws {
         let (root, _, model, files) = try setup(); defer { try? FileManager.default.removeItem(at: root) }
         let original = model.workflow!.context
-        let other = try model.workflow!.createProject(name: "Other")
+        let other = try await model.persist { try $0.createProject(name: "Other") }
         let session = try model.beginDraftPhotos()
         await model.receiveDraftPhoto(try received(), session: session)
         model.endDraftPhotos(session)
         XCTAssertTrue(model.workflow!.draft.hasChanges)
         let before = model.workflow!.draft
-        try model.workflow!.requestContext(MappingContext(projectID: other))
+        try await model.persist { try $0.requestContext(MappingContext(projectID: other)) }
         XCTAssertEqual(model.workflow!.context, original)
         model.workflow!.cancelContextChange(); XCTAssertEqual(model.workflow!.draft, before)
         // Picker still active: Save is explicitly refused, even with a valid picket.
         let pending = try model.beginDraftPhotos()
         model.workflow!.draft.picket = "5"; await model.saveDraft(id: before.id)
         XCTAssertTrue(model.workflow!.journal.observations.isEmpty)
-        try model.workflow!.requestContext(MappingContext(projectID: other))
-        model.perform { try $0.confirmDiscard() }
+        do { try await model.persist { try $0.requestContext(MappingContext(projectID: other)) }; XCTFail("Picker must lock context") } catch { }
+        model.endDraftPhotos(pending) // picker cancellation explicitly releases admission
+        try await model.persist { try $0.requestContext(MappingContext(projectID: other)) }
+        try await model.persist { try $0.confirmDiscard() }
         let next = model.workflow!.draft
         await model.receiveDraftPhoto(try received(200), session: pending); model.endDraftPhotos(pending)
         XCTAssertEqual(model.workflow!.draft, next); XCTAssertTrue(model.retainedPhotos.isEmpty)
@@ -231,18 +237,18 @@ import XCTest
         try FileManager.default.removeItem(at: blocked)
         await model.saveDraft(id: model.workflow!.draft.id)
         XCTAssertNil(model.error); XCTAssertEqual(model.workflow!.journal.photos, [first.photo])
-        let p = try model.workflow!.createProject(name: "B")
-        try model.workflow!.requestContext(MappingContext(projectID: p))
-        let h = try model.workflow!.createHorizon(elevation: "-120")
-        try model.workflow!.requestContext(MappingContext(projectID: p, horizonID: h))
-        let e = try model.workflow!.createExcavation(name: "B", horizonIDs: [h])
-        try model.workflow!.requestContext(MappingContext(projectID: p, horizonID: h, excavationID: e))
+        let p = try await model.persist { try $0.createProject(name: "B") }
+        try await model.persist { try $0.requestContext(MappingContext(projectID: p)) }
+        let h = try await model.persist { try $0.createHorizon(elevation: "-120") }
+        try await model.persist { try $0.requestContext(MappingContext(projectID: p, horizonID: h)) }
+        let e = try await model.persist { try $0.createExcavation(name: "B", horizonIDs: [h]) }
+        try await model.persist { try $0.requestContext(MappingContext(projectID: p, horizonID: h, excavationID: e)) }
         XCTAssertTrue(model.workflow!.observations.isEmpty)
         model.workflow!.draft.picket = "5"; let second = try await add(model, 200)
         await model.saveDraft(id: model.workflow!.draft.id)
         XCTAssertEqual(model.workflow!.observations.map(\.id), [second.photo.context.pointID])
         XCTAssertEqual(second.photo.context.projectID, p)
-        try model.workflow!.requestContext(originalContext)
+        try await model.persist { try $0.requestContext(originalContext) }
         XCTAssertEqual(model.workflow!.observations.map(\.id), [first.photo.context.pointID])
         XCTAssertEqual(model.workflow!.journal.photos, [first.photo, second.photo])
         XCTAssertEqual(try files.read(first.attachment), try received().data)
@@ -259,13 +265,13 @@ import XCTest
         let save = Task { await model.saveDraft(id: id) }
         await fulfillment(of: [intent], timeout: 5)
         XCTAssertTrue(model.workflow!.draft.saving)
-        XCTAssertThrowsError(try model.workflow!.requestContext(MappingContext()))
-        model.workflow!.draft.notes = "edit from another editor while awaiting disk"
+        do { try await model.persist { try $0.requestContext(MappingContext()) }; XCTFail("Save must lock context") } catch { }
+        model.perform { $0.draft.notes = "edit from another editor while awaiting disk" }
+        XCTAssertNotNil(model.error)
+        XCTAssertEqual(model.workflow!.journal, graph)
         resume.signal(); await save.value
-        XCTAssertEqual(model.workflow!.journal, graph); XCTAssertNotNil(model.error)
-        XCTAssertEqual(model.workflow!.draft.notes, "edit from another editor while awaiting disk")
-        XCTAssertEqual(model.workflow!.draft.photos, [op]); XCTAssertEqual(try files.read(op.attachment), try received().data)
-        files.checkpoint = nil; await model.saveDraft(id: id)
         XCTAssertNil(model.error); XCTAssertEqual(model.workflow!.journal.photos, [op.photo])
+        XCTAssertEqual(model.workflow!.journal.observations.first?.notes, "")
+        XCTAssertEqual(try files.read(op.attachment), try received().data)
     }
 }

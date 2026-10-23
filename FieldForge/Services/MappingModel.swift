@@ -6,6 +6,44 @@ import Combine
     @Published var error: String?
     @Published var success = false
     @Published var selectedTab = 0
+    @Published private(set) var loading = false
+    @Published private(set) var savingState: MappingSavingState = .idle
+    let storage = MappingStorageOwner()
+    private var opening: Task<Void, Never>?
+    var isSaving: Bool { savingState.isSaving }
+
+    /// Admission is synchronous on MainActor. Conflicting requests fail explicitly;
+    /// callers retain their input and can retry. No UI snapshot publishes before commit.
+    @discardableResult
+    func persist<Value>(_ action: @escaping @Sendable (inout MappingWorkflow) throws -> Value) async throws -> Value {
+        guard !isSaving else { throw MappingError.invalid("Дождитесь завершения сохранения и повторите действие.") }
+        guard let snapshot = workflow else { throw StorageError.writesBlocked }
+        guard snapshot.draft.photoSessions.isEmpty else {
+            throw MappingError.invalid("Дождитесь завершения получения фотографий и повторите действие.")
+        }
+        let operationID = UUID(), oldID = snapshot.draft.id
+        savingState = .saving(operationID)
+        workflow!.draft.saving = true
+        do {
+            let (committed, value) = try await storage.transaction(snapshot: snapshot, action)
+            // Never check Task.isCancelled here: disk outcome must be reconciled.
+            workflow = committed
+            savingState = .committed(operationID)
+            error = nil
+            if committed.draft.id != oldID {
+                retainedPhotos = retainedPhotos.filter {
+                    let pointID = $0.value.operation.photo.context.pointID
+                    return pointID != oldID || committed.retainedDraftIDs.contains(pointID)
+                }
+            }
+            return value
+        } catch {
+            workflow!.draft.saving = false
+            savingState = .failed(operationID, error.localizedDescription)
+            self.error = error.localizedDescription
+            throw error
+        }
+    }
     func beginCoordinateSelection() throws -> MappingPlanSelectionRequest? {
         guard let workflow, let horizonID = workflow.context.horizonID else { throw StorageError.invalidRecord }
         guard let plan = activePlan(for: horizonID) else { selectedTab = 1; return nil }
@@ -51,7 +89,7 @@ import Combine
         selectActivePlan(plan)
     }
     func managePlan(_ plan: MappingPlanReference, action: PlanManagementChange.Action, targetHorizonID: UUID? = nil,
-                    replacement: MappingPlanReference? = nil) throws {
+                    replacement: MappingPlanReference? = nil) async throws {
         guard workflow != nil else { throw StorageError.writesBlocked }
         let wasActive = activePlan(for: plan.horizonID)?.id == plan.id
         if wasActive && action != .restore {
@@ -60,7 +98,7 @@ import Combine
                 throw MappingError.invalid("Выберите новую активную ревизию.")
             }
         }
-        try workflow!.managePlan(plan.id, action: action, horizonID: targetHorizonID)
+        try await persist { try $0.managePlan(plan.id, action: action, horizonID: targetHorizonID) }
         if wasActive && action != .restore {
             if let replacement { selectActivePlan(replacement) }
             else if let key = planKey(plan.horizonID) {
@@ -70,6 +108,28 @@ import Combine
             }
         }
     }
+    func registerPlan(_ plan: MappingPlanReference) async throws {
+        guard let files = planStore else { throw StorageError.writesBlocked }
+        try await persist { next in
+            _ = try DXFDocument.parse(files.read(plan))
+            if let existing = next.journal.plans.first(where: { $0.matchesImport(plan) }) {
+                guard existing.id == plan.id else { throw StorageError.invalidRecord }
+            } else { try next.registerPlan(plan) }
+        }
+        await storageCompletePlan(plan, files: files)
+    }
+    private func storageCompletePlan(_ plan: MappingPlanReference, files: ManagedPlanStore) async {
+        _ = try? await storage.run { files.complete(plan) }
+    }
+    func pendingPlans() async throws -> [MappingPlanReference] {
+        guard let files = planStore else { return [] }
+        let journal = workflow?.journal
+        return try await storage.run {
+            let items = try files.pending()
+            for plan in items where journal?.plans.contains(where: { $0.matchesImport(plan) }) == true { files.complete(plan) }
+            return items
+        }
+    }
     private(set) var planStore: ManagedPlanStore?
     private(set) var photoStore: ManagedPhotoStore?
     @Published var photoBusy = false
@@ -77,11 +137,11 @@ import Combine
     @Published var pendingPhotos: [PhotoImportOperation] = []
     @Published var photoRecoveryError: String?
     @Published var retainedPhotos: [UUID: RetainedPhotoImport] = [:]
-    init(workflow: MappingWorkflow, photoStore: ManagedPhotoStore, preferences: UserDefaults = .standard) {
+    init(workflow: MappingWorkflow, photoStore: ManagedPhotoStore, planStore: ManagedPlanStore? = nil, preferences: UserDefaults = .standard) {
         self.preferences = preferences
         activePlanIDs = preferences.dictionary(forKey: "FieldForge.activePlans.v1") as? [String: String] ?? [:]
-        self.workflow = workflow; self.photoStore = photoStore
-        refreshPhotoRecovery()
+        self.workflow = workflow; self.photoStore = photoStore; self.planStore = planStore
+        Task { await refreshPhotoRecovery() }
     }
     init() {
         preferences = .standard
@@ -100,24 +160,26 @@ import Combine
             #endif
             planStore = ManagedPlanStore(root: directory.appendingPathComponent(testing ? "ui-testing-plans\(namespace)" : "plans"))
             photoStore = ManagedPhotoStore(root: directory.appendingPathComponent(testing ? "ui-testing-photos\(namespace)" : "photos"))
-            workflow = try MappingWorkflow(store: FileMappingStore(url: directory.appendingPathComponent(testing ? "ui-testing-mapping\(namespace).json" : "mapping-v1.json")))
+            let store = FileMappingStore(url: directory.appendingPathComponent(testing ? "ui-testing-mapping\(namespace).json" : "mapping-v1.json"))
+            loading = true
+            opening = Task { [self] in
+                defer { loading = false }
+                do { workflow = try await storage.open(store: store) }
+                catch { self.error = "Не удалось открыть картирование. Запись заблокирована: \(error.localizedDescription)" }
+                await refreshPhotoRecovery()
+            }
         } catch { self.error = "Не удалось открыть картирование. Запись заблокирована: \(error.localizedDescription)" }
-        refreshPhotoRecovery()
     }
+    /// Volatile callbacks must propagate refusal so their editor stays open.
+    func performThrowing(_ action: (inout MappingWorkflow) throws -> Void) throws {
+        guard workflow != nil else { throw StorageError.writesBlocked }
+        guard !isSaving else { throw MappingError.invalid("Дождитесь завершения сохранения и повторите действие.") }
+        try action(&workflow!)
+    }
+    /// Volatile edits only. Durable commands use awaited persist(_:).
     func perform(_ action: (inout MappingWorkflow) throws -> Void) {
         guard workflow != nil else { return }
-        let oldID = workflow!.draft.id
-        do {
-            try action(&workflow!)
-            if workflow!.draft.id != oldID {
-                // Discard only volatile ownership. Never delete files or a saved original.
-                retainedPhotos = retainedPhotos.filter {
-                    let pointID = $0.value.operation.photo.context.pointID
-                    return pointID != oldID || workflow!.retainedDraftIDs.contains(pointID)
-                }
-                refreshPhotoRecovery()
-            }
-        } catch { self.error = error.localizedDescription }
+        do { try performThrowing(action) }
+        catch { self.error = error.localizedDescription }
     }
 }
-

@@ -37,6 +37,18 @@ The [field interaction contract](field-ui-refinement.md) updates presentation wi
 **P1 implementation update:** [Mapping workflow and persistence](p1-mapping.md) describes the implemented project/horizon/multi-horizon-excavation/point graph, context/draft state machine, atomic JSON decision, immutable observations and protected legacy inbox. The Phase 2 descriptions and larger future schema below are historical/design context; they do not override P1's implemented scope.
 
 
+## A4 off-main serialized storage
+
+[The A4 contract](storage-concurrency-a4.md) supersedes synchronous mapping storage
+ownership in historical sections. `MappingModel` remains on MainActor;
+`MappingStorageOwner` serializes non-suspending buffered commands, authoritative
+schema-8 validation, exact backup/atomic writes and attachment mutations on a private
+FIFO queue. Each admitted operation has a UUID and a committed/failed reconciliation
+that survives caller cancellation. Conflicting UI commands are temporarily disabled
+or explicitly refused, preserving drafts and prepared intents. Exports retain the
+last committed value captured at export-screen opening. No stored format, engineering
+calculation or independent measurement-journal behavior changes.
+
 ## A3 mapping validation and storage performance
 
 Schema 8 still uses full authoritative validation on load and every save. One

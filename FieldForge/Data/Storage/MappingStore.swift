@@ -5,7 +5,8 @@ protocol MappingStore {
     func save(_ journal: MappingJournal) throws
 }
 
-/// One serialized main-actor owner in the app. Every commit validates the entire graph.
+/// Synchronous storage primitive, confined to MappingStorageOwner in the app.
+/// Every commit validates the entire graph; standalone tests use isolated stores.
 final class FileMappingStore: MappingStore {
     let url: URL
     var backupURL: URL { url.appendingPathExtension("previous") }
@@ -74,10 +75,14 @@ struct MappingWorkflow {
     // Volatile drafts retain their original spatial frame until explicitly revisited.
     private(set) var suspendedDrafts: [(context: MappingContext, draft: MappingDraft)] = []
     var retainedDraftIDs: Set<UUID> { Set(suspendedDrafts.map { $0.draft.id } + [draft.id]) }
-    private let store: any MappingStore
+    private var store: any MappingStore
     init(store: any MappingStore) throws {
         self.store = store; journal = try store.load()
         draft.suggestElevation(selectedHorizon)
+    }
+    var persistenceStore: any MappingStore { store }
+    mutating func prepareTransaction(journal: MappingJournal, store: any MappingStore) {
+        self.journal = journal; self.store = store
     }
     var selectedHorizon: MappingHorizon? { journal.horizons.first { $0.id == context.horizonID } }
     private mutating func resetDraft() { draft = MappingDraft(); draft.suggestElevation(selectedHorizon) }

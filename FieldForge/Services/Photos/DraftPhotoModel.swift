@@ -28,11 +28,11 @@ extension MappingModel {
     func receiveDraftPhoto(_ received: ReceivedPhoto, session: DraftPhotoSession) async {
         guard accepts(session), let files = photoStore else { return }
         do {
-            let operation = try await Task.detached(priority: .userInitiated) {
+            let operation = try await storage.run {
                 try files.makeOperation(data: received.data, filename: received.filename, context: session.context,
                     source: received.source, representation: received.representation, captureWallTime: received.captureWallTime,
                     captureUTCOffset: received.captureUTCOffset, captureSubseconds: received.captureSubseconds)
-            }.value
+            }
             // Both checks are necessary: discard can occur while ImageIO is validating.
             guard accepts(session) else { return }
             retainedPhotos[operation.id] = RetainedPhotoImport(operation: operation, data: received.data)
@@ -44,49 +44,43 @@ extension MappingModel {
         workflow!.draft.photos.removeAll { $0.id == id }
         retainedPhotos.removeValue(forKey: id)
         // An earlier failed Save may have written files. Retain them for reviewed recovery.
-        refreshPhotoRecovery()
+        Task { await refreshPhotoRecovery() }
     }
-    func draftPhotoData(_ operation: PhotoImportOperation) throws -> Data {
+    func draftPhotoData(_ operation: PhotoImportOperation) async throws -> Data {
         if let retained = retainedPhotos[operation.id] { return retained.data }
         guard let files = photoStore else { throw StorageError.writesBlocked }
-        return try files.read(operation.attachment)
+        return try await storage.run { try files.read(operation.attachment) }
     }
     func saveDraft(id: UUID) async {
-        guard let w = workflow, w.draft.id == id, !w.draft.saving else { return }
-        guard w.draft.photoSessions.isEmpty else { error = "Дождитесь завершения выбора и получения всех фотографий."; return }
-        guard !photoBusy else { error = "Дождитесь завершения другой операции фото."; return }
-        do { _ = try w.draftRecord(now: Date()) } catch { self.error = error.localizedDescription; return }
-        let operations = w.draft.photos
-        var frozenDraft = w.draft; frozenDraft.saving = true
-        workflow!.draft.saving = true; photoBusy = true
-        defer {
-            if workflow?.draft.id == id { workflow!.draft.saving = false }
-            photoBusy = false; refreshPhotoRecovery()
-        }
+        guard let w = workflow, w.draft.id == id else { return } // already committed identity: idempotent retry
+        guard !isSaving, !photoBusy else { error = "Дождитесь завершения сохранения и повторите действие."; return }
+        let operations = w.draft.photos, retained = retainedPhotos, files = photoStore
         do {
-            if !operations.isEmpty {
-                guard let files = photoStore else { throw StorageError.writesBlocked }
-                for operation in operations {
-                    if let retained = retainedPhotos[operation.id] {
-                        try await Task.detached { try files.stage(retained.data, for: operation) }.value
-                    }
-                    try await Task.detached { try files.promote(operation) }.value
-                    _ = try await Task.detached { try files.read(operation.attachment) }.value
-                    // Release camera memory only after independently verified durable original.
-                    retainedPhotos.removeValue(forKey: operation.id)
+            try await persist { next in
+                guard next.draft.id == id, next.draft.photoSessions.isEmpty else {
+                    throw MappingError.invalid("Дождитесь завершения выбора и получения всех фотографий.")
                 }
+                _ = try next.draftRecord(now: Date())
+                if !operations.isEmpty {
+                    guard let files else { throw StorageError.writesBlocked }
+                    for operation in operations {
+                        if let bytes = retained[operation.id] { try files.stage(bytes.data, for: operation) }
+                        try files.promote(operation)
+                        _ = try files.read(operation.attachment)
+                    }
+                }
+                _ = try next.save(preparedPhotos: operations)
             }
-            guard workflow?.draft == frozenDraft else { throw StorageError.changedFile }
-            _ = try workflow!.save(preparedPhotos: operations)
-            success = true; error = nil
-            if let files = photoStore {
+            success = true
+            if let files {
                 for operation in operations {
-                    do { try await Task.detached { try files.complete(operation) }.value }
+                    do { try await storage.run { try files.complete(operation) } }
                     catch { photoError = "Наблюдение и оригиналы сохранены. Миниатюра/завершение операции требует повтора: \(error.localizedDescription)" }
                 }
             }
         } catch {
             self.error = "Наблюдение не сохранено: \(error.localizedDescription) Черновик сохранён в работающем приложении. Повторите «Сохранить наблюдение» без пересъёмки. Незаписанные байты в памяти не переживут завершение приложения."
         }
+        await refreshPhotoRecovery()
     }
 }

@@ -66,7 +66,7 @@ struct ObservationPhotosSection: View {
                 Text("Привязка фиксируется до выбора изображения. EXIF/GPS не задаёт координаты точки.").font(.caption).foregroundStyle(.secondary)
             }
             .buttonStyle(.borderless)
-            .task { mapping.refreshPhotoRecovery() }
+            .task { await mapping.refreshPhotoRecovery() }
             .alert("Фотографии", isPresented: Binding(get: { mapping.photoError != nil }, set: { if !$0 { mapping.photoError = nil } })) {
                 Button("Понятно", role: .cancel) { mapping.photoError = nil }
             } message: { Text(mapping.photoError ?? "") }
@@ -157,7 +157,7 @@ struct PhotoThumbnail: View {
             guard let files = mapping.photoStore,
                   let attachment = mapping.workflow?.journal.photoAttachments.first(where: { $0.id == photo.attachmentID }) else { return }
             do {
-                let data = try await Task.detached { try files.thumbnail(attachment) }.value
+                let data = try await mapping.storage.run { try files.thumbnail(attachment) }
                 image = UIImage(data: data); failure = nil
             } catch { image = nil; failure = error.localizedDescription }
         }

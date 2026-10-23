@@ -43,6 +43,7 @@ struct PhotoLibraryPicker: UIViewControllerRepresentable {
 }
 
 struct PhotoCameraPicker: UIViewControllerRepresentable {
+    @EnvironmentObject private var mapping: MappingModel
     let receive: (Result<ReceivedPhoto?, Error>) -> Void
     func makeUIViewController(context: Context) -> UIImagePickerController {
         let picker = UIImagePickerController(); picker.sourceType = .camera; picker.mediaTypes = [UTType.image.identifier]
@@ -50,28 +51,36 @@ struct PhotoCameraPicker: UIViewControllerRepresentable {
         return picker
     }
     func updateUIViewController(_ controller: UIImagePickerController, context: Context) {}
-    func makeCoordinator() -> Coordinator { Coordinator(receive: receive) }
+    func makeCoordinator() -> Coordinator { Coordinator(storage: mapping.storage, receive: receive) }
     final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
         let receive: (Result<ReceivedPhoto?, Error>) -> Void
-        init(receive: @escaping (Result<ReceivedPhoto?, Error>) -> Void) { self.receive = receive }
+        let storage: MappingStorageOwner
+        init(storage: MappingStorageOwner, receive: @escaping (Result<ReceivedPhoto?, Error>) -> Void) {
+            self.storage = storage; self.receive = receive
+        }
         func imagePickerControllerDidCancel(_ picker: UIImagePickerController) { receive(.success(nil)) }
         func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
-            do {
-                let data: Data
-                let representation: String
-                if let url = info[.imageURL] as? URL {
-                    data = try Data(contentsOf: url); representation = "camera supplied file; received bytes preserved"
-                } else if let image = info[.originalImage] as? UIImage, let encoded = image.jpegData(compressionQuality: 1) {
-                    data = encoded; representation = "camera UIImage encoded to JPEG by app; original encoded bytes unavailable; metadata may be absent"
-                } else { throw StorageError.invalidRecord }
-                let metadata = info[.mediaMetadata] as? [String: Any]
-                let exif = metadata?[kCGImagePropertyExifDictionary as String] as? [String: Any]
-                receive(.success(ReceivedPhoto(data: data, filename: nil, source: .camera,
-                    representation: representation,
-                    captureWallTime: exif?[kCGImagePropertyExifDateTimeOriginal as String] as? String,
-                    captureUTCOffset: exif?[kCGImagePropertyExifOffsetTimeOriginal as String] as? String,
-                    captureSubseconds: exif?[kCGImagePropertyExifSubsecTimeOriginal as String] as? String)))
-            } catch { receive(.failure(error)) }
+            let url = info[.imageURL] as? URL, image = info[.originalImage] as? UIImage
+            let metadata = info[.mediaMetadata] as? [String: Any]
+            let exif = metadata?[kCGImagePropertyExifDictionary as String] as? [String: Any]
+            let wallTime = exif?[kCGImagePropertyExifDateTimeOriginal as String] as? String
+            let offset = exif?[kCGImagePropertyExifOffsetTimeOriginal as String] as? String
+            let subseconds = exif?[kCGImagePropertyExifSubsecTimeOriginal as String] as? String
+            Task { @MainActor in
+                do {
+                    let received = try await storage.run { () throws -> ReceivedPhoto in
+                        let data: Data, representation: String
+                        if let url {
+                            data = try Data(contentsOf: url); representation = "camera supplied file; received bytes preserved"
+                        } else if let image, let encoded = image.jpegData(compressionQuality: 1) {
+                            data = encoded; representation = "camera UIImage encoded to JPEG by app; original encoded bytes unavailable; metadata may be absent"
+                        } else { throw StorageError.invalidRecord }
+                        return ReceivedPhoto(data: data, filename: nil, source: .camera, representation: representation,
+                            captureWallTime: wallTime, captureUTCOffset: offset, captureSubseconds: subseconds)
+                    }
+                    receive(.success(received))
+                } catch { receive(.failure(error)) }
+            }
         }
     }
 }

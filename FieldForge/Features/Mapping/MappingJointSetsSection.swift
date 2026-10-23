@@ -67,13 +67,11 @@ struct MappingGeologyCaptureSheet: View {
         switch request {
         case .tectonic(let request):
             TectonicCaptureSheet(initial: request.initial) { updated in
-                guard mapping.workflow != nil else { throw StorageError.writesBlocked }
-                try mapping.workflow!.acceptTectonic(updated, request: request)
+                try mapping.performThrowing { try $0.acceptTectonic(updated, request: request) }
             }.id(request.id)
         case .joint(let request):
             JointSetCaptureSheet(initial: request.initial, measurements: request.measurements, rqd: mapping.workflow?.draft.spacingRQD ?? SpacingRQD(q: BartonQInput(), rmr: RMR89Input())) { updated, originals in
-                guard mapping.workflow != nil else { throw StorageError.writesBlocked }
-                try mapping.workflow!.acceptJointSet(updated, originals: originals, request: request)
+                try mapping.performThrowing { try $0.acceptJointSet(updated, originals: originals, request: request) }
             }.id(request.id)
         }
     }

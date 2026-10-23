@@ -32,13 +32,13 @@ struct PhotoDetailView: View {
                     }
                     TextField("Причина исправления", text: $reason).focused($focused).accessibilityIdentifier("photoCorrectionReason")
                     Button("Сохранить метаданные") {
-                        do {
-                            guard mapping.workflow != nil else { throw StorageError.writesBlocked }
-                            try mapping.workflow!.correctPhoto(photo.id, baselineRevisionID: baseline, metadata: metadata, reason: reason)
+                        let values = metadata, correctionReason = reason, revision = baseline
+                        Task { do {
+                            try await mapping.persist { try $0.correctPhoto(photo.id, baselineRevisionID: revision, metadata: values, reason: correctionReason) }
                             baseline = mapping.workflow?.journal.photoRevisions.last { $0.photoID == photo.id }?.id
                             reason = ""; failure = nil
-                        } catch { failure = error.localizedDescription }
-                    }.disabled(metadata.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        } catch { failure = error.localizedDescription } }
+                    }.disabled(mapping.isSaving || metadata.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || reason.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                         .accessibilityIdentifier("photoSaveMetadata")
                     if let failure { Text(failure).foregroundStyle(.red) }
                 }
@@ -85,7 +85,7 @@ struct PhotoDetailView: View {
                 Section("UUID фотографии / вложения") {
                     Text(photo.id.uuidString); Text(photo.attachmentID.uuidString)
                 }.font(.caption).textSelection(.enabled)
-            }.navigationTitle("Фотография")
+            }.disabled(mapping.isSaving).navigationTitle("Фотография")
                 .toolbar {
                     ToolbarItem(placement: .confirmationAction) { Button("Закрыть") { dismiss() }.accessibilityIdentifier("photoCloseDetail") }
                     ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Готово") { focused = false } }

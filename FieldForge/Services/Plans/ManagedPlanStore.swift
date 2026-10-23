@@ -24,7 +24,7 @@ struct ManagedPlanFile: Codable, Equatable {
 
 /// Immutable UUID filenames. A staged operation survives failed journal writes/restarts;
 /// no automatic orphan deletion. Reconciliation only removes redundant operation manifests.
-final class ManagedPlanStore {
+final class ManagedPlanStore: Sendable {
     let root: URL
     init(root: URL) { self.root = root }
     func fileURL(_ plan: MappingPlanReference) -> URL { root.appendingPathComponent("originals/\(plan.attachmentID.uuidString).dxf") }
@@ -32,22 +32,37 @@ final class ManagedPlanStore {
     static func digest(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
 
     func stage(data: Data, filename: String, horizonID: UUID, version: String,
-               units: PlanUnits, crs: String, axes: String, frameConfirmation: PlanFrameConfirmation? = nil) throws -> MappingPlanReference {
+               units: PlanUnits, crs: String, axes: String, frameConfirmation: PlanFrameConfirmation? = nil,
+               id: UUID = UUID(), attachmentID: UUID = UUID(), importedAt: Date = Date()) throws -> MappingPlanReference {
         let drawing = try DXFDocument.parse(data)
         guard !version.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw MappingError.invalid("Укажите версию плана.") }
-        let plan = MappingPlanReference(id: UUID(), horizonID: horizonID, attachmentID: UUID(), version: version,
+        let plan = MappingPlanReference(id: id, horizonID: horizonID, attachmentID: attachmentID, version: version,
             file: ManagedPlanFile(originalFilename: URL(fileURLWithPath: filename).lastPathComponent,
-                sha256: Self.digest(data), byteCount: data.count, importedAt: Date(), units: units,
+                sha256: Self.digest(data), byteCount: data.count, importedAt: importedAt, units: units,
                 crs: crs.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "unknown" : crs,
                 axes: axes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "unknown" : axes,
                 unitDeclaration: PlanUnits.declared(by: drawing.insertionUnits) == units ? "dxfINSUNITS" : "userConfirmedAtImport", insertionUnits: drawing.insertionUnits),
             frameConfirmation: frameConfirmation)
         try FileManager.default.createDirectory(at: root.appendingPathComponent("operations"), withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: root.appendingPathComponent("originals"), withIntermediateDirectories: true)
-        try JSONEncoder().encode(plan).write(to: operationURL(plan), options: .atomic)
-        try data.write(to: fileURL(plan), options: .atomic)
+        if FileManager.default.fileExists(atPath: operationURL(plan).path) {
+            let existing = try JSONDecoder().decode(MappingPlanReference.self, from: Data(contentsOf: operationURL(plan)))
+            guard existing == plan else { throw MappingError.invalid("Сохранённый импорт уже имеет эти UUID. Восстановите его из списка незавершённых операций.") }
+        } else { try JSONEncoder().encode(plan).write(to: operationURL(plan), options: .atomic) }
+        if FileManager.default.fileExists(atPath: fileURL(plan).path) { _ = try read(plan) }
+        else { try data.write(to: fileURL(plan), options: .atomic) }
         _ = try read(plan)
         return plan
+    }
+    /// Restore only the exact original described by a durable import intent.
+    /// Existing files (including corrupt ones) are preserved for reviewed recovery.
+    func supply(_ data: Data, for plan: MappingPlanReference) throws {
+        let expected = try JSONDecoder().decode(MappingPlanReference.self, from: Data(contentsOf: operationURL(plan)))
+        guard expected == plan, let file = plan.file, data.count == file.byteCount,
+              Self.digest(data) == file.sha256 else { throw MappingError.invalid("Выберите тот же исходный DXF: размер или SHA-256 не совпадает. Файлы сохранены.") }
+        if FileManager.default.fileExists(atPath: fileURL(plan).path) { _ = try read(plan) }
+        else { try data.write(to: fileURL(plan), options: .atomic) }
+        _ = try read(plan)
     }
     func read(_ plan: MappingPlanReference) throws -> Data {
         guard let file = plan.file else { throw MappingError.invalid("У старой ссылки нет управляемого файла. Импортируйте DXF.") }

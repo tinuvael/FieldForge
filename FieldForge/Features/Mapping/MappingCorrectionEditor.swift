@@ -75,7 +75,7 @@ struct MappingCorrectionEditor: View {
                     if let error { Text(error).foregroundStyle(.red).accessibilityIdentifier("correctionError") }
                     Button("Сохранить исправление") { save() }.buttonStyle(.borderedProminent).accessibilityIdentifier("saveMappingCorrection")
                 }
-            }.navigationTitle("Исправление наблюдения").navigationBarTitleDisplayMode(.inline)
+            }.disabled(mapping.isSaving).navigationTitle("Исправление наблюдения").navigationBarTitleDisplayMode(.inline)
                 .scrollDismissesKeyboard(.interactively)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
@@ -120,11 +120,13 @@ struct MappingCorrectionEditor: View {
     }
     private func save() {
         focused = false
-        do {
-            guard mapping.workflow != nil else { throw StorageError.writesBlocked }
-            try mapping.workflow!.saveCorrection(draft)
-            dismiss()
-        } catch { self.error = error.localizedDescription }
+        let snapshot = draft
+        Task {
+            do {
+                _ = try await mapping.persist { try $0.saveCorrection(snapshot) }
+                dismiss()
+            } catch { self.error = error.localizedDescription }
+        }
     }
 }
 
