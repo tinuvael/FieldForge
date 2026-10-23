@@ -51,8 +51,7 @@ struct MappingView: View {
             NavigationStack {
                 HorizonPlanLoader(plan: request.plan, selecting: true, onSelection: { planSelection = nil },
                     onPointSelection: { point, _, elevation in
-                        guard mapping.workflow != nil else { throw StorageError.writesBlocked }
-                        try mapping.workflow!.selectPlanPoint(point, request: request, elevation: elevation)
+                        try mapping.performThrowing { try $0.selectPlanPoint(point, request: request, elevation: elevation) }
                     })
                     .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Вернуться") { planSelection = nil } } }
             }.id(request.id)

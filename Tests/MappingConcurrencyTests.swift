@@ -228,6 +228,54 @@ private final class GatedMappingStore: MappingStore {
         XCTAssertEqual(model.workflow!.journal.photos[0].context, context)
     }
 
+    func testCoordinateSelectionRefusedDuringSaveThenPreservesXYAndZAcceptanceRules() async throws {
+        let (root, store, model) = try await setup()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let files = try XCTUnwrap(model.planStore), horizon = model.workflow!.context.horizonID!
+        let data = DXFFixtures.drawing("0\nLINE\n10\n0\n20\n0\n30\n-20\n11\n10\n21\n0\n31\n20\n")
+        let plan = try await model.storage.run {
+            try files.stage(data: data, filename: "selection.dxf", horizonID: horizon, version: "1",
+                units: .meters, crs: "mine grid", axes: "WCS XYZ")
+        }
+        try await model.registerPlan(plan)
+        let request = try model.workflow!.planSelectionRequest(plan)
+        let point = PlanPoint(x: 2.5, y: 1)
+        let elevation = try XCTUnwrap(PlanElevationSnap.resolve(point, document: DXFDocument.parse(data), plan: plan).automatic)
+        let before = model.workflow!.draft, journal = model.workflow!.journal
+        let entered = expectation(description: "durable save pending"), gate = DispatchSemaphore(value: 0)
+        store.beforeSave = { entered.fulfill(); XCTAssertEqual(gate.wait(timeout: .now() + 10), .success) }
+        let save = Task { try await model.persist { try $0.createProject(name: "pending selection") } }
+        await fulfillment(of: [entered], timeout: 5)
+        let savingDraft = model.workflow!.draft, state = model.savingState
+        XCTAssertTrue(model.isSaving)
+        let busyMessage = "Дождитесь завершения сохранения и повторите действие."
+        // MappingView's frozen request and the plan view's fallback share admission.
+        XCTAssertThrowsError(try model.performThrowing { try $0.selectPlanPoint(point, request: request, elevation: elevation) }) {
+            XCTAssertEqual($0.localizedDescription, busyMessage)
+        }
+        XCTAssertThrowsError(try model.performThrowing { try $0.selectPlanPoint(point, planID: plan.id, elevation: elevation) }) {
+            XCTAssertEqual($0.localizedDescription, busyMessage)
+        }
+        model.perform { try $0.selectPlanPoint(point, request: request, elevation: elevation) }
+        XCTAssertEqual(model.error, busyMessage)
+        XCTAssertEqual(model.workflow!.draft, savingDraft)
+        XCTAssertEqual(model.workflow!.journal, journal); XCTAssertEqual(model.savingState, state)
+        gate.signal(); _ = try await save.value; store.beforeSave = nil
+        XCTAssertEqual(model.workflow!.draft, before); XCTAssertNil(model.error)
+
+        try model.performThrowing { try $0.selectPlanPoint(point, request: request, elevation: elevation) }
+        XCTAssertEqual(model.workflow!.draft.x, "2.5"); XCTAssertEqual(model.workflow!.draft.y, "1")
+        XCTAssertEqual(model.workflow!.draft.z, "-10"); XCTAssertEqual(model.workflow!.draft.zPlanGeometry, elevation)
+        // No proposed Z retains manual input; explicit DXF Z acceptance replaces it.
+        model.perform { $0.draft.z = "-12.125" }
+        try model.performThrowing { try $0.selectPlanPoint(point, planID: plan.id) }
+        XCTAssertEqual(model.workflow!.draft.z, "-12.125")
+        XCTAssertEqual(model.workflow!.draft.zOrigin, .manualOverride); XCTAssertNil(model.workflow!.draft.zPlanGeometry)
+        try model.performThrowing { try $0.selectPlanPoint(point, request: request, elevation: elevation) }
+        XCTAssertEqual(model.workflow!.draft.z, "-10")
+        XCTAssertEqual(model.workflow!.draft.zOrigin, .planGeometry); XCTAssertEqual(model.workflow!.draft.zPlanGeometry, elevation)
+    }
+
     private func encoded(_ journal: MappingJournal) throws -> Data {
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
         return try encoder.encode(journal)

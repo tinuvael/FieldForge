@@ -51,8 +51,10 @@ exercise two requests with the same old snapshot and verify no lost updates.
 
 The model exposes `idle`, `saving(id)`, `committed(id)` and `failed(id, message)`.
 No other durable command can start before the current result publishes, so an older
-completion cannot overwrite a newer UI snapshot. Capture/context/editor controls
-are disabled as necessary; the existing observation-success alert and actionable
+completion cannot overwrite a newer UI snapshot. Volatile UI callbacks use the
+same admission guard through `performThrowing`; refusal propagates to the point or
+geology editor rather than dismissing it as a successful acceptance.
+Capture/context/editor controls are disabled as necessary; the existing observation-success alert and actionable
 errors remain. Saving uses small text rather than adding a spinner to fast saves.
 
 ## Cancellation and attachment recovery
@@ -158,3 +160,10 @@ app build (the unrelated AppIntents metadata notice remains). Xcode generation w
 regenerated and checked deterministic. Full SwiftPM/Xcode/Simulator UI regression,
 physical-device/camera profiling, unrelated engineering/DXF audits and stress suites
 were deliberately skipped. No device journals or original assets were accessed.
+
+PR #65 admission review follow-up: the DXF request callback, plan fallback and
+geology acceptance callbacks now share the model's throwing volatile admission.
+One additional barrier-based test proves coordinate refusal during an in-flight
+save, unchanged draft/journal state and the existing XY/Z/manual-override acceptance
+rules after completion. Six affected tests and one generic iOS Simulator Debug
+build passed; no regression suite, benchmark or subagent review was run.

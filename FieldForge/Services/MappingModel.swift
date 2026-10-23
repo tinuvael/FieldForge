@@ -170,11 +170,16 @@ import Combine
             }
         } catch { self.error = "Не удалось открыть картирование. Запись заблокирована: \(error.localizedDescription)" }
     }
+    /// Volatile callbacks must propagate refusal so their editor stays open.
+    func performThrowing(_ action: (inout MappingWorkflow) throws -> Void) throws {
+        guard workflow != nil else { throw StorageError.writesBlocked }
+        guard !isSaving else { throw MappingError.invalid("Дождитесь завершения сохранения и повторите действие.") }
+        try action(&workflow!)
+    }
     /// Volatile edits only. Durable commands use awaited persist(_:).
     func perform(_ action: (inout MappingWorkflow) throws -> Void) {
         guard workflow != nil else { return }
-        guard !isSaving else { error = "Дождитесь завершения сохранения и повторите действие."; return }
-        do { try action(&workflow!) }
+        do { try performThrowing(action) }
         catch { self.error = error.localizedDescription }
     }
 }

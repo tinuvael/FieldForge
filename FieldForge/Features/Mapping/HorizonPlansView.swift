@@ -479,9 +479,8 @@ struct HorizonPlanView: View {
                     }
                     Button("Использовать точку") {
                         do {
-                            guard mapping.workflow != nil else { throw StorageError.writesBlocked }
                             if let onPointSelection { try onPointSelection(proposed, plan, elevationResolution.automatic) }
-                            else { try mapping.workflow!.selectPlanPoint(proposed, planID: plan.id, elevation: elevationResolution.automatic) }
+                            else { try mapping.performThrowing { try $0.selectPlanPoint(proposed, planID: plan.id, elevation: elevationResolution.automatic) } }
                             onSelection?()
                         } catch { self.error = error.localizedDescription }
                     }.buttonStyle(.borderedProminent).accessibilityIdentifier("confirmPlanXY")
