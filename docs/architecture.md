@@ -1,5 +1,10 @@
 # Architecture foundation (Phase 2)
 
+## B1a complete offline backup
+
+[Format 1 and consistency contract](backup-format-v1.md): the existing mapping FIFO owner reserves a committed generation and streams all durable originals/recovery files into temporary staging. The independent measurement store adds only synchronous access exclusion and read-only deployed-version inspection; its compatibility/save behavior stays intact. `OfflineBackup` uses the existing ZIP writer, and `BackupValidator` checks the generated ZIP without extraction or activation. Complete/incomplete status is independently derived from authoritative schema-8 graph validation, inventory hashes, UUID links, independent-journal coverage and pending operations. Hashing, ZIP writing and verification stay off MainActor. No additional database, restore path or primary tab is added.
+
+
 Current enterprise geotechnical extension: see [versioned SD, ROCK, field strength, JCond76, categorical GSI and three-sheet workbook](enterprise-geotechnical.md). Optional fields extend the shared schema-8 graph; no migration/reset or original-measurement journal change.
 
 ## Final field polish

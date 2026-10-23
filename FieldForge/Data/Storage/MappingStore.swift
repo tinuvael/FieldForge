@@ -27,6 +27,14 @@ final class FileMappingStore: MappingStore {
             return value
         } catch { blocked = true; throw error }
     }
+    /// Backup must use this owner's exact loaded generation, never reload/adopt an external edit.
+    func backupBytes(for journal: MappingJournal) throws -> Data? {
+        guard loaded, !blocked, try bytes() == loadedBytes else { throw StorageError.changedFile }
+        if let loadedBytes {
+            guard try JSONDecoder().decode(MappingJournal.self, from: loadedBytes) == journal else { throw StorageError.changedFile }
+        } else { guard journal == MappingJournal() else { throw StorageError.changedFile } }
+        return loadedBytes
+    }
     func save(_ journal: MappingJournal) throws {
         guard !blocked else { throw StorageError.writesBlocked }
         if !loaded { _ = try load() }

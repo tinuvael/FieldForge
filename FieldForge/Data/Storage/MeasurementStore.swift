@@ -19,6 +19,9 @@ enum StorageError: LocalizedError {
 }
 
 final class FileMeasurementStore: MeasurementStore {
+    // Serializes existing synchronous access with read-only backup capture.
+    // Recursive because save may invoke load; wire/migration behavior is unchanged.
+    static let fileAccess = NSRecursiveLock()
     static let schemaVersion = 2
     struct Envelope: Codable { var schemaVersion: Int; var measurements: [Measurement] }
     private struct Header: Decodable { var schemaVersion: Int }
@@ -58,6 +61,7 @@ final class FileMeasurementStore: MeasurementStore {
     }
 
     func load() throws -> [Measurement] {
+        Self.fileAccess.lock(); defer { Self.fileAccess.unlock() }
         do {
             let bytes = try currentBytes()
             guard let bytes else {
@@ -101,6 +105,7 @@ final class FileMeasurementStore: MeasurementStore {
         }
     }
     func save(_ measurements: [Measurement]) throws {
+        Self.fileAccess.lock(); defer { Self.fileAccess.unlock() }
         guard !writesBlocked else { throw StorageError.writesBlocked }
         if !hasLoaded { _ = try load() }
         try validate(measurements)
@@ -109,6 +114,25 @@ final class FileMeasurementStore: MeasurementStore {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: url, options: .atomic)
         loadedBytes = data
+    }
+    func backupSource() throws -> MeasurementBackupSource {
+        Self.fileAccess.lock(); defer { Self.fileAccess.unlock() }
+        guard hasLoaded, !writesBlocked else { throw StorageError.writesBlocked }
+        return MeasurementBackupSource(url: url, expectedBytes: loadedBytes)
+    }
+
+    /// Decode deployed versions without triggering migration, backups or live writes.
+    static func inspectBackup(_ bytes: Data) throws -> [Measurement] {
+        let decoder = JSONDecoder()
+        let version = try decoder.decode(Header.self, from: bytes).schemaVersion
+        let records: [Measurement]
+        switch version {
+        case 1: records = try decoder.decode(LegacyEnvelope.self, from: bytes).measurements.map(\.migrated)
+        case schemaVersion: records = try decoder.decode(Envelope.self, from: bytes).measurements
+        default: throw StorageError.unsupportedVersion
+        }
+        guard records.allSatisfy(\.isSavable), Set(records.map(\.id)).count == records.count else { throw StorageError.invalidRecord }
+        return records
     }
     private func currentBytes() throws -> Data? {
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }

@@ -37,6 +37,21 @@ final class MappingStorageOwner: @unchecked Sendable {
         }
     }
 
+    /// Queue reservation covers generation selection, source checks and all durable
+    /// attachment/recovery copying. Hashing/ZIP verification subsequently use staging.
+    func captureBackup(measurements: MeasurementBackupSource, photos: URL, plans: URL,
+                       cancellation: BackupCancellation, applicationVersion: String? = nil,
+                       parent: URL = FileManager.default.temporaryDirectory,
+                       didStageFile: @escaping @Sendable (String) throws -> Void = { _ in }) async throws -> BackupStaging {
+        try await run {
+            guard let file = self.store as? FileMappingStore, let committed = self.committed else { throw StorageError.writesBlocked }
+            let bytes = try file.backupBytes(for: committed.journal)
+            let sources = BackupSources(mapping: file.url, measurements: measurements.url, photos: photos, plans: plans)
+            return try OfflineBackup.capture(journal: committed.journal, mappingBytes: bytes, sources: sources,
+                measurements: measurements, cancellation: cancellation, applicationVersion: applicationVersion, parent: parent, didStageFile: didStageFile)
+        }
+    }
+
     /// Inputs capture volatile draft/context intent; mutations always start from the
     /// latest committed graph. Callers must await and reconcile every accepted result.
     func transaction<Value: Sendable>(snapshot: MappingWorkflow.Snapshot,
