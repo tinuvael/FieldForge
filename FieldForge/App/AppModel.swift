@@ -24,13 +24,14 @@ enum MeasurementMode: String, CaseIterable {
     var mock: MockSensorProvider? { provider as? MockSensorProvider }
     var displayed: Measurement? { session.displayed }
     var isHeld: Bool { session.isHeld }
-    var canSave: Bool { session.canSave && storageWritable }
+    @Published private(set) var backupInProgress = false
+    var canSave: Bool { session.canSave && storageWritable && !backupInProgress }
     var canHold: Bool { session.canHold() }
     var manualValidationMessage: String? {
         do { _ = try manualInput.validated(); return nil }
         catch { return error.localizedDescription }
     }
-    var canSaveManual: Bool { storageWritable && savedManual == nil && manualValidationMessage == nil }
+    var canSaveManual: Bool { storageWritable && !backupInProgress && savedManual == nil && manualValidationMessage == nil }
 
     init(captureOnly: Bool = false) {
         #if targetEnvironment(simulator)
@@ -62,6 +63,14 @@ enum MeasurementMode: String, CaseIterable {
         } catch { errorMessage = "Не удалось открыть журнал: \(error.localizedDescription) Запись заблокирована для сохранности файла." }
         acquisition.onChange = { [weak self] in self?.objectWillChange.send() }
     }
+
+    func beginBackup() throws -> MeasurementBackupSource {
+        guard !backupInProgress, let file = store as? FileMeasurementStore else { throw StorageError.writesBlocked }
+        let source = try file.backupSource()
+        backupInProgress = true
+        return source
+    }
+    func endBackup() { backupInProgress = false }
 
     func measurementScreenVisibilityChanged(_ visible: Bool) {
         measurementScreenVisible = visible
@@ -114,7 +123,7 @@ enum MeasurementMode: String, CaseIterable {
         manualInput = ManualOrientationInput(); manualNotes = ""; savedManual = nil
     }
     func delete(at offsets: IndexSet) {
-        guard storageWritable, let store else { return }
+        guard storageWritable, !backupInProgress, let store else { return }
         let updated = records.enumerated().filter { !offsets.contains($0.offset) }.map(\.element)
         do { try store.save(updated); records = updated }
         catch { errorMessage = "Не удалось удалить: \(error.localizedDescription)" }

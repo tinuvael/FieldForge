@@ -13,6 +13,7 @@ struct SettingsView: View {
             }
             Section("Датчики") { Text(model.provider.information) }
             Section("Обслуживание данных") {
+                NavigationLink("Резервное копирование", destination: BackupView())
                 DisclosureGroup("Дополнительно") {
                     NavigationLink("Независимое измерение", destination: MeasurementView())
                     NavigationLink("Исходный журнал измерений", destination: JournalView())
