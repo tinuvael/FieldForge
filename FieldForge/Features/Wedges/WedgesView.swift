@@ -17,8 +17,6 @@ struct WedgesView: View {
     @FocusState private var focusedField: InputField?
     private enum InputField: Hashable { case width, height, length }
     private enum DimensionTarget: String, Identifiable { case width, height; var id: String { rawValue } }
-    private var sources: [WedgeMappingSource] { mapping.workflow.map(WedgeMappingSource.available) ?? [] }
-    private var source: WedgeMappingSource? { sources.first { $0.id == sourceID } }
     private var dimensions: Result<WedgeDimensions, Error> {
         Result {
             guard let b = WedgeInput.number(width.text), let h = WedgeInput.number(height.text), let l = WedgeInput.number(length) else {
@@ -27,18 +25,21 @@ struct WedgesView: View {
             return try WedgeDimensions(width: b, height: h, length: l)
         }
     }
-    private var jointResult: Result<[WedgeJoint], Error> {
+    private func jointResult(source: WedgeMappingSource?) -> Result<[WedgeJoint], Error> {
         Result {
             guard let source else { throw MappingError.invalid("Выберите наблюдение картирования: текущий черновик или сохранённую точку в активной выработке.") }
             return try source.selectedJoints(selected, axisNorth: axisNorth)
         }
     }
     var body: some View {
+        let sources = mapping.workflow.map(WedgeMappingSource.available) ?? []
+        let source = sources.first { $0.id == sourceID }
+        let joints = jointResult(source: source)
         NavigationStack {
             Form {
                 geometrySection
-                jointsSection
-                sceneSection
+                jointsSection(sources: sources, source: source, result: joints)
+                sceneSection(joints: joints)
             }
             .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Клинья")
@@ -130,7 +131,7 @@ struct WedgesView: View {
                 Button("LiDAR") { axisFocused = false; focusedField = nil; distanceTarget = target }.buttonStyle(.borderless)
             }
     }
-    private var jointsSection: some View {
+    private func jointsSection(sources: [WedgeMappingSource], source: WedgeMappingSource?, result: Result<[WedgeJoint], Error>) -> some View {
         Section("Системы трещин") {
             if let workflow = mapping.workflow {
                 Text(contextTitle(workflow)).font(.caption).foregroundStyle(.secondary)
@@ -163,13 +164,13 @@ struct WedgesView: View {
                 }
                 Text("Выбрано: \(selected.count) из 3").font(.caption)
             }
-            if case .failure(let error) = jointResult { Text(error.localizedDescription).font(.caption).foregroundStyle(.orange) }
+            if case .failure(let error) = result { Text(error.localizedDescription).font(.caption).foregroundStyle(.orange) }
         }
     }
-    private var sceneSection: some View {
+    private func sceneSection(joints: Result<[WedgeJoint], Error>) -> some View {
         Section("3D-модель") {
             if case .success(let value) = dimensions {
-                WedgeSceneView(dimensions: value, planes: scenePlanes, axisAzimuth: WedgeInput.azimuth(axisText))
+                WedgeSceneView(dimensions: value, planes: scenePlanes(joints), axisAzimuth: WedgeInput.azimuth(axisText))
                     .frame(height: 350).listRowInsets(EdgeInsets())
                     .accessibilityLabel("Трёхцентровая выработка и схематические плоскости. Вращение пальцем, масштаб двумя пальцами.")
                 Text("Вращение пальцем · масштаб двумя пальцами").font(.caption)
@@ -185,8 +186,8 @@ struct WedgesView: View {
             } else { Text("Заполните допустимые B, H и L для построения выработки.") }
         }
     }
-    private var scenePlanes: [WedgeScenePlane] {
-        guard let axis = WedgeInput.azimuth(axisText), case .success(let joints) = jointResult else { return [] }
+    private func scenePlanes(_ result: Result<[WedgeJoint], Error>) -> [WedgeScenePlane] {
+        guard let axis = WedgeInput.azimuth(axisText), case .success(let joints) = result else { return [] }
         return joints.compactMap { joint in
             WedgePlaneGeometry.normal(input: joint.input, axis: axis).map { WedgeScenePlane(identifier: joint.identifier.rawValue, normal: $0) }
         }

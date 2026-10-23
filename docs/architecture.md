@@ -37,6 +37,42 @@ The [field interaction contract](field-ui-refinement.md) updates presentation wi
 **P1 implementation update:** [Mapping workflow and persistence](p1-mapping.md) describes the implemented project/horizon/multi-horizon-excavation/point graph, context/draft state machine, atomic JSON decision, immutable observations and protected legacy inbox. The Phase 2 descriptions and larger future schema below are historical/design context; they do not override P1's implemented scope.
 
 
+## A6 repository and presentation contracts
+
+[A6](architecture-a6.md) pairs a saved `MappingJournal` and its disposable read
+indexes in one immutable, checked-Sendable `MappingCommittedSnapshot`.
+`MappingWorkflow.Snapshot` transfers that generation together with volatile draft,
+parked-draft and pending-context values. The existing storage owner rebases both
+journal and indexes, and MainActor publication shares the generation only after the
+whole transaction succeeds. Draft changes never rebuild or modify committed data;
+successful journal changes replace the generation, including corrections and context
+or plan management. Failed commands retain the prior generation.
+
+```mermaid
+flowchart TD
+    UI[SwiftUI screens: temporary editing and navigation] --> Model[MappingModel: MainActor admission and publication]
+    Model --> Owner[MappingStorageOwner: private FIFO executor]
+    Owner --> Workflow[MappingWorkflow: synchronous domain commands and context transitions]
+    Workflow --> Buffer[Private transaction buffer]
+    Owner --> Store[MappingStore: authoritative schema-8 durable save]
+    Owner --> Snapshot[MappingWorkflow.Snapshot: immutable committed generation and volatile values]
+    Snapshot --> Model
+    Model --> Presentation[Write-refusing presentation workflow]
+    Presentation --> Reads[Indexed committed observations, revisions and UUID lookups]
+    Reads --> UI
+```
+
+The existing `MappingStore` protocol remains the synchronous persistence boundary;
+production screens need no additional `ProjectRepository` protocol or persistence
+coordinator. `MappingWorkflow` owns domain commands on the FIFO executor and
+admitted volatile edits on MainActor; it never runs concurrently as a shared mutable
+object. Read indexes are built off main in production workflow load/commit, retained
+with their exact journal, and excluded from Codable/schema 8. Journal filters,
+per-plan overlays and Wedges sources are computed once per body evaluation from
+that generation; inexpensive screen controls remain local. Export retains its own
+committed generation at opening. Full history and export serialization keep their
+existing domain APIs. Engineering services remain Foundation-only.
+
 ## A4 off-main serialized storage
 
 [The A4 contract](storage-concurrency-a4.md) supersedes synchronous mapping storage

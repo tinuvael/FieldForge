@@ -13,7 +13,7 @@ struct MappingJournalView: View {
         var effective = query
         effective.startDate = datesEnabled ? fromDate : nil
         effective.endDate = datesEnabled ? throughDate : nil
-        return effective.apply(mapping.workflow?.journal.effectiveObservations ?? [], projectID: projectID)
+        return effective.apply(mapping.workflow?.observations ?? [], projectID: projectID)
     }
     private var horizons: [MappingHorizon] { mapping.workflow?.horizons ?? [] }
     private var excavations: [MappingExcavation] {
@@ -22,9 +22,10 @@ struct MappingJournalView: View {
         }
     }
     var body: some View {
+        let observations = self.observations
         List {
             Section {
-                Text(mapping.workflow?.journal.projects.first { $0.id == projectID }?.name ?? "Выберите проект в картировании")
+                Text(projectID.flatMap { mapping.workflow?.committed.projects[$0]?.name } ?? "Выберите проект в картировании")
                     .font(.headline)
                 Button { scope = .horizon } label: {
                     LabeledContent("Горизонт", value: horizons.first { $0.id == query.horizonID }?.displayName ?? "Все горизонты")
@@ -43,14 +44,14 @@ struct MappingJournalView: View {
                     query = MappingJournalQuery(); datesEnabled = false
                 }.accessibilityIdentifier("journalClearFilters")
             }
-            Section("Наблюдения: \(observations.count) из \(mapping.workflow?.observations.count ?? 0)") {
+            Section("Наблюдения: \(observations.count) из \(mapping.workflow?.committed.observationCount(projectID: projectID) ?? 0)") {
                 if observations.isEmpty { Text("Нет наблюдений по выбранным условиям").accessibilityIdentifier("journalEmpty") }
                 ForEach(observations) { record in
                     NavigationLink { MappingObservationDetail(record: record) } label: {
                         VStack(alignment: .leading, spacing: 6) {
                             Text(name(excavation: record.excavationID)).font(.headline)
                             Text(record.displayPicket).font(.subheadline)
-                            if let revision = mapping.workflow?.journal.history(for: record.id).last {
+                            if let revision = mapping.workflow?.committed.latestRevisions[record.id] {
                                 Text("Версия \(revision.version) · исправлено \(MappingCorrectionDateText.format(revision.correctedAt))").font(.caption)
                             }
                             Text("\(MappingDateText.compact(record)) · \(name(horizon: record.horizonID))").font(.caption).foregroundStyle(.secondary)
@@ -61,8 +62,8 @@ struct MappingJournalView: View {
         }.accessibilityIdentifier("journalObservations")
             .navigationTitle("Журнал проекта")
             .toolbar {
-                if let journal = mapping.workflow?.journal {
-                    NavigationLink { MappingExportView(journal: journal, projectID: projectID) } label: {
+                if let committed = mapping.workflow?.committed {
+                    NavigationLink { MappingExportView(committed: committed, projectID: projectID) } label: {
                         Label("Выгрузка", systemImage: "square.and.arrow.up")
                     }.accessibilityIdentifier("mappingExportAction")
                 }
@@ -82,8 +83,8 @@ struct MappingJournalView: View {
                 }
             }
     }
-    private func name(horizon: UUID) -> String { mapping.workflow?.journal.horizons.first { $0.id == horizon }?.displayName ?? horizon.uuidString }
-    private func name(excavation: UUID) -> String { mapping.workflow?.journal.excavations.first { $0.id == excavation }?.name ?? excavation.uuidString }
+    private func name(horizon: UUID) -> String { mapping.workflow?.committed.horizons[horizon]?.displayName ?? horizon.uuidString }
+    private func name(excavation: UUID) -> String { mapping.workflow?.committed.excavations[excavation]?.name ?? excavation.uuidString }
 }
 
 private enum JournalScope: String, Identifiable {
@@ -168,9 +169,11 @@ struct MappingObservationDetail: View {
     init(record: MappingObservation, historical: Bool = false, historicalVersion: Int? = nil) {
         snapshot = record; self.historical = historical; self.historicalVersion = historicalVersion
     }
-    private var excavationName: String { mapping.workflow?.journal.excavations.first { $0.id == record.excavationID }?.name ?? "Выработка" }
-    private var record: MappingObservation { historical ? snapshot : (mapping.workflow?.journal.effectiveObservation(id: snapshot.id) ?? snapshot) }
+    private var excavationName: String { mapping.workflow?.committed.excavations[record.excavationID]?.name ?? "Выработка" }
+    private var record: MappingObservation { historical ? snapshot : (mapping.workflow?.committed.observation(id: snapshot.id) ?? snapshot) }
     var body: some View {
+        let record = self.record
+        let measurements = mapping.workflow?.committed.measurements(for: record) ?? []
         List {
             Section {
                 Text(excavationName).font(.title2.bold())
@@ -186,16 +189,16 @@ struct MappingObservationDetail: View {
                     }.accessibilityIdentifier("editMappingObservation")
                     NavigationLink("История изменений") { MappingRevisionHistory(observationID: record.id) }
                         .accessibilityIdentifier("mappingRevisionHistory")
-                    if let revision = mapping.workflow?.journal.history(for: record.id).last {
+                    if let revision = mapping.workflow?.committed.latestRevisions[record.id] {
                         Text("Версия \(revision.version) · исправлено \(MappingCorrectionDateText.format(revision.correctedAt))")
                             .font(.caption).accessibilityIdentifier("mappingRevisionBadge")
                     } else { Text("Версия 1 · исходное наблюдение").font(.caption) }
                 }
             }
             Section(historical ? "Исторический снимок · только просмотр" : "Наблюдение · актуальная версия") {
-                LabeledContent("Проект", value: mapping.workflow?.journal.projects.first { $0.id == record.projectID }?.name ?? record.projectID.uuidString)
-                LabeledContent("Горизонт", value: mapping.workflow?.journal.horizons.first { $0.id == record.horizonID }?.displayName ?? record.horizonID.uuidString)
-                LabeledContent("Выработка", value: mapping.workflow?.journal.excavations.first { $0.id == record.excavationID }?.name ?? record.excavationID.uuidString)
+                LabeledContent("Проект", value: mapping.workflow?.committed.projects[record.projectID]?.name ?? record.projectID.uuidString)
+                LabeledContent("Горизонт", value: mapping.workflow?.committed.horizons[record.horizonID]?.displayName ?? record.horizonID.uuidString)
+                LabeledContent("Выработка", value: mapping.workflow?.committed.excavations[record.excavationID]?.name ?? record.excavationID.uuidString)
                 LabeledContent("Пикет", value: record.displayPicket)
                 LabeledContent("Метры", value: EngineeringDisplay.number(record.chainageMeters))
                 LabeledContent("Начало / направление", value: record.chainageOriginAndDirection == "unknown" ? "Неизвестно" : record.chainageOriginAndDirection)
@@ -229,14 +232,14 @@ struct MappingObservationDetail: View {
             if let rock = record.rock { Section("Литология") { LabeledContent("ROCK", value: rock.code); if let name = rock.name { Text(name) } } }
             if !historical { ObservationPhotosSection(pointID: record.id) }
             Section("Исходные замеры: \(record.measurementIDs.count)") {
-                ForEach(mapping.workflow?.journal.measurements(for: record) ?? []) { reading in
+                ForEach(measurements) { reading in
                     NavigationLink { MeasurementDetailView(record: reading) } label: { MeasurementSummary(reading: reading) }
                         .accessibilityIdentifier("pointMeasurement-\(reading.id.uuidString)")
                 }
                 if record.measurementIDs.isEmpty { Text("Замеры не добавлены") }
             }
             if let geology = record.geology {
-                MappingGeologyDetail(geology: geology, measurements: mapping.workflow?.journal.measurements(for: record) ?? [])
+                MappingGeologyDetail(geology: geology, measurements: measurements)
             }
             MappingRatingsDetail(ratings: record.ratings)
             Section("Примечания") { Text(record.notes.isEmpty ? "Нет примечаний" : record.notes) }

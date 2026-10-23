@@ -13,7 +13,7 @@ final class MappingStorageOwner: @unchecked Sendable {
     // All mutable state below is accessed only inside a synchronous queue block.
     // A store passed at initialization is handed off before any block is submitted.
     private var store: (any MappingStore)?
-    private var committed: MappingJournal?
+    private var committed: MappingCommittedSnapshot?
 
     init(store: (any MappingStore)? = nil) { self.store = store }
 
@@ -32,7 +32,7 @@ final class MappingStorageOwner: @unchecked Sendable {
             let store = makeStore()
             let workflow = try MappingWorkflow(store: store)
             self.store = store
-            self.committed = workflow.journal
+            self.committed = workflow.committed
             return workflow.snapshot
         }
     }
@@ -42,17 +42,17 @@ final class MappingStorageOwner: @unchecked Sendable {
     func transaction<Value: Sendable>(snapshot: MappingWorkflow.Snapshot,
                             _ action: @escaping @Sendable (inout MappingWorkflow) throws -> Value) async throws -> (MappingWorkflow.Snapshot, Value) {
         try await run {
-            let base = self.committed ?? snapshot.journal
-            let buffer = MappingTransactionBuffer(base)
+            let base = self.committed ?? snapshot.committed
+            let buffer = MappingTransactionBuffer(base.journal)
             guard let file = self.store else { throw StorageError.writesBlocked }
             var next = MappingWorkflow(snapshot: snapshot, store: buffer)
-            next.prepareTransaction(journal: base, store: buffer)
+            next.prepareTransaction(committed: base, store: buffer)
             let value = try action(&next)
             // Workflow commits are buffered until the entire synchronous command
             // succeeds. Even a command that throws after commit() cannot leave disk
             // ahead of the published result. Exactly one atomic save per command.
             if buffer.changed { try file.save(next.journal) }
-            self.committed = next.journal
+            self.committed = next.committed
             return (next.snapshot, value)
         }
     }

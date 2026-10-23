@@ -361,7 +361,7 @@ struct HorizonPlanView: View {
     @State private var reviewedUnits = PlanUnits.unknown
     @State private var error: String?
     private var points: [MappingObservation] { mapping.workflow?.points(on: plan, excavationID: filter, restrictToSelection: selecting && onPointSelection == nil) ?? [] }
-    private func canvasDescription(_ viewport: PlanViewport) -> String {
+    private func canvasDescription(_ viewport: PlanViewport, points: [MappingObservation]) -> String {
         let visibleMarkers = points.filter { record in
             guard let x = record.coordinates?.x, let y = record.coordinates?.y else { return false }
             return viewport.containsScreenPoint(viewport.screen(PlanPoint(x: x, y: y)))
@@ -399,6 +399,7 @@ struct HorizonPlanView: View {
     }
 
     var body: some View {
+        let points = self.points
         VStack(spacing: 0) {
             GeometryReader { geometry in
                 let viewport = PlanViewport(bounds: drawing.bounds, width: geometry.size.width, height: geometry.size.height,
@@ -443,7 +444,7 @@ struct HorizonPlanView: View {
                 }.background(Color(uiColor: .secondarySystemBackground))
                     .contentShape(Rectangle()).accessibilityIdentifier("planCanvas")
                     .accessibilityLabel("План. Синие точки — журнал, оранжевая — новая точка")
-                    .accessibilityValue(canvasDescription(viewport))
+                    .accessibilityValue(canvasDescription(viewport, points: points))
                     .gesture(DragGesture(minimumDistance: 5).updating($drag) { value, state, _ in state = value.translation }
                         .onEnded { pan.width += $0.translation.width; pan.height += $0.translation.height })
                     .simultaneousGesture(MagnificationGesture().updating($magnification) { value, state, _ in state = value }
