@@ -167,7 +167,7 @@ private struct DraftPhotoImage: View {
         }.frame(maxHeight: maximumPixels == 400 ? 110 : 1000)
             .task(id: operation.id) {
                 do {
-                    let bytes = try mapping.draftPhotoData(operation)
+                    let bytes = try await mapping.draftPhotoData(operation)
                     let limit = maximumPixels
                     let cg = try await Task.detached { () throws -> CGImage in
                         guard let source = CGImageSourceCreateWithData(bytes as CFData, nil),

@@ -14,9 +14,11 @@ struct PhotoImportOperation: Codable, Equatable, Identifiable {
     }
 }
 
-/// One serialized writer (MappingModel). Every accepted image has an intent BEFORE any byte write.
+/// Mutations are confined to MappingStorageOwner in the application. Every accepted image has an intent BEFORE any byte write.
 /// Originals and operation manifests are never cleaned up implicitly. Thumbnails are disposable.
-final class ManagedPhotoStore {
+// Immutable root; all filesystem mutations are serialized by MappingStorageOwner.
+// The failure-injection checkpoint is configured only by tests while operations are idle.
+final class ManagedPhotoStore: @unchecked Sendable {
     static let maximumBytes = 100_000_000
     enum Checkpoint { case intent, staging, promotion, thumbnail }
     let root: URL

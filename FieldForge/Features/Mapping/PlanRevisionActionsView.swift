@@ -73,7 +73,7 @@ struct PlanRevisionActionsView: View {
                     }.disabled((request.action == .move && target == nil) || (needsReplacement && replacementID == nil))
                         .accessibilityIdentifier("applyPlanAction")
                 }
-            }.navigationTitle(title).navigationBarTitleDisplayMode(.inline)
+            }.disabled(mapping.isSaving).navigationTitle(title).navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Отмена") { dismiss() } } }
                 .alert("Удалить неиспользуемую ревизию?", isPresented: $confirmingDelete) {
                     Button("Удалить", role: .destructive) { apply(.delete) }
@@ -83,10 +83,10 @@ struct PlanRevisionActionsView: View {
     }
     private func horizonName(_ id: UUID) -> String { mapping.workflow?.journal.horizons.first { $0.id == id }?.displayName ?? "Неизвестно" }
     private func apply(_ action: PlanManagementChange.Action) {
-        do {
-            try mapping.managePlan(plan, action: action, targetHorizonID: action == .move ? target : nil,
+        Task { do {
+            try await mapping.managePlan(plan, action: action, targetHorizonID: action == .move ? target : nil,
                                    replacement: alternatives.first { $0.id == replacementID })
             dismiss()
-        } catch { self.error = error.localizedDescription }
+        } catch { self.error = error.localizedDescription } }
     }
 }

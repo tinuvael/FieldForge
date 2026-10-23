@@ -16,6 +16,8 @@ struct MappingView: View {
             Group {
                 if let workflow = mapping.workflow {
                     capture(workflow)
+                } else if mapping.loading {
+                    ProgressView("Открытие журнала…")
                 } else {
                     ContentUnavailableView("Журнал недоступен", systemImage: "exclamationmark.triangle",
                                            description: Text("Исходные данные сохранены. Проверьте файл журнала перед повторным запуском."))
@@ -69,7 +71,7 @@ struct MappingView: View {
         .alert("Отложить черновик и перейти?", isPresented: Binding(
             get: { mapping.workflow?.pendingContext != nil },
             set: { if !$0 { mapping.perform { $0.cancelContextChange() } } })) {
-                Button("Отложить и перейти") { mapping.perform { try $0.preserveAndSwitch() } }
+                Button("Отложить и перейти") { Task { do { try await mapping.persist { try $0.preserveAndSwitch() } } catch { mapping.error = error.localizedDescription } } }
                 Button("Остаться", role: .cancel) { mapping.perform { $0.cancelContextChange() } }
             } message: { Text("Вернитесь в этот проект и горизонт, чтобы продолжить. Черновик и фотографии сохраняются в памяти до закрытия приложения.") }
     }
@@ -79,12 +81,14 @@ struct MappingView: View {
     }
     private func context(_ key: WritableKeyPath<MappingContext, UUID?>) -> Binding<UUID?> {
         Binding(get: { mapping.workflow?.context[keyPath: key] }, set: { value in
-            mapping.perform { workflow in
-                guard workflow.context[keyPath: key] != value else { return }
-                var next = workflow.context; next[keyPath: key] = value
-                if key == \MappingContext.projectID { next.horizonID = nil; next.excavationID = nil }
-                if key == \MappingContext.horizonID { next.excavationID = nil }
-                try workflow.requestContext(next)
+            guard let current = mapping.workflow?.context, current[keyPath: key] != value else { return }
+            var next = current; next[keyPath: key] = value
+            if key == \MappingContext.projectID { next.horizonID = nil; next.excavationID = nil }
+            if key == \MappingContext.horizonID { next.excavationID = nil }
+            let requested = next
+            Task {
+                do { try await mapping.persist { try $0.requestContext(requested) } }
+                catch { mapping.error = error.localizedDescription }
             }
         })
     }
@@ -143,19 +147,14 @@ struct MappingView: View {
                 Section {
                     Button {
                         focused = false
-                        if w.draft.photos.isEmpty {
-                            // Preserve the existing synchronous field-only save/focus transition.
-                            mapping.perform { _ = try $0.save(); mapping.success = true }
-                        } else {
-                            let id = w.draft.id
-                            Task { await mapping.saveDraft(id: id) }
-                        }
+                        let id = w.draft.id
+                        Task { await mapping.saveDraft(id: id) }
                     } label: {
                         Text("Сохранить наблюдение").font(.headline).frame(maxWidth: .infinity, minHeight: 44)
                     }.buttonStyle(.borderedProminent).accessibilityIdentifier("saveMappingObservation")
                         .disabled(!w.draft.photoSessions.isEmpty || mapping.photoBusy)
                     if !w.draft.photoSessions.isEmpty { Text("Дождитесь завершения выбора и получения всех фотографий.").font(.caption) }
-                    if w.draft.saving { ProgressView("Сохранение наблюдения и фотографий…") }
+                    if mapping.isSaving { Text("Сохранение…").font(.caption).foregroundStyle(.secondary) }
                 }
             }.scrollDismissesKeyboard(.interactively)
                 // A new draft also needs a fresh Form/focus/presentation lifetime.
@@ -225,7 +224,7 @@ struct ContextEditor: View {
                         }
                     }
                     Button(editingID == nil ? "Создать" : "Сохранить изменения") { save() }
-                        .accessibilityIdentifier("saveContext")
+                        .accessibilityIdentifier("saveContext").disabled(mapping.isSaving)
                     if editingID != nil { Button("Новая запись") { editingID = nil; name = ""; elevation = ""; datum = "неизвестно"; error = nil } }
                     if let error { Text(error).foregroundStyle(.red) }
                 }
@@ -242,7 +241,7 @@ struct ContextEditor: View {
                         }
                     }
                 }
-            }.navigationTitle(kind.title)
+            }.disabled(mapping.isSaving).navigationTitle(kind.title)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("Закрыть") { dismiss() } }
                     ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Готово") { inputFocused = false } }
@@ -266,25 +265,27 @@ struct ContextEditor: View {
         if let e = mapping.workflow?.journal.excavations.first(where: { $0.id == id }) { horizonIDs = e.horizonIDs }
     }
     private func save() {
-        guard mapping.workflow != nil else { return }
-        do {
-            // Never select a newly created item implicitly: context changes go through the draft guard.
-            switch kind {
-            case .project:
-                if let editingID { try mapping.workflow!.updateProject(id: editingID, name: name) }
-                else { try mapping.workflow!.createProject(name: name) }
-            case .horizon:
-                if let editingID { try mapping.workflow!.updateHorizon(id: editingID, elevation: elevation, datum: datum) }
-                else {
-                    let id = try mapping.workflow!.createHorizon(elevation: elevation, datum: datum)
-                    load(id)
+        let kind = kind, editingID = editingID, name = name, elevation = elevation, datum = datum, horizonIDs = horizonIDs
+        Task {
+            do {
+                let created: UUID? = try await mapping.persist { workflow in
+                    switch kind {
+                    case .project:
+                        if let editingID { try workflow.updateProject(id: editingID, name: name) }
+                        else { _ = try workflow.createProject(name: name) }
+                    case .horizon:
+                        if let editingID { try workflow.updateHorizon(id: editingID, elevation: elevation, datum: datum) }
+                        else { return try workflow.createHorizon(elevation: elevation, datum: datum) }
+                    case .excavation:
+                        if let editingID { try workflow.updateExcavation(id: editingID, name: name, horizonIDs: horizonIDs) }
+                        else { _ = try workflow.createExcavation(name: name, horizonIDs: horizonIDs) }
+                    }
+                    return nil
                 }
-            case .excavation:
-                if let editingID { try mapping.workflow!.updateExcavation(id: editingID, name: name, horizonIDs: horizonIDs) }
-                else { try mapping.workflow!.createExcavation(name: name, horizonIDs: horizonIDs) }
-            }
-            if kind != .horizon { dismiss() }
-        } catch { self.error = error.localizedDescription }
+                if let created { load(created) }
+                if kind != .horizon { dismiss() }
+            } catch { self.error = error.localizedDescription }
+        }
     }
 }
 

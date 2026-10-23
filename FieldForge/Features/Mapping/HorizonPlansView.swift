@@ -12,6 +12,7 @@ struct HorizonPlansView: View {
     @State private var management: PlanRevisionActionRequest?
     @State private var importing = false
     @State private var prepared: PreparedPlanImport?
+    @State private var sourceRecovery: MappingPlanReference?
     @State private var error: String?
     @State private var pending: [MappingPlanReference] = []
     @State private var busy = false
@@ -88,11 +89,14 @@ struct HorizonPlansView: View {
                 if plans.isEmpty { Text(showingArchive ? "Архив этого горизонта пуст" : "На этом горизонте пока нет DXF") }
             }
             if !pending.isEmpty {
-                Section("Незавершённые импорты · оригиналы сохранены") {
+                Section("Незавершённые импорты · файлы не удалены") {
                     ForEach(pending) { plan in
                         Button("Восстановить: \(plan.file?.originalFilename ?? plan.id.uuidString) · \(plan.version)") {
                             recover(plan)
                         }
+                        Button("Выбрать тот же исходный DXF для восстановления") {
+                            sourceRecovery = plan; importing = true
+                        }.font(.caption)
                     }
                 }
             }
@@ -103,28 +107,33 @@ struct HorizonPlansView: View {
         }.accessibilityIdentifier("planRevisionList").navigationTitle("Планы горизонта")
             .fileImporter(isPresented: $importing, allowedContentTypes: [UTType(filenameExtension: "dxf") ?? .data]) { result in
                 switch result {
-                case .success(let url): prepare(url)
-                case .failure(let failure): error = failure.localizedDescription
+                case .success(let url):
+                    let recovery = sourceRecovery; sourceRecovery = nil
+                    prepare(url, recovering: recovery)
+                case .failure(let failure): sourceRecovery = nil; error = failure.localizedDescription
                 }
             }
             .sheet(item: $prepared, onDismiss: refreshPending) { item in
                 PlanImportSetup(item: item, horizonName: horizonName(item.horizonID), previousPlan: mapping.activePlan(for: item.horizonID), existingVersions: ((mapping.workflow?.journal.plans ?? []) + pending).filter { $0.horizonID == item.horizonID && !$0.isDeleted }.map(\.version), stage: { units, version, crs, axes, confirmation in
                     guard let files = mapping.planStore else { throw StorageError.writesBlocked }
-                    try PlanRevisionNumber.validateNew(version, existing: ((mapping.workflow?.journal.plans ?? []) + pending).filter { $0.horizonID == item.horizonID && !$0.isDeleted }.map(\.version))
-                    let preview = MappingPlanReference(id: UUID(), horizonID: item.horizonID, attachmentID: UUID(), version: version,
-                        file: ManagedPlanFile(originalFilename: item.filename, sha256: ManagedPlanStore.digest(item.data), byteCount: item.data.count,
-                            importedAt: Date(), units: units, crs: crs.isEmpty ? "unknown" : crs, axes: axes.isEmpty ? "unknown" : axes,
-                            unitDeclaration: PlanUnits.declared(by: item.drawing.insertionUnits) == units ? "dxfINSUNITS" : "userConfirmedAtImport", insertionUnits: item.drawing.insertionUnits), frameConfirmation: confirmation)
-                    try PlanCoordinateCompatibility.validate((mapping.workflow?.journal.plans ?? []) + [preview])
-                    return try await Task.detached(priority: .userInitiated) {
-                        try files.stage(data: item.data, filename: item.filename, horizonID: item.horizonID,
-                                        version: version, units: units, crs: crs, axes: axes, frameConfirmation: confirmation)
-                    }.value
+                    let knownPlans = ((mapping.workflow?.journal.plans ?? []) + pending).filter { $0.id != item.id }
+                    let data = item.data, filename = item.filename, horizon = item.horizonID
+                    let id = item.id, importedAt = item.importedAt, insertionUnits = item.drawing.insertionUnits
+                    return try await mapping.storage.run {
+                        try PlanRevisionNumber.validateNew(version, existing: knownPlans.filter { $0.horizonID == horizon && !$0.isDeleted }.map(\.version))
+                        let preview = MappingPlanReference(id: id, horizonID: horizon, attachmentID: id, version: version,
+                            file: ManagedPlanFile(originalFilename: filename, sha256: ManagedPlanStore.digest(data), byteCount: data.count,
+                                importedAt: importedAt, units: units, crs: crs.isEmpty ? "unknown" : crs, axes: axes.isEmpty ? "unknown" : axes,
+                                unitDeclaration: PlanUnits.declared(by: insertionUnits) == units ? "dxfINSUNITS" : "userConfirmedAtImport", insertionUnits: insertionUnits), frameConfirmation: confirmation)
+                        try PlanCoordinateCompatibility.validate(knownPlans + [preview])
+                        return try files.stage(data: data, filename: filename, horizonID: horizon,
+                            version: version, units: units, crs: crs, axes: axes, frameConfirmation: confirmation,
+                            id: id, attachmentID: id, importedAt: importedAt)
+                    }
                 }, register: { plan in
                     // Import context was frozen at file selection, independent of subsequent navigation.
-                    guard mapping.workflow != nil else { throw StorageError.writesBlocked }
-                    try mapping.workflow!.registerPlan(plan)
-                    mapping.planStore?.complete(plan); mapping.selectActivePlanIfUnset(plan); refreshPending()
+                    try await mapping.registerPlan(plan)
+                    mapping.selectActivePlanIfUnset(plan); refreshPending()
                 })
             }
             .sheet(item: $management) { PlanRevisionActionsView(request: $0) }
@@ -136,13 +145,14 @@ struct HorizonPlansView: View {
     }
     private func horizonName(_ id: UUID) -> String { mapping.workflow?.journal.horizons.first { $0.id == id }?.displayName ?? "Неизвестно" }
     private func refreshPending() {
-        do {
-            let items = try mapping.planStore?.pending() ?? []
-            for plan in items where mapping.workflow?.journal.plans.contains(where: { $0.matchesImport(plan) }) == true { mapping.planStore?.complete(plan) }
-            pending = items.filter { plan in
-                plan.horizonID == effectiveHorizonID && mapping.workflow?.journal.plans.contains(where: { $0.matchesImport(plan) }) != true
-            }
-        } catch { self.error = "Не удалось прочитать журнал импорта: \(error.localizedDescription). Файлы сохранены." }
+        Task {
+            do {
+                let items = try await mapping.pendingPlans()
+                pending = items.filter { plan in
+                    plan.horizonID == effectiveHorizonID && mapping.workflow?.journal.plans.contains(where: { $0.matchesImport(plan) }) != true
+                }
+            } catch { self.error = "Не удалось прочитать журнал импорта: \(error.localizedDescription). Файлы сохранены." }
+        }
     }
     private func prepare(data: Data, filename: String, horizonID: UUID) {
         busy = true
@@ -161,14 +171,12 @@ struct HorizonPlansView: View {
         Task {
             defer { busy = false }
             do {
-                guard let files = mapping.planStore, mapping.workflow != nil else { throw StorageError.writesBlocked }
-                _ = try await Task.detached(priority: .userInitiated) { try DXFDocument.parse(files.read(plan)) }.value
-                try mapping.workflow!.registerPlan(plan); files.complete(plan); refreshPending()
+                try await mapping.registerPlan(plan); refreshPending()
             } catch { self.error = error.localizedDescription }
         }
     }
-    private func prepare(_ url: URL) {
-        guard let horizonID = effectiveHorizonID else { return }
+    private func prepare(_ url: URL, recovering: MappingPlanReference? = nil) {
+        guard let horizonID = recovering?.horizonID ?? effectiveHorizonID else { return }
         busy = true
         Task {
             do {
@@ -189,7 +197,13 @@ struct HorizonPlansView: View {
                     return try PreparedPlanImport(id: UUID(), horizonID: horizonID, filename: url.lastPathComponent,
                                                   data: data, drawing: DXFDocument.parse(data))
                 }.value
-                prepared = item
+                if let recovering {
+                    guard let files = mapping.planStore else { throw StorageError.writesBlocked }
+                    let bytes = item.data
+                    try await mapping.storage.run { try files.supply(bytes, for: recovering) }
+                    try await mapping.registerPlan(recovering)
+                    refreshPending()
+                } else { prepared = item }
             } catch { self.error = error.localizedDescription }
             busy = false
         }
@@ -201,6 +215,7 @@ struct PreparedPlanImport: Identifiable {
     let filename: String
     let data: Data
     let drawing: DXFDocument
+    let importedAt = Date()
 }
 
 private struct PlanImportSetup: View {
@@ -209,7 +224,7 @@ private struct PlanImportSetup: View {
     let previousPlan: MappingPlanReference?
     let existingVersions: [String]
     let stage: (PlanUnits, String, String, String, PlanFrameConfirmation?) async throws -> MappingPlanReference
-    let register: (MappingPlanReference) throws -> Void
+    let register: (MappingPlanReference) async throws -> Void
     @Environment(\.dismiss) private var dismiss
     @FocusState private var inputFocused: Bool
     @State private var staged: MappingPlanReference?
@@ -281,7 +296,7 @@ private struct PlanImportSetup: View {
                                 staged = try await stage(units, version, crs, axes, confirmation)
                             }
                             guard let staged else { throw StorageError.invalidRecord }
-                            try register(staged); dismiss()
+                            try await register(staged); dismiss()
                         } catch { self.error = error.localizedDescription }
                     }
                 }.disabled(busy || !confirmedHorizon || units == .unknown).accessibilityIdentifier("savePlanImport")
@@ -374,12 +389,12 @@ struct HorizonPlanView: View {
                 Text("Миллиметры").tag(PlanUnits.millimeters)
             }.accessibilityIdentifier("reviewPlanZUnits")
             Button("Подтвердить единицы для Z") {
-                do {
-                    guard mapping.workflow != nil else { throw StorageError.writesBlocked }
-                    try mapping.workflow!.confirmPlanElevationUnits(plan.id, units: reviewedUnits)
+                let units = reviewedUnits
+                Task { do {
+                    try await mapping.persist { try $0.confirmPlanElevationUnits(plan.id, units: units) }
                     // Loader supplies the updated plan; onChange recalculates the existing tap.
-                } catch { self.error = error.localizedDescription }
-            }.disabled(reviewedUnits == .unknown).accessibilityIdentifier("confirmPlanZUnits")
+                } catch { self.error = error.localizedDescription } }
+            }.disabled(mapping.isSaving || reviewedUnits == .unknown).accessibilityIdentifier("confirmPlanZUnits")
         }
     }
 

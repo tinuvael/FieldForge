@@ -74,6 +74,7 @@ struct MappingExportView: View {
                 }
             }.disabled(busy || sharing)
             Section {
+                Text("Подтверждённый снимок журнала при открытии выгрузки. Незавершённые сохранения не включены.").font(.caption).foregroundStyle(.secondary)
                 Text("Наблюдений: \(selectedCount)").accessibilityIdentifier("mappingExportPointCount")
                 Button(format == .enterpriseGeotechnical ? "Экспортировать по регламенту" : format == .xlsx ? "Экспортировать Excel" : format == .csv ? "Экспортировать CSV" : "Экспортировать фотографии ZIP") {
                     if let preview { shareOrConfirm(preview) } else { prepare(shareWhenReady: true) }

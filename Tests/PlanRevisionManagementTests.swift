@@ -194,18 +194,18 @@ final class PlanRevisionManagementTests: XCTestCase {
         XCTAssertEqual(model.activePlan(for: a.horizonID)?.id, a.id)
         let relaunched = MappingModel(workflow: model.workflow!, photoStore: photoStore, preferences: prefs)
         XCTAssertEqual(relaunched.activePlan(for: a.horizonID)?.id, a.id)
-        XCTAssertThrowsError(try model.managePlan(a, action: .delete))
-        try model.managePlan(a, action: .delete, replacement: b)
+        do { try await model.managePlan(a, action: .delete); XCTFail("Replacement required") } catch { }
+        try await model.managePlan(a, action: .delete, replacement: b)
         XCTAssertEqual(model.activePlan(for: a.horizonID)?.id, b.id)
         XCTAssertFalse(model.plans(for: a.horizonID).contains { $0.id == a.id })
-        try model.managePlan(c, action: .archive)
+        try await model.managePlan(c, action: .archive)
         XCTAssertEqual(model.plans(for: a.horizonID, archived: true).map(\.id), [c.id])
         XCTAssertEqual(model.plans(for: a.horizonID).map(\.id), [b.id])
-        let target = try model.workflow!.createHorizon(elevation: "400")
-        try model.managePlan(b, action: .move, targetHorizonID: target)
+        let target = try await model.persist { try $0.createHorizon(elevation: "400") }
+        try await model.managePlan(b, action: .move, targetHorizonID: target)
         XCTAssertTrue(model.plans(for: a.horizonID).isEmpty)
         XCTAssertEqual(model.plans(for: target).map(\.id), [b.id]); XCTAssertNil(model.activePlan(for: a.horizonID))
-        try model.workflow!.managePlan(c.id, action: .restore)
+        try await model.persist { try $0.managePlan(c.id, action: .restore) }
         XCTAssertEqual(model.plans(for: a.horizonID).map(\.id), [c.id])
         XCTAssertTrue(model.hasUnavailablePlanSelection(for: a.horizonID))
         XCTAssertNil(model.activePlan(for: a.horizonID)) // Explicit missing choice never falls back to C.
