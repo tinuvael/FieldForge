@@ -2,8 +2,8 @@ import Foundation
 
 /// NGI, Using the Q-system, April 2025. Numerical tables are isolated from UI/sensors.
 /// Category IDs refer to appendix tables 2–6; H/H-star retain the two published intervals of table 6 H.
-enum QParameter: String, Codable, CaseIterable { case jn, jr, ja, jw, srf }
-struct QTableRow: Identifiable {
+enum QParameter: String, Codable, CaseIterable, Sendable { case jn, jr, ja, jw, srf }
+struct QTableRow: Identifiable, Sendable {
     let id: String
     let description: String
     let minimum: Double
@@ -14,14 +14,14 @@ struct QTableRow: Identifiable {
     }
     var rangeText: String { minimum == maximum ? ElevationInput.text(minimum) : "\(ElevationInput.text(minimum))…\(ElevationInput.text(maximum))" }
 }
-enum QContact: String, Codable, CaseIterable { case wall, before10cm, noContact }
-enum QLocation: String, Codable, CaseIterable {
+enum QContact: String, Codable, CaseIterable, Sendable { case wall, before10cm, noContact }
+enum QLocation: String, Codable, CaseIterable, Sendable {
     case ordinary, intersection, portal
     var multiplier: Double { switch self { case .ordinary: return 1; case .intersection: return 3; case .portal: return 2 } }
 }
-enum JrAdjustment: String, Codable, CaseIterable { case none, spacingOver3m, fewExposed }
-enum SRFAdjustment: String, Codable, CaseIterable { case none, adjacentZone, shallowCrown }
-enum RQDSource: String, Codable, CaseIterable { case coreMeasured, fieldEstimate, externalReport }
+enum JrAdjustment: String, Codable, CaseIterable, Sendable { case none, spacingOver3m, fewExposed }
+enum SRFAdjustment: String, Codable, CaseIterable, Sendable { case none, adjacentZone, shallowCrown }
+enum RQDSource: String, Codable, CaseIterable, Sendable { case coreMeasured, fieldEstimate, externalReport }
 
 enum QMethod {
     static let version = "NGI-Q-2025-04/FieldForge-1"
@@ -90,8 +90,8 @@ enum QMethod {
 }
 
 /// Original text, table choice and field rationale survive persistence without normalization.
-enum QValueOrigin: String, Codable { case tableSelection, manualWithinRow }
-struct QCoefficientInput: Codable, Equatable {
+enum QValueOrigin: String, Codable, Sendable { case tableSelection, manualWithinRow }
+struct QCoefficientInput: Codable, Equatable, Sendable {
     var category: String?
     var value = "" { didSet { origin = .manualWithinRow } }
     var origin = QValueOrigin.manualWithinRow
@@ -128,7 +128,7 @@ enum RatingNumber {
     }
 }
 
-struct BartonQInput: Codable, Equatable {
+struct BartonQInput: Codable, Equatable, Sendable {
     var rqd = ""
     var rqdSource: RQDSource?
     var rqdEvidence = ""
@@ -221,8 +221,8 @@ struct BartonQInput: Codable, Equatable {
                                            ja: a, jw: w, srf: usedSRF, value: q, rockClass: QRockClass.classify(q)), missing: [])
     }
 }
-struct QEvaluation: Codable, Equatable { let result: QResult?; let missing: [String] }
-struct QResult: Codable, Equatable {
+struct QEvaluation: Codable, Equatable, Sendable { let result: QResult?; let missing: [String] }
+struct QResult: Codable, Equatable, Sendable {
     let measuredRQD: Double
     let calculationRQD: Double
     let jn: Double, jr: Double, ja: Double, jw: Double, srf: Double
@@ -231,7 +231,7 @@ struct QResult: Codable, Equatable {
 }
 /// Figure 4-1, published Q scale 0.001–1000. Shared boundaries assigned to the higher class.
 /// Outside the published scale the numerical Q is retained without extrapolating a class.
-enum QRockClass: String, Codable {
+enum QRockClass: String, Codable, Sendable {
     case exceptionallyPoor, extremelyPoor, veryPoor, poor, fair, good, veryGood
     static func classify(_ q: Double) -> Self? {
         guard q.isFinite, (0.001...1000).contains(q) else { return nil }
@@ -246,7 +246,7 @@ enum QRockClass: String, Codable {
         }
     }
 }
-struct BartonQAssessment: Codable, Equatable {
+struct BartonQAssessment: Codable, Equatable, Sendable {
     let method: String
     let revision: Int
     let assessedAt: Date
@@ -261,15 +261,15 @@ struct BartonQAssessment: Codable, Equatable {
     }
 }
 
-enum RMRStrengthTest: String, Codable, CaseIterable {
+enum RMRStrengthTest: String, Codable, CaseIterable, Sendable {
     case ucs, pointLoadIs50, fieldEstimate
     var title: String {
         switch self { case .ucs: return "UCS — одноосное сжатие"; case .pointLoadIs50: return "Is(50) — точечное нагружение"; case .fieldEstimate: return "Полевая оценка R0–R6" }
     }
 }
-enum RMREngineeringApplication: String, Codable, CaseIterable { case tunnelsAndMines, foundations, slopes }
+enum RMREngineeringApplication: String, Codable, CaseIterable, Sendable { case tunnelsAndMines, foundations, slopes }
 /// Original free-text evidence remains intact; optional explicit selections enable basic-v1.
-struct RMR89Input: Codable, Equatable {
+struct RMR89Input: Codable, Equatable, Sendable {
     var basicSelections: [String: String]? = nil
     var fieldStrength: FieldStrengthAssessment? = nil
     var jcond76: JCond76Assessment? = nil
@@ -306,7 +306,7 @@ struct RMR89Input: Codable, Equatable {
         return result
     }
 }
-struct RMR89Assessment: Codable, Equatable {
+struct RMR89Assessment: Codable, Equatable, Sendable {
     static let version = "Bieniawski-RMR89/input-only-v1"
     static let calculatedVersion = "Bieniawski-RMR89/basic-categories-v1"
     static let fieldStrengthVersion = "Bieniawski-RMR89/basic-categories-field-strength-v2"
@@ -335,7 +335,7 @@ struct RMR89Assessment: Codable, Equatable {
         }
     }
 }
-struct MappingRatings: Codable, Equatable {
+struct MappingRatings: Codable, Equatable, Sendable {
     let bartonQ: BartonQAssessment?
     let rmr89: RMR89Assessment?
     var gsi: GSIAssessment? = nil
@@ -351,7 +351,7 @@ extension MappingDraft {
 
 /// Owner-defined field presentation (third iPhone review, 2026-10-21).
 /// Separate from published NGI classes and stored Q snapshots. No mechanical conclusion.
-enum FieldQCategory: Equatable {
+enum FieldQCategory: Equatable, Sendable {
     case veryUnstable, unstable, medium, stable
     init?(q: Double) {
         guard q.isFinite, q >= 0 else { return nil }

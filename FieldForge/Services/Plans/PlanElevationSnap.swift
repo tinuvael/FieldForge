@@ -1,7 +1,7 @@
 import Foundation
 
 /// Only straight WCS segments with explicit endpoint elevations enter this collection.
-struct DXFElevationSegment: Codable, Equatable {
+struct DXFElevationSegment: Codable, Equatable, Sendable {
     let a: DXFVertex
     let b: DXFVertex
     let entityType: String
@@ -30,7 +30,7 @@ struct DXFElevationSegment: Codable, Equatable {
 }
 
 /// Application picking policy, not survey accuracy or an engineering risk threshold.
-struct PlanElevationSnapPolicy: Codable, Equatable {
+struct PlanElevationSnapPolicy: Codable, Equatable, Sendable {
     var toleranceMeters = 2.0
     var similarDistanceMeters = 0.1
     var distinctElevationMeters = 0.5
@@ -46,7 +46,7 @@ struct PlanElevationSnapPolicy: Codable, Equatable {
     }
 }
 
-struct PlanGeometryElevation: Codable, Equatable {
+struct PlanGeometryElevation: Codable, Equatable, Sendable {
     static let version = "DXF-WCS-XY-segment-projection/1"
     static let twoWallVersion = "DXF-WCS-two-wall-section/1"
     static let nearestVersion = "DXF-WCS-nearest-distinct-polyline-IDW/1"
@@ -127,7 +127,7 @@ struct PlanGeometryElevation: Codable, Equatable {
     }
 }
 
-struct PlanElevationResolution: Equatable {
+struct PlanElevationResolution: Equatable, Sendable {
     let candidates: [PlanGeometryElevation]
     let requiresChoice: Bool
     var failureReason: String? = nil
@@ -231,7 +231,7 @@ enum PlanElevationSnap {
     }
 }
 
-struct PlanElevationWallSample: Codable, Equatable {
+struct PlanElevationWallSample: Codable, Equatable, Sendable {
     let segment: DXFElevationSegment
     let parameter: Double
     let distanceMeters: Double

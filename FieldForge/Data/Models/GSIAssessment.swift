@@ -2,7 +2,7 @@ import Foundation
 
 /// Read & Stacey (2009), Table 5.34, Hoek–Brown 2000 / Marinos & Hoek (2000).
 /// Qualitative axes retain their published order; legacy categorical selections remain evidence.
-enum GSIStructure: String, Codable, CaseIterable {
+enum GSIStructure: String, Codable, CaseIterable, Sendable {
     case massive, blocky, veryBlocky, disturbed, disintegrated, laminatedSheared
     var title: String {
         switch self {
@@ -25,7 +25,7 @@ enum GSIStructure: String, Codable, CaseIterable {
         }
     }
 }
-enum GSISurface: String, Codable, CaseIterable {
+enum GSISurface: String, Codable, CaseIterable, Sendable {
     case veryGood, good, fair, poor, veryPoor
     var title: String {
         switch self { case .veryGood: return "Очень хорошее"; case .good: return "Хорошее"; case .fair: return "Среднее"; case .poor: return "Плохое"; case .veryPoor: return "Очень плохое" }
@@ -40,7 +40,7 @@ enum GSISurface: String, Codable, CaseIterable {
         }
     }
 }
-struct GSIChartSelection: Codable, Equatable {
+struct GSIChartSelection: Codable, Equatable, Sendable {
     let structure: GSIStructure
     let surface: GSISurface
     /// Normalised categorical cell centre, not a numerical GSI mapping.
@@ -59,7 +59,7 @@ struct GSIChartSelection: Codable, Equatable {
         guard self == Self(structure: structure, surface: surface), applicable else { throw StorageError.invalidRecord }
     }
 }
-struct GSIAssessment: Codable, Equatable {
+struct GSIAssessment: Codable, Equatable, Sendable {
     static let version = "Read-Stacey-2009/table5.34-HoekBrown2000/categorical-explicit-interval-v1"
     static let reference = "Read & Stacey (2009), Guidelines for Open Pit Slope Design, §5.4.4, Table 5.34; Marinos & Hoek (2000)."
     static let limitation = "GSI может быть неприменим, если разрушение определяет ориентированная слабость, например неблагоприятные протяжённые трещины."

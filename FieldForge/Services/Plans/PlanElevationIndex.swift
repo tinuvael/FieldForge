@@ -2,12 +2,12 @@ import Foundation
 
 /// Immutable XY BVH, built with the loaded document and shared by document copies.
 /// Whole segment bounds (not just vertices/centres) participate in every query.
-final class PlanElevationIndex {
+final class PlanElevationIndex: Sendable {
     struct QueryMetrics {
         var visitedNodes = 0
         var projectedSegments = 0
     }
-    private struct Box {
+    private struct Box: Sendable {
         let minX: Double, minY: Double, maxX: Double, maxY: Double
         init(_ s: DXFElevationSegment) {
             minX = min(s.a.x, s.b.x); minY = min(s.a.y, s.b.y)
@@ -31,13 +31,13 @@ final class PlanElevationIndex {
             hypot(max(abs(p.x - minX), abs(p.x - maxX)), max(abs(p.y - minY), abs(p.y - maxY)))
         }
     }
-    private struct Node {
+    private struct Node: Sendable {
         let box: Box
         let start: Int, end: Int
         let left: Int, right: Int
         var leaf: Bool { left < 0 }
     }
-    private struct Tree {
+    private struct Tree: Sendable {
         var order: [Int]
         var nodes: [Node] = []
         init(indices: [Int], boxes: [Box]) {

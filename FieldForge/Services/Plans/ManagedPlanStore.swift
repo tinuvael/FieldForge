@@ -1,7 +1,7 @@
 import Foundation
 import CryptoKit
 
-enum PlanUnits: String, Codable, CaseIterable {
+enum PlanUnits: String, Codable, CaseIterable, Sendable {
     case unknown, meters, millimeters
     static func declared(by insertionUnits: Int?) -> PlanUnits? {
         switch insertionUnits { case 6: return .meters; case 4: return .millimeters; default: return nil }
@@ -10,7 +10,7 @@ enum PlanUnits: String, Codable, CaseIterable {
     var label: String { switch self { case .unknown: return "Неизвестно · единицы чертежа"; case .meters: return "Метры"; case .millimeters: return "Миллиметры" } }
 }
 
-struct ManagedPlanFile: Codable, Equatable {
+struct ManagedPlanFile: Codable, Equatable, Sendable {
     let originalFilename: String
     let sha256: String
     let byteCount: Int

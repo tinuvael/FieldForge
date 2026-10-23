@@ -210,7 +210,7 @@ struct HorizonPlansView: View {
     }
 }
 
-struct PreparedPlanImport: Identifiable {
+struct PreparedPlanImport: Identifiable, Sendable {
     let id: UUID, horizonID: UUID
     let filename: String
     let data: Data

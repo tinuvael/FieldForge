@@ -8,14 +8,14 @@ import Combine
     @Published var selectedTab = 0
     @Published private(set) var loading = false
     @Published private(set) var savingState: MappingSavingState = .idle
-    let storage = MappingStorageOwner()
+    let storage: MappingStorageOwner
     private var opening: Task<Void, Never>?
     var isSaving: Bool { savingState.isSaving }
 
     /// Admission is synchronous on MainActor. Conflicting requests fail explicitly;
     /// callers retain their input and can retry. No UI snapshot publishes before commit.
     @discardableResult
-    func persist<Value>(_ action: @escaping @Sendable (inout MappingWorkflow) throws -> Value) async throws -> Value {
+    func persist<Value: Sendable>(_ action: @escaping @Sendable (inout MappingWorkflow) throws -> Value) async throws -> Value {
         guard !isSaving else { throw MappingError.invalid("Дождитесь завершения сохранения и повторите действие.") }
         guard let snapshot = workflow else { throw StorageError.writesBlocked }
         guard snapshot.draft.photoSessions.isEmpty else {
@@ -25,15 +25,16 @@ import Combine
         savingState = .saving(operationID)
         workflow!.draft.saving = true
         do {
-            let (committed, value) = try await storage.transaction(snapshot: snapshot, action)
+            let (committed, value) = try await storage.transaction(snapshot: snapshot.snapshot, action)
             // Never check Task.isCancelled here: disk outcome must be reconciled.
-            workflow = committed
+            workflow = MappingWorkflow(snapshot: committed)
             savingState = .committed(operationID)
             error = nil
             if committed.draft.id != oldID {
+                let retainedDraftIDs = workflow!.retainedDraftIDs
                 retainedPhotos = retainedPhotos.filter {
                     let pointID = $0.value.operation.photo.context.pointID
-                    return pointID != oldID || committed.retainedDraftIDs.contains(pointID)
+                    return pointID != oldID || retainedDraftIDs.contains(pointID)
                 }
             }
             return value
@@ -137,13 +138,16 @@ import Combine
     @Published var pendingPhotos: [PhotoImportOperation] = []
     @Published var photoRecoveryError: String?
     @Published var retainedPhotos: [UUID: RetainedPhotoImport] = [:]
-    init(workflow: MappingWorkflow, photoStore: ManagedPhotoStore, planStore: ManagedPlanStore? = nil, preferences: UserDefaults = .standard) {
+    /// Isolated fixture injection; the caller hands the workflow store to this owner.
+    init(workflow: MappingWorkflow, storage: MappingStorageOwner? = nil, photoStore: ManagedPhotoStore, planStore: ManagedPlanStore? = nil, preferences: UserDefaults = .standard) {
         self.preferences = preferences
         activePlanIDs = preferences.dictionary(forKey: "FieldForge.activePlans.v1") as? [String: String] ?? [:]
-        self.workflow = workflow; self.photoStore = photoStore; self.planStore = planStore
+        self.storage = storage ?? MappingStorageOwner(store: workflow.persistenceStore)
+        self.workflow = MappingWorkflow(snapshot: workflow.snapshot); self.photoStore = photoStore; self.planStore = planStore
         Task { await refreshPhotoRecovery() }
     }
     init() {
+        storage = MappingStorageOwner()
         preferences = .standard
         activePlanIDs = preferences.dictionary(forKey: "FieldForge.activePlans.v1") as? [String: String] ?? [:]
         do {
@@ -160,11 +164,11 @@ import Combine
             #endif
             planStore = ManagedPlanStore(root: directory.appendingPathComponent(testing ? "ui-testing-plans\(namespace)" : "plans"))
             photoStore = ManagedPhotoStore(root: directory.appendingPathComponent(testing ? "ui-testing-photos\(namespace)" : "photos"))
-            let store = FileMappingStore(url: directory.appendingPathComponent(testing ? "ui-testing-mapping\(namespace).json" : "mapping-v1.json"))
+            let storeURL = directory.appendingPathComponent(testing ? "ui-testing-mapping\(namespace).json" : "mapping-v1.json")
             loading = true
             opening = Task { [self] in
                 defer { loading = false }
-                do { workflow = try await storage.open(store: store) }
+                do { workflow = MappingWorkflow(snapshot: try await storage.open { FileMappingStore(url: storeURL) }) }
                 catch { self.error = "Не удалось открыть картирование. Запись заблокирована: \(error.localizedDescription)" }
                 await refreshPhotoRecovery()
             }

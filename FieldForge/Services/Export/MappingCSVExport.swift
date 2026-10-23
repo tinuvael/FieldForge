@@ -1,7 +1,7 @@
 import Foundation
 
 /// Calendar dates are interpreted in this explicit zone, independently of device/project context.
-struct MappingExportSelection: Equatable {
+struct MappingExportSelection: Equatable, Sendable {
     let projectID: UUID
     var horizonID: UUID?
     var excavationID: UUID?
@@ -23,9 +23,9 @@ struct MappingExportSelection: Equatable {
 
 /// Versioned, intentionally small mapping analysis contract. Values own their data;
 /// neither generation nor sharing can read a subsequently changed workflow/draft.
-struct MappingCSVExport {
+struct MappingCSVExport: Sendable {
     static let version = "FieldForge-Mapping-CSV/1"
-    struct Table {
+    struct Table: Sendable {
         let name: String
         let columns: [String]
         var rows: [[Cell]] = []
@@ -34,7 +34,7 @@ struct MappingCSVExport {
             return Data(("\u{FEFF}" + lines.joined(separator: "\r\n") + "\r\n").utf8)
         }
     }
-    enum Cell {
+    enum Cell: Sendable {
         case text(String), number(Double?), integer(Int?), timestamp(Date?), empty
         var csv: String {
             let value: String
@@ -192,7 +192,7 @@ struct MappingCSVExport {
 }
 
 /// Owns only a newly created UUID directory. Sources are never opened or modified.
-final class MappingExportFiles {
+final class MappingExportFiles: Sendable {
     let directory: URL
     let urls: [URL]
     init(directory: URL, urls: [URL]) { self.directory = directory; self.urls = urls }

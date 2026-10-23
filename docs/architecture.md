@@ -49,6 +49,12 @@ or explicitly refused, preserving drafts and prepared intents. Exports retain th
 last committed value captured at export-screen opening. No stored format, engineering
 calculation or independent measurement-journal behavior changes.
 
+[A5](swift6-concurrency-a5.md) makes this boundary explicit: only
+`MappingWorkflow.Snapshot` values cross the queue boundary. The owner retains the
+working store privately; published workflows use a write-refusing presentation
+store. Transaction results must be Sendable. Photo failure hooks use a system lock;
+original/thumbnail/manifest mutations still use the same storage queue.
+
 ## A3 mapping validation and storage performance
 
 Schema 8 still uses full authoritative validation on load and every save. One

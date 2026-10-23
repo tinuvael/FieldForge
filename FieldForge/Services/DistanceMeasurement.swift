@@ -41,7 +41,7 @@ enum DistanceMath {
     }
 }
 
-enum DistanceStatus: Equatable {
+enum DistanceStatus: Equatable, Sendable {
     case starting, ready, noSurface, poorTracking, insufficientFeatures, excessiveMotion
     case interrupted, background, closed, cameraDenied, unsupported, failed
     var message: String {
@@ -149,4 +149,26 @@ struct DistanceSnapshot {
     private func clear() {
         first = nil; second = nil; metres = nil; candidate = nil; needsRetake = false
     }
+}
+
+/// Adapter callback identity/lifetime only; independent of ARKit and distance math.
+/// An interruption end is accepted only for the interrupted session, never after dismissal.
+struct DistanceCallbackLifetime {
+    private var sessionID: ObjectIdentifier?
+    private var active = false
+    private var interrupted = false
+    mutating func start(_ identity: ObjectIdentifier) {
+        sessionID = identity; active = true; interrupted = false
+    }
+    func accepts(_ identity: ObjectIdentifier) -> Bool { active && sessionID == identity }
+    mutating func interrupt(_ identity: ObjectIdentifier) -> Bool {
+        guard accepts(identity) else { return false }
+        active = false; interrupted = true; return true
+    }
+    mutating func endInterruption(_ identity: ObjectIdentifier) -> Bool {
+        guard interrupted, sessionID == identity else { return false }
+        interrupted = false; return true
+    }
+    mutating func pause() { active = false }
+    mutating func invalidate() { active = false; interrupted = false; sessionID = nil }
 }

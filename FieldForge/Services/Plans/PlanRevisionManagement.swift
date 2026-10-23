@@ -2,15 +2,15 @@ import Foundation
 
 /// Management metadata is append-only. Original DXF bytes and the source revision identity
 /// never change. Deletion retires an unused revision; originals remain for offline recovery.
-struct PlanManagementChange: Codable, Equatable {
-    enum Action: String, Codable { case archive, restore, move, delete }
+struct PlanManagementChange: Codable, Equatable, Sendable {
+    enum Action: String, Codable, Sendable { case archive, restore, move, delete }
     let action: Action
     let date: Date
     let previousHorizonID: UUID
     let horizonID: UUID
 }
 
-struct PlanElevationUnitConfirmation: Codable, Equatable {
+struct PlanElevationUnitConfirmation: Codable, Equatable, Sendable {
     let units: PlanUnits
     let confirmedAt: Date
 }

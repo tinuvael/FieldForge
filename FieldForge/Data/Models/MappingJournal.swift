@@ -1,12 +1,12 @@
 import Foundation
 
-struct MappingProject: Codable, Equatable, Identifiable {
+struct MappingProject: Codable, Equatable, Identifiable, Sendable {
     let id: UUID
     var name: String
     var lithologies: [RockLithology]? = nil
 }
 
-struct MappingHorizon: Codable, Equatable, Identifiable {
+struct MappingHorizon: Codable, Equatable, Identifiable, Sendable {
     let id: UUID
     let projectID: UUID
     var name: String
@@ -15,7 +15,7 @@ struct MappingHorizon: Codable, Equatable, Identifiable {
     var displayName: String { elevationMeters.map { ElevationInput.label($0) } ?? name }
 }
 
-struct MappingExcavation: Codable, Equatable, Identifiable {
+struct MappingExcavation: Codable, Equatable, Identifiable, Sendable {
     let id: UUID
     let projectID: UUID
     var name: String
@@ -23,7 +23,7 @@ struct MappingExcavation: Codable, Equatable, Identifiable {
 }
 
 /// Immutable DXF identity/source; horizon assignment and lifecycle have explicit management history.
-struct MappingPlanReference: Codable, Equatable, Identifiable {
+struct MappingPlanReference: Codable, Equatable, Identifiable, Sendable {
     let id: UUID
     var horizonID: UUID
     let attachmentID: UUID
@@ -34,13 +34,13 @@ struct MappingPlanReference: Codable, Equatable, Identifiable {
     var elevationUnitConfirmation: PlanElevationUnitConfirmation? = nil
 }
 
-struct MappingContext: Codable, Equatable {
+struct MappingContext: Codable, Equatable, Sendable {
     var projectID: UUID?
     var horizonID: UUID?
     var excavationID: UUID?
 }
 
-struct MappingCoordinates: Codable, Equatable {
+struct MappingCoordinates: Codable, Equatable, Sendable {
     let x: Double?
     let y: Double?
     let z: Double?
@@ -57,7 +57,7 @@ struct MappingCoordinates: Codable, Equatable {
     var zPlanGeometry: PlanGeometryElevation? = nil
 }
 
-enum ElevationOrigin: String, Codable {
+enum ElevationOrigin: String, Codable, Sendable {
     case horizonDefault, manualOverride, planGeometry
     var fieldLabel: String {
         switch self { case .horizonDefault: return "Горизонт"; case .manualOverride: return "Вручную"; case .planGeometry: return "DXF" }
@@ -100,7 +100,7 @@ enum ElevationInput {
     static func label(_ number: Double) -> String { "\(number >= 0 ? "+" : "")\(text(number)) м" }
 }
 
-struct MappingObservation: Codable, Equatable, Identifiable {
+struct MappingObservation: Codable, Equatable, Identifiable, Sendable {
     let id: UUID
     let projectID: UUID
     let horizonID: UUID
@@ -122,7 +122,7 @@ struct MappingObservation: Codable, Equatable, Identifiable {
     var rock: RockLithology? = nil
 }
 
-struct MappingJournal: Codable, Equatable {
+struct MappingJournal: Codable, Equatable, Sendable {
     static let currentSchemaVersion = 8
     var schemaVersion = currentSchemaVersion
     var projects: [MappingProject] = []
@@ -289,7 +289,7 @@ struct MappingValidationContext {
     }
 }
 
-enum MappingError: LocalizedError {
+enum MappingError: LocalizedError, Sendable {
     case invalid(String)
     var errorDescription: String? { switch self { case .invalid(let text): return text } }
 }
@@ -313,7 +313,7 @@ enum PicketInput {
 }
 
 /// Missing tags in schema-8 records retain the original kilometre/metre interpretation.
-enum PicketConvention: String, Codable {
+enum PicketConvention: String, Codable, Sendable {
     case legacyMeters, tenMeters
     func meters(_ text: String) throws -> Double {
         switch self {
@@ -402,7 +402,7 @@ extension MappingObservation {
     }
 }
 
-struct MappingDraft: Equatable {
+struct MappingDraft: Equatable, Sendable {
     let id: UUID
     init(id: UUID = UUID()) { self.id = id }
     var photoSessions: Set<UUID> = []
@@ -536,7 +536,7 @@ extension MappingDraft {
 }
 
 /// Pre-MVP mapping databases are experimental; there is deliberately no upgrade or reset path.
-enum MappingDatabaseError: LocalizedError {
+enum MappingDatabaseError: LocalizedError, Sendable {
     case incompatibleVersion(Int)
     var errorDescription: String? {
         switch self {

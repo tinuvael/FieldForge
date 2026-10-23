@@ -1,4 +1,5 @@
 import XCTest
+import os
 #if canImport(FieldForgeCore)
 @testable import FieldForgeCore
 #else
@@ -6,9 +7,15 @@ import XCTest
 #endif
 
 /// Hooks run on the storage executor. Gates prove overlap without timing sleeps.
-private final class GatedMappingStore: MappingStore {
+// The file is used only by the storage queue. Tests read its immutable URLs after
+// barriers; the hook itself is synchronized and invoked without holding the lock.
+private final class GatedMappingStore: MappingStore, @unchecked Sendable {
     let file: FileMappingStore
-    var beforeSave: (() throws -> Void)?
+    private let hook = OSAllocatedUnfairLock<(@Sendable () throws -> Void)?>(initialState: nil)
+    var beforeSave: (@Sendable () throws -> Void)? {
+        get { hook.withLock { $0 } }
+        set { hook.withLock { $0 = newValue } }
+    }
     init(_ url: URL) { file = FileMappingStore(url: url) }
     func load() throws -> MappingJournal {
         XCTAssertFalse(Thread.isMainThread)
@@ -26,8 +33,8 @@ private final class GatedMappingStore: MappingStore {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("FieldForge-A4-\(UUID())")
         let store = GatedMappingStore(root.appendingPathComponent("mapping.json"))
         let owner = MappingStorageOwner()
-        let initial = try await owner.open(store: store)
-        let model = MappingModel(workflow: initial, photoStore: ManagedPhotoStore(root: root.appendingPathComponent("photos")), planStore: ManagedPlanStore(root: root.appendingPathComponent("plans")))
+        let initial = try await owner.open { store }
+        let model = MappingModel(workflow: MappingWorkflow(snapshot: initial), storage: owner, photoStore: ManagedPhotoStore(root: root.appendingPathComponent("photos")), planStore: ManagedPlanStore(root: root.appendingPathComponent("plans")))
         let p = try await model.persist { try $0.createProject(name: "A4") }
         try await model.persist { try $0.requestContext(MappingContext(projectID: p)) }
         let h = try await model.persist { try $0.createHorizon(elevation: "100") }
@@ -37,10 +44,52 @@ private final class GatedMappingStore: MappingStore {
         return (root, store, model)
     }
 
+    func testPublishedWorkflowCannotWriteOutsideStorageOwner() async throws {
+        let (root, store, model) = try await setup()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bytes = try Data(contentsOf: store.file.url), journal = model.workflow!.journal
+        XCTAssertThrowsError(try model.performThrowing { _ = try $0.createProject(name: "bypass") })
+        XCTAssertEqual(model.workflow!.journal, journal)
+        XCTAssertEqual(try Data(contentsOf: store.file.url), bytes)
+        let id = try await model.persist { try $0.createProject(name: "admitted") }
+        XCTAssertEqual(model.workflow!.journal.projects.last?.id, id)
+    }
+
+    func testCancelledPhotoAfterPromotionCommitsAndRepeatedRetryKeepsOneOriginal() async throws {
+        let (root, _, model) = try await setup()
+        defer { try? FileManager.default.removeItem(at: root) }
+        model.perform { $0.draft.picket = "6" }
+        await model.saveDraft(id: model.workflow!.draft.id)
+        let point = model.workflow!.journal.observations[0]
+        let context = try model.workflow!.journal.photoContext(for: point.id)
+        let files = try XCTUnwrap(model.photoStore), image = try P41PhotoTests().image(90)
+        let promoted = expectation(description: "original promoted before journal commit")
+        let gate = DispatchSemaphore(value: 0)
+        files.checkpoint = { phase in
+            if phase == .promotion {
+                promoted.fulfill(); XCTAssertEqual(gate.wait(timeout: .now() + 10), .success)
+            }
+        }
+        let task = Task { await model.importPhoto(ReceivedPhoto(data: image, filename: "a5.jpg", source: .files,
+            representation: "received bytes"), context: context) }
+        await fulfillment(of: [promoted], timeout: 5)
+        let operation = try XCTUnwrap(model.retainedPhotos.values.first?.operation)
+        XCTAssertTrue(model.workflow!.journal.photos.isEmpty)
+        XCTAssertEqual(try files.read(operation.attachment), image)
+        task.cancel(); gate.signal(); await task.value
+        files.checkpoint = nil
+        await model.retryPhoto(operation); await model.retryPhoto(operation)
+        XCTAssertNil(model.photoError)
+        XCTAssertEqual(model.workflow!.journal.photos, [operation.photo])
+        XCTAssertEqual(model.workflow!.journal.photoAttachments, [operation.attachment])
+        XCTAssertEqual(try files.read(operation.attachment), image)
+        XCTAssertTrue(try files.pending().isEmpty)
+    }
+
     func testFIFOTransactionsRebaseStaleInputsWithoutLostUpdatesAndKeepExactPrevious() async throws {
         let (root, store, model) = try await setup()
         defer { try? FileManager.default.removeItem(at: root) }
-        let snapshot = model.workflow!, owner = model.storage
+        let snapshot = model.workflow!.snapshot, owner = model.storage
         let entered = expectation(description: "first write entered"), gate = DispatchSemaphore(value: 0)
         store.beforeSave = { entered.fulfill(); XCTAssertEqual(gate.wait(timeout: .now() + 10), .success) }
         let first = Task { try await owner.transaction(snapshot: snapshot) { try $0.createProject(name: "first") } }
@@ -306,8 +355,8 @@ private final class MainQueueHeartbeat: @unchecked Sendable {
             let fixture = try MappingStorageBenchmarkTests.fixture(size)
             let store = GatedMappingStore(root.appendingPathComponent("\(size).json")), owner = MappingStorageOwner()
             try await owner.run { _ = try store.load(); try store.save(fixture) }
-            let workflow = try await owner.open(store: store)
-            let model = MappingModel(workflow: workflow, photoStore: ManagedPhotoStore(root: root.appendingPathComponent("photos")))
+            let workflow = try await owner.open { store }
+            let model = MappingModel(workflow: MappingWorkflow(snapshot: workflow), storage: owner, photoStore: ManagedPhotoStore(root: root.appendingPathComponent("photos")))
             model.perform { $0.draft.picket = "9000"; $0.draft.notes = "A4 responsiveness" }
             let heartbeat = MainQueueHeartbeat(), timer = DispatchSource.makeTimerSource(queue: .main)
             timer.schedule(deadline: .now(), repeating: .milliseconds(16))

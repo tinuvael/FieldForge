@@ -1,7 +1,7 @@
 import Foundation
 
 /// An explicit same-frame declaration made while importing a new immutable revision.
-struct PlanFrameConfirmation: Codable, Equatable {
+struct PlanFrameConfirmation: Codable, Equatable, Sendable {
     let previousPlanID: UUID
     let confirmedAt: Date
 }
@@ -67,7 +67,7 @@ enum PlanCoordinateCompatibility {
     }
 }
 
-struct MappingPlanSelectionRequest: Identifiable {
+struct MappingPlanSelectionRequest: Identifiable, Sendable {
     let id = UUID()
     let draftID: UUID
     let context: MappingContext

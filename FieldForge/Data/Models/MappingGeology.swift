@@ -1,9 +1,9 @@
 import Foundation
 
 /// User-entered geological descriptions, not classification scores or calculated joint sets.
-enum JointSetIdentifier: String, Codable, CaseIterable { case J1, J2, J3, J4, J5 }
-enum ObservationPosition: String, Codable, CaseIterable { case roof, leftWall, rightWall, face, other }
-enum TectonicStructureType: String, Codable, CaseIterable { case fault, shearZone, fractureZone, other }
+enum JointSetIdentifier: String, Codable, CaseIterable, Sendable { case J1, J2, J3, J4, J5 }
+enum ObservationPosition: String, Codable, CaseIterable, Sendable { case roof, leftWall, rightWall, face, other }
+enum TectonicStructureType: String, Codable, CaseIterable, Sendable { case fault, shearZone, fractureZone, other }
 
 enum GeologyInput {
     static func optionalNonnegative(_ text: String, field: String) throws -> Double? {
@@ -20,7 +20,7 @@ enum GeologyInput {
     }
 }
 
-struct MappingPicket: Codable, Equatable {
+struct MappingPicket: Codable, Equatable, Sendable {
     let text: String
     let meters: Double
     var convention: PicketConvention? = nil
@@ -31,7 +31,7 @@ struct MappingPicket: Codable, Equatable {
 
 /// Immutable interpretation snapshot. Evidence UUIDs identify exact immutable originals in this point.
 /// ManualOrientationInput preserves interpreted text, north and vertical-side convention.
-struct InterpretedJointSet: Codable, Equatable, Identifiable {
+struct InterpretedJointSet: Codable, Equatable, Identifiable, Sendable {
     let id: UUID
     let identifier: JointSetIdentifier
     let revision: Int
@@ -62,7 +62,7 @@ struct InterpretedJointSet: Codable, Equatable, Identifiable {
     }
 }
 
-struct TectonicStructure: Codable, Equatable, Identifiable {
+struct TectonicStructure: Codable, Equatable, Identifiable, Sendable {
     let id: UUID
     let type: TectonicStructureType
     let orientation: ManualOrientationInput
@@ -77,7 +77,7 @@ struct TectonicStructure: Codable, Equatable, Identifiable {
     }
 }
 
-struct MappingGeology: Codable, Equatable {
+struct MappingGeology: Codable, Equatable, Sendable {
     let start: MappingPicket?
     let end: MappingPicket?
     let position: ObservationPosition?
@@ -94,7 +94,7 @@ struct MappingGeology: Codable, Equatable {
     }
 }
 
-struct JointSetDraft: Equatable, Identifiable {
+struct JointSetDraft: Equatable, Identifiable, Sendable {
     let id: UUID
     let identifier: JointSetIdentifier
     var representative = ManualOrientationInput()
@@ -134,7 +134,7 @@ struct JointSetDraft: Equatable, Identifiable {
     }
 }
 
-struct TectonicStructureDraft: Equatable, Identifiable {
+struct TectonicStructureDraft: Equatable, Identifiable, Sendable {
     let id: UUID
     var type = TectonicStructureType.fault
     var orientation = ManualOrientationInput()

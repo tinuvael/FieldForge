@@ -47,7 +47,7 @@ for target, sources in [('FieldForge', app_sources), ('FieldForgeTests', unit_so
         settings = {
             'CODE_SIGN_STYLE': 'Automatic', 'DEVELOPMENT_TEAM': '', 'PRODUCT_NAME': '$(TARGET_NAME)',
             'PRODUCT_BUNDLE_IDENTIFIER': 'com.tinuvael.' + target,
-            'SWIFT_VERSION': '5.0', 'TARGETED_DEVICE_FAMILY': '1',
+            'SWIFT_VERSION': '5.0', 'SWIFT_STRICT_CONCURRENCY': 'complete', 'TARGETED_DEVICE_FAMILY': '1',
             'GENERATE_INFOPLIST_FILE': 'YES' if target != 'FieldForge' else 'NO',
             'LD_RUNPATH_SEARCH_PATHS': '$(inherited) @executable_path/Frameworks @loader_path/Frameworks',
         }

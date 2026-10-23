@@ -50,7 +50,7 @@ import Foundation
         }
     }
 
-    deinit { manager.stopDeviceMotionUpdates() }
+    isolated deinit { manager.stopDeviceMotionUpdates() }
 
     func stop() { generation = nil; manager.stopDeviceMotionUpdates() }
 

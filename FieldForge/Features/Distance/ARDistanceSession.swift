@@ -11,6 +11,7 @@ import UIKit
     var onTrackingLoss: ((DistanceStatus) -> Void)?
     private var usesDepth = false
     private var active = false
+    private var callbacks = DistanceCallbackLifetime()
     private var sessionStartedAt: TimeInterval = .infinity
     private let markers = SCNNode()
 
@@ -31,6 +32,12 @@ import UIKit
     }
     func start() {
         guard Self.supported else { return }
+        // A new ARSession gives delayed delegates an unambiguous old identity.
+        view.session.delegate = nil
+        view.session = ARSession()
+        view.session.delegateQueue = .main
+        view.session.delegate = self
+        callbacks.start(ObjectIdentifier(view.session))
         active = true
         sessionStartedAt = ProcessInfo.processInfo.systemUptime
         let configuration = ARWorldTrackingConfiguration()
@@ -43,17 +50,19 @@ import UIKit
     }
     func pause() {
         active = false
+        callbacks.pause()
         view.session.pause()
         view.isPlaying = false
         render(first: nil, second: nil)
     }
+    func invalidateCallbacks() { callbacks.invalidate() }
     func snapshot() -> DistanceSnapshot {
         guard active, let frame = view.session.currentFrame,
               DistanceSnapshot.acceptsFrame(timestamp: frame.timestamp, sessionStartedAt: sessionStartedAt,
                                             now: ProcessInfo.processInfo.systemUptime) else {
             return .init(status: .starting, point: nil)
         }
-        if let reason = trackingProblem(frame.camera.trackingState) {
+        if let reason = Self.trackingProblem(frame.camera.trackingState) {
             return .init(status: reason, point: nil)
         }
         let point: DistancePoint?
@@ -134,7 +143,7 @@ import UIKit
         }
     }
     private func simd(_ v: Vector3) -> SIMD3<Float> { .init(Float(v.x), Float(v.y), Float(v.z)) }
-    private func trackingProblem(_ state: ARCamera.TrackingState) -> DistanceStatus? {
+    nonisolated private static func trackingProblem(_ state: ARCamera.TrackingState) -> DistanceStatus? {
         switch state {
         case .normal: return nil
         case .limited(.insufficientFeatures): return .insufficientFeatures
@@ -144,18 +153,33 @@ import UIKit
         }
     }
     nonisolated func session(_ session: ARSession, cameraDidChangeTrackingState camera: ARCamera) {
+        let identity = ObjectIdentifier(session)
+        let reason = Self.trackingProblem(camera.trackingState)
         MainActor.assumeIsolated {
-            guard active, let reason = trackingProblem(camera.trackingState) else { return }
+            guard callbacks.accepts(identity), let reason else { return }
             onTrackingLoss?(reason)
         }
     }
     nonisolated func sessionWasInterrupted(_ session: ARSession) {
-        MainActor.assumeIsolated { onInterruption?() }
+        // ARSession.delegateQueue is explicitly .main; only its value identity crosses isolation.
+        let identity = ObjectIdentifier(session)
+        MainActor.assumeIsolated {
+            guard callbacks.interrupt(identity) else { return }
+            onInterruption?()
+        }
     }
     nonisolated func sessionInterruptionEnded(_ session: ARSession) {
-        MainActor.assumeIsolated { onInterruptionEnded?() }
+        let identity = ObjectIdentifier(session)
+        MainActor.assumeIsolated {
+            guard callbacks.endInterruption(identity) else { return }
+            onInterruptionEnded?()
+        }
     }
     nonisolated func session(_ session: ARSession, didFailWithError error: Error) {
-        MainActor.assumeIsolated { onFailure?() }
+        let identity = ObjectIdentifier(session)
+        MainActor.assumeIsolated {
+            guard callbacks.accepts(identity) else { return }
+            onFailure?()
+        }
     }
 }

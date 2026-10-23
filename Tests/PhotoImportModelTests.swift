@@ -41,7 +41,7 @@ import XCTest
         XCTAssertTrue(restarted.photoError!.contains("после перезапуска невозможно"))
         files.checkpoint = nil
         try FileManager.default.removeItem(at: files.stagingURL(op))
-        model.perform { workflow in
+        try await model.persist { workflow in
             var correction = try workflow.correction(for: context.pointID)
             correction.fields.x = "123"; correction.reason = "Survey correction while import pending"
             try workflow.saveCorrection(correction)
@@ -84,7 +84,7 @@ import XCTest
         await model.importPhoto(photo, context: context)
         let op = try XCTUnwrap(model.pendingPhotos.first)
         XCTAssertEqual(model.workflow!.journal, before)
-        XCTAssertTrue(model.retainedPhotos.isEmpty) // Safe: exact original + intent are already on disk.
+        XCTAssertEqual(model.retainedPhotos[op.id]?.data, photo.data) // A4 retains live bytes until journal commit.
         XCTAssertEqual(try files.read(op.attachment), photo.data); XCTAssertEqual(try files.pending(), [op])
         store.fail = false
         let restarted = MappingModel(workflow: try MappingWorkflow(store: store), photoStore: ManagedPhotoStore(root: root))

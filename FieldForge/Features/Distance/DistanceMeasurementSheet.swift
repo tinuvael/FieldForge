@@ -72,7 +72,10 @@ import ARKit
             self.controller?.start()
             self.timer?.invalidate()
             let timer = Timer(timeInterval: 0.15, repeats: true) { [weak self] _ in
-                Task { @MainActor [weak self] in self?.poll() }
+                Task { @MainActor [weak self] in
+                    guard let self, self.generation == request else { return }
+                    self.poll()
+                }
             }
             self.timer = timer
             RunLoop.main.add(timer, forMode: .common)
@@ -83,6 +86,7 @@ import ARKit
         generation += 1
         timer?.invalidate(); timer = nil
         controller?.stop(reason)
+        if reason != .interrupted { adapter?.invalidateCallbacks() }
         unavailable = reason
         render()
         objectWillChange.send()
@@ -94,7 +98,7 @@ import ARKit
         objectWillChange.send()
     }
     private func render() { adapter?.render(first: first, second: second) }
-    deinit { timer?.invalidate() }
+    isolated deinit { timer?.invalidate() }
 }
 
 struct DistanceMeasurementSheet: View {

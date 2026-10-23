@@ -8,7 +8,9 @@ let package = Package(
     targets: [
         .target(name: "FieldForgeCore", path: "FieldForge",
                 exclude: ["App", "Features", "Resources", "Core/Sensors/CoreMotionSensorProvider.swift"],
-                sources: ["Core", "Data", "Services"]),
-        .testTarget(name: "FieldForgeCoreTests", dependencies: ["FieldForgeCore"], path: "Tests", resources: [.copy("Fixtures")])
+                sources: ["Core", "Data", "Services"],
+                swiftSettings: [.enableExperimentalFeature("StrictConcurrency")]),
+        .testTarget(name: "FieldForgeCoreTests", dependencies: ["FieldForgeCore"], path: "Tests", resources: [.copy("Fixtures")],
+                    swiftSettings: [.enableExperimentalFeature("StrictConcurrency")])
     ]
 )

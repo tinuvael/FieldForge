@@ -8,7 +8,7 @@ struct MeasurementView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                Picker("Способ измерения", selection: Binding(get: { model.mode }, set: model.setMode)) {
+                Picker("Способ измерения", selection: Binding(get: { model.mode }, set: { model.setMode($0) })) {
                     ForEach(MeasurementMode.allCases, id: \.self) { Text($0.title).tag($0) }
                 }.pickerStyle(.segmented).accessibilityIdentifier("measurementMode")
                 if model.mode == .manual {

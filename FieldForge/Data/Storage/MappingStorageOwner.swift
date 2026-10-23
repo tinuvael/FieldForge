@@ -4,11 +4,20 @@ import Foundation
 /// FIFO queue blocks are deliberately synchronous: no actor reentrancy or suspension
 /// between attachment preparation, validation, backup and atomic journal replacement.
 /// Cancellation after admission does not cancel a block or its result delivery.
+/// Unchecked invariant: store/committed are private, touched only by non-suspending
+/// blocks on this one queue (apart from initialization before publication). No store
+/// or transaction buffer escapes; inputs/results and run closures are Sendable.
+/// A default actor's reentrant executor does not express the FIFO queue contract.
 final class MappingStorageOwner: @unchecked Sendable {
     private let queue = DispatchQueue(label: "com.tinuvael.FieldForge.mapping-storage", qos: .userInitiated)
+    // All mutable state below is accessed only inside a synchronous queue block.
+    // A store passed at initialization is handed off before any block is submitted.
+    private var store: (any MappingStore)?
     private var committed: MappingJournal?
 
-    func run<Value>(_ body: @escaping @Sendable () throws -> Value) async throws -> Value {
+    init(store: (any MappingStore)? = nil) { self.store = store }
+
+    func run<Value: Sendable>(_ body: @escaping @Sendable () throws -> Value) async throws -> Value {
         try await withCheckedThrowingContinuation { continuation in
             queue.async {
                 dispatchPrecondition(condition: .notOnQueue(.main))
@@ -17,32 +26,34 @@ final class MappingStorageOwner: @unchecked Sendable {
         }
     }
 
-    func open(store: any MappingStore) async throws -> MappingWorkflow {
+    func open(makeStore: @escaping @Sendable () -> any MappingStore) async throws -> MappingWorkflow.Snapshot {
         try await run {
+            guard self.store == nil else { throw StorageError.writesBlocked }
+            let store = makeStore()
             let workflow = try MappingWorkflow(store: store)
+            self.store = store
             self.committed = workflow.journal
-            return workflow
+            return workflow.snapshot
         }
     }
 
     /// Inputs capture volatile draft/context intent; mutations always start from the
     /// latest committed graph. Callers must await and reconcile every accepted result.
-    func transaction<Value>(snapshot: MappingWorkflow,
-                            _ action: @escaping @Sendable (inout MappingWorkflow) throws -> Value) async throws -> (MappingWorkflow, Value) {
+    func transaction<Value: Sendable>(snapshot: MappingWorkflow.Snapshot,
+                            _ action: @escaping @Sendable (inout MappingWorkflow) throws -> Value) async throws -> (MappingWorkflow.Snapshot, Value) {
         try await run {
             let base = self.committed ?? snapshot.journal
             let buffer = MappingTransactionBuffer(base)
-            let file = snapshot.persistenceStore
-            var next = snapshot
+            guard let file = self.store else { throw StorageError.writesBlocked }
+            var next = MappingWorkflow(snapshot: snapshot, store: buffer)
             next.prepareTransaction(journal: base, store: buffer)
             let value = try action(&next)
             // Workflow commits are buffered until the entire synchronous command
             // succeeds. Even a command that throws after commit() cannot leave disk
             // ahead of the published result. Exactly one atomic save per command.
             if buffer.changed { try file.save(next.journal) }
-            next.prepareTransaction(journal: next.journal, store: file)
             self.committed = next.journal
-            return (next, value)
+            return (next.snapshot, value)
         }
     }
 }
