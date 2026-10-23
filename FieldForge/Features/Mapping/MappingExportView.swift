@@ -5,7 +5,8 @@ import UIKit
 /// context is never consulted by the file writer or activity controller.
 struct MappingExportView: View {
     @EnvironmentObject private var mapping: MappingModel
-    @State private var journal: MappingJournal
+    @State private var committed: MappingCommittedSnapshot
+    private var journal: MappingJournal { committed.journal }
     @State private var projectID: UUID?
     @State private var horizonID: UUID?
     @State private var excavationID: UUID?
@@ -23,9 +24,9 @@ struct MappingExportView: View {
     @State private var errorMessage: String?
     @State private var operation: Task<Void, Never>?
 
-    init(journal: MappingJournal, projectID: UUID?) {
-        _journal = State(initialValue: journal)
-        _projectID = State(initialValue: projectID ?? journal.projects.first?.id)
+    init(committed: MappingCommittedSnapshot, projectID: UUID?) {
+        _committed = State(initialValue: committed)
+        _projectID = State(initialValue: projectID ?? committed.journal.projects.first?.id)
     }
     private var selection: MappingExportSelection? {
         projectID.map { MappingExportSelection(projectID: $0, horizonID: horizonID, excavationID: excavationID,
@@ -151,7 +152,7 @@ struct MappingExportView: View {
     }
     private var selectedCount: Int {
         guard let selection, let bounds = try? selection.bounds() else { return 0 }
-        return journal.effectiveObservations.filter {
+        return committed.observations(projectID: selection.projectID).filter {
             $0.projectID == selection.projectID && (horizonID == nil || $0.horizonID == horizonID) &&
             (excavationID == nil || $0.excavationID == excavationID) && $0.observedAt >= bounds.start && $0.observedAt < bounds.end
         }.count

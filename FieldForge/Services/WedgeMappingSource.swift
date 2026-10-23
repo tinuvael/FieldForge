@@ -33,10 +33,8 @@ struct WedgeMappingSource: Equatable, Identifiable {
         let draft = Self(context: c, pointID: workflow.draft.id, revisionID: nil, version: nil,
                          title: "Текущий черновик · не сохранён",
                          joints: workflow.draft.jointSets.map { WedgeJoint(origin: .draft($0)) })
-        return [draft] + workflow.journal.effectiveObservations.filter {
-            $0.projectID == c.projectID && $0.horizonID == c.horizonID && $0.excavationID == c.excavationID
-        }.map { observation in
-            let revision = workflow.journal.history(for: observation.id).last
+        return [draft] + workflow.committed.observations(context: c).map { observation in
+            let revision = workflow.committed.latestRevisions[observation.id]
             return Self(context: c, pointID: observation.id, revisionID: revision?.id, version: revision?.version ?? 1,
                         title: "\(observation.displayPicket) · версия \(revision?.version ?? 1) · \(observation.id.uuidString.prefix(8))",
                         joints: (observation.geology?.jointSets ?? []).map { WedgeJoint(origin: .saved($0)) })

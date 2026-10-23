@@ -44,6 +44,57 @@ private final class GatedMappingStore: MappingStore, @unchecked Sendable {
         return (root, store, model)
     }
 
+    func testCommittedReadGenerationFollowsCorrectionAndRapidContextChangesWithoutDraftLeak() async throws {
+        let (root, _, model) = try await setup()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let context = model.workflow!.context, time = Date(timeIntervalSince1970: 1_700_000_000)
+        model.perform { $0.draft.picket = "1"; $0.draft.observedAtOverride = time }
+        let point = try await model.persist { try $0.save(now: time) }
+        let exportSnapshot = model.workflow!.committed
+        let selection = MappingExportSelection(projectID: context.projectID!, firstDay: time, lastDay: time, timeZoneID: "UTC")
+        let before = try MappingCSVExport.prepare(journal: exportSnapshot.journal, selection: selection)
+        model.perform { $0.draft.picket = "9"; $0.draft.notes = "volatile" }
+        XCTAssertTrue(model.workflow!.committed === exportSnapshot)
+        XCTAssertEqual(model.workflow!.committed.observations(context: context), [point])
+        // Snapshot transfer/reconstruction itself must share the same generation.
+        XCTAssertTrue(MappingWorkflow(snapshot: model.workflow!.snapshot).committed === exportSnapshot)
+        var correction = try model.workflow!.correction(for: point.id)
+        correction.reason = "A6 correction"; correction.fields.notes = "corrected"
+        let frozen = correction
+        let revision = try await model.persist { try $0.saveCorrection(frozen, now: time.addingTimeInterval(1)) }
+        let corrected = model.workflow!.committed
+        XCTAssertFalse(corrected === exportSnapshot)
+        XCTAssertEqual(corrected.observation(id: point.id), revision.snapshot)
+        XCTAssertEqual(corrected.latestRevisions[point.id], revision)
+        XCTAssertEqual(corrected.observations(context: context), [revision.snapshot])
+        XCTAssertEqual(WedgeMappingSource.available(in: model.workflow!)[1].revisionID, revision.id)
+        XCTAssertEqual(exportSnapshot.observation(id: point.id), point)
+        let after = try MappingCSVExport.prepare(journal: exportSnapshot.journal, selection: selection, now: before.snapshotAt, id: before.id)
+        XCTAssertEqual(after.tables.map(\.data), before.tables.map(\.data))
+        XCTAssertEqual(after.fieldTables.map(\.data), before.fieldTables.map(\.data))
+        XCTAssertEqual(after.manifest, before.manifest)
+        let other = try await model.persist { try $0.createExcavation(name: "B", horizonIDs: [context.horizonID!]) }
+        let next = MappingContext(projectID: context.projectID, horizonID: context.horizonID, excavationID: other)
+        for target in [next, context, next, context] {
+            try await model.persist { try $0.requestContext(target) }
+            let current = model.workflow!
+            XCTAssertEqual(current.context, target)
+            XCTAssertEqual(current.committed.observations(context: target), target == context ? [revision.snapshot] : [])
+            XCTAssertEqual(WedgeMappingSource.available(in: current).dropFirst().map(\.pointID), target == context ? [point.id] : [])
+            XCTAssertEqual(current.draft.notes, "volatile")
+        }
+        // A different project/horizon takes the existing pending/parking path.
+        let project = try await model.persist { try $0.createProject(name: "other") }
+        try await model.persist { try $0.requestContext(MappingContext(projectID: project)) }
+        XCTAssertEqual(model.workflow!.context, context)
+        try await model.persist { try $0.preserveAndSwitch() }
+        XCTAssertTrue(model.workflow!.observations.isEmpty)
+        XCTAssertTrue(WedgeMappingSource.available(in: model.workflow!).isEmpty)
+        try await model.persist { try $0.requestContext(context) }
+        XCTAssertEqual(model.workflow!.observations, [revision.snapshot])
+        XCTAssertEqual(model.workflow!.draft.notes, "volatile")
+    }
+
     func testPublishedWorkflowCannotWriteOutsideStorageOwner() async throws {
         let (root, store, model) = try await setup()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -102,6 +153,9 @@ private final class GatedMappingStore: MappingStore, @unchecked Sendable {
         XCTAssertEqual(Array(b.journal.projects.suffix(2).map(\.name)), ["first", "second"])
         let previous = try JSONDecoder().decode(MappingJournal.self, from: Data(contentsOf: store.file.backupURL))
         XCTAssertEqual(previous, a.journal)
+        XCTAssertEqual(a.committed.journal, a.journal)
+        XCTAssertEqual(b.committed.journal, b.journal)
+        XCTAssertEqual(b.committed.projects.values.map(\.name).sorted(), b.journal.projects.map(\.name).sorted())
         XCTAssertEqual(try Data(contentsOf: store.file.url), try encoded(b.journal))
         let reopened = try await owner.run { try FileMappingStore(url: store.file.url).load() }
         XCTAssertEqual(reopened, b.journal); XCTAssertEqual(reopened.schemaVersion, 8)
@@ -154,10 +208,12 @@ private final class GatedMappingStore: MappingStore, @unchecked Sendable {
         defer { try? FileManager.default.removeItem(at: root) }
         model.perform { $0.draft.picket = "2"; $0.draft.notes = "complete draft" }
         let before = model.workflow!.journal, draft = model.workflow!.draft
+        let committed = model.workflow!.committed
         let bytes = try Data(contentsOf: store.file.url), backup = try Data(contentsOf: store.file.backupURL)
         store.beforeSave = { throw StorageError.changedFile }
         await model.saveDraft(id: draft.id)
         XCTAssertEqual(model.workflow!.draft, draft); XCTAssertEqual(model.workflow!.journal, before)
+        XCTAssertTrue(model.workflow!.committed === committed)
         if case .failed = model.savingState {} else { XCTFail("Missing recoverable state") }
         XCTAssertEqual(try Data(contentsOf: store.file.backupURL), backup)
         store.beforeSave = nil
@@ -165,11 +221,14 @@ private final class GatedMappingStore: MappingStore, @unchecked Sendable {
         try changed.write(to: store.file.url, options: .atomic)
         await model.saveDraft(id: draft.id)
         XCTAssertEqual(model.workflow!.draft, draft)
+        XCTAssertTrue(model.workflow!.committed === committed)
         XCTAssertEqual(try Data(contentsOf: store.file.url), changed)
         XCTAssertEqual(try Data(contentsOf: store.file.backupURL), backup)
         try bytes.write(to: store.file.url, options: .atomic) // only the test restores its own fixture
         await model.saveDraft(id: draft.id)
         XCTAssertNil(model.error); XCTAssertEqual(model.workflow!.journal.observations.map(\.id), [draft.id])
+        XCTAssertFalse(model.workflow!.committed === committed)
+        XCTAssertEqual(model.workflow!.committed.observation(id: draft.id), model.workflow!.journal.observations[0])
         XCTAssertEqual(try Data(contentsOf: store.file.backupURL), bytes)
     }
 
@@ -197,6 +256,7 @@ private final class GatedMappingStore: MappingStore, @unchecked Sendable {
         let (root, store, model) = try await setup()
         defer { try? FileManager.default.removeItem(at: root) }
         let journal = model.workflow!.journal
+        let committed = model.workflow!.committed
         let bytes = try Data(contentsOf: store.file.url), backup = try Data(contentsOf: store.file.backupURL)
         do {
             try await model.persist { workflow in
@@ -206,6 +266,7 @@ private final class GatedMappingStore: MappingStore, @unchecked Sendable {
             XCTFail("Failed command accepted")
         } catch { }
         XCTAssertEqual(model.workflow!.journal, journal)
+        XCTAssertTrue(model.workflow!.committed === committed)
         XCTAssertEqual(try Data(contentsOf: store.file.url), bytes)
         XCTAssertEqual(try Data(contentsOf: store.file.backupURL), backup)
         _ = try await model.persist { try $0.createProject(name: "retry") }

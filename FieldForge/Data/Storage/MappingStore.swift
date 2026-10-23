@@ -69,7 +69,8 @@ extension MappingJournal {
 
 /// Platform-independent capture state machine. Commit first, then publish/reset.
 struct MappingWorkflow {
-    private(set) var journal: MappingJournal
+    private(set) var committed: MappingCommittedSnapshot
+    var journal: MappingJournal { committed.journal }
     var draft = MappingDraft()
     private(set) var pendingContext: MappingContext?
     // Volatile drafts retain their original spatial frame until explicitly revisited.
@@ -77,27 +78,29 @@ struct MappingWorkflow {
     var retainedDraftIDs: Set<UUID> { Set(suspendedDrafts.map { $0.draft.id } + [draft.id]) }
     private var store: any MappingStore
     init(store: any MappingStore) throws {
-        self.store = store; journal = try store.load()
+        self.store = store; committed = MappingCommittedSnapshot(try store.load())
         draft.suggestElevation(selectedHorizon)
     }
-    /// Only these value fields cross the storage boundary; the store never does.
+    /// Checked Sendable transfer: immutable committed generation plus volatile
+    /// values. Reconstructing presentation shares indexes; the store never crosses.
     struct Snapshot: Sendable {
-        let journal: MappingJournal
+        let committed: MappingCommittedSnapshot
+        var journal: MappingJournal { committed.journal }
         let draft: MappingDraft
         let pendingContext: MappingContext?
         let suspendedDrafts: [(context: MappingContext, draft: MappingDraft)]
     }
     var snapshot: Snapshot {
-        Snapshot(journal: journal, draft: draft, pendingContext: pendingContext, suspendedDrafts: suspendedDrafts)
+        Snapshot(committed: committed, draft: draft, pendingContext: pendingContext, suspendedDrafts: suspendedDrafts)
     }
     init(snapshot: Snapshot, store: any MappingStore = PresentationMappingStore()) {
-        journal = snapshot.journal; draft = snapshot.draft; pendingContext = snapshot.pendingContext
+        committed = snapshot.committed; draft = snapshot.draft; pendingContext = snapshot.pendingContext
         suspendedDrafts = snapshot.suspendedDrafts; self.store = store
     }
     // Used only when handing an isolated test workflow to its application owner.
     var persistenceStore: any MappingStore { store }
-    mutating func prepareTransaction(journal: MappingJournal, store: any MappingStore) {
-        self.journal = journal; self.store = store
+    mutating func prepareTransaction(committed: MappingCommittedSnapshot, store: any MappingStore) {
+        self.committed = committed; self.store = store
     }
     var selectedHorizon: MappingHorizon? { journal.horizons.first { $0.id == context.horizonID } }
     private mutating func resetDraft() { draft = MappingDraft(); draft.suggestElevation(selectedHorizon) }
@@ -107,8 +110,11 @@ struct MappingWorkflow {
         guard let horizonID = context.horizonID else { return [] }
         return journal.excavations.filter { $0.projectID == context.projectID && $0.horizonIDs.contains(horizonID) }
     }
-    var observations: [MappingObservation] { journal.effectiveObservations.filter { $0.projectID == context.projectID } }
-    mutating func commit(_ next: MappingJournal) throws { try store.save(next); journal = next }
+    var observations: [MappingObservation] { committed.observations(projectID: context.projectID) }
+    mutating func commit(_ next: MappingJournal) throws {
+        try store.save(next)
+        committed = MappingCommittedSnapshot(next)
+    }
 
     mutating func requestContext(_ next: MappingContext) throws {
         guard !draft.saving else { throw MappingError.invalid("Дождитесь сохранения наблюдения.") }
@@ -214,15 +220,7 @@ struct MappingWorkflow {
     }
     func points(on plan: MappingPlanReference, excavationID: UUID? = nil, restrictToSelection: Bool = true) -> [MappingObservation] {
         guard journal.plans.contains(plan), !restrictToSelection || plans.contains(plan) else { return [] }
-        guard let horizon = journal.horizons.first(where: { $0.id == plan.horizonID }) else { return [] }
-        return journal.effectiveObservations.filter { point in
-            guard point.projectID == horizon.projectID, point.horizonID == plan.horizonID,
-                  point.coordinates?.x != nil, point.coordinates?.y != nil,
-                  excavationID == nil || point.excavationID == excavationID,
-                  let sourceID = point.coordinates?.planID,
-                  let source = journal.plans.first(where: { $0.id == sourceID }) else { return false }
-            return PlanCoordinateCompatibility.compatible(source, plan, plans: journal.plans)
-        }
+        return committed.points(on: plan, excavationID: excavationID)
     }
     private func validName(_ text: String) throws -> String {
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)

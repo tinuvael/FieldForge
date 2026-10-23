@@ -2,6 +2,9 @@ import Foundation
 import Combine
 
 @MainActor final class MappingModel: ObservableObject {
+    // Publication/admission belongs here. Workflow owns the capture state machine;
+    // its immutable committed generation is shared on publication, never reindexed
+    // on MainActor. Screens retain only their own editing/navigation state.
     @Published var workflow: MappingWorkflow?
     @Published var error: String?
     @Published var success = false
