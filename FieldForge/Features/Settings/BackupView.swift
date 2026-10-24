@@ -20,6 +20,10 @@ struct BackupView: View {
                 Text("Несохранённые черновики не входят в резервную копию. Сохраните их перед созданием архива.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
+            Section {
+                NavigationLink("Восстановить из резервной копии", destination: RestoreView())
+                    .disabled(phase != nil)
+            }
             Section("Резервная копия") {
                 if let manifest = result?.manifest {
                     counts(manifest)

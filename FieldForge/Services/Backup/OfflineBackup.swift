@@ -164,6 +164,10 @@ enum OfflineBackup {
             }
         }
         try walk(sources.photos, sources.photos, "photos"); try walk(sources.plans, sources.plans, "plans")
+        // Imported opaque history and the source manifest remain backup evidence
+        // on subsequent backups. They are never authoritative current journals.
+        let history = sources.mapping.deletingLastPathComponent().appendingPathComponent(OfflineRestore.marker)
+        try walk(history, history, "mapping/recovery/restored")
         return result
     }
     private static func copy(_ source: URL, to target: URL, path: String, cancellation: BackupCancellation) throws -> BackupManifest.File {

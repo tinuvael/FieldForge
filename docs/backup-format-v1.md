@@ -1,7 +1,7 @@
-# Complete offline backup — format 1 (B1a)
+# Complete offline backup and verified restore — format 1
 
-B1a creates and independently reads/verifies a portable backup. It does **not**
-restore, activate, migrate, merge or import data. Issue #23 remains open for B1b.
+B1a creates and independently reads/verifies a portable backup. B1b adds the
+[verified restore protocol](#b1b-verified-restore) below. Issue #23 remains open for review.
 Excel collaboration (#68) is a separate exchange workflow; XLSX is not authoritative
 backup data.
 
@@ -228,11 +228,10 @@ metadata to 16 MiB. Sufficient temporary disk for staging plus ZIP is needed. A 
 failure yields an error without modifying sources. These limits are not field-capacity
 or physical-device performance qualifications.
 
-B1b must add extraction into isolated staging, reviewed pending-operation recovery,
-validation before activation, atomic activation/journal-and-original relationships,
-retained previous readable state, interrupted-activation recovery and verified relaunch
-photo/plan/history behavior. It must preserve independent-journal compatibility and
-the schema-8/no-reset policy. No Restore button is shipped by B1a. Excel import (#68),
+The original B1a delivery deferred activation. B1b implements isolated extraction,
+validation before activation, journaled directory activation with retained previous
+readable state, startup recovery and reopened photo/plan/history validation below.
+Pending-operation recovery remains reviewed external work; such packages cannot restore. Excel import (#68),
 cloud synchronization, SQLite and experimental mapping migrations remain separate.
 
 ## Focused verification
@@ -269,3 +268,236 @@ validation. Fixtures use isolated temporary directories only. Existing `Migratio
 cover deployed independent-journal behavior. Full regression, broad UI automation,
 benchmarks and physical device/share qualification are deliberately outside B1a's
 focused verification budget.
+
+## B1b verified restore
+
+Format **1**, mapping schema **8** only. Settings → «Резервное копирование» →
+«Восстановить из резервной копии» opens the native Files picker for ZIP. The security
+scope surrounds a bounded copy into a UUID-owned temporary directory; no parser or
+activation operation uses the provider URL. Work runs off MainActor. The preview
+shows UTC creation time, both versions, all-project/original-observation/independent
+measurement/photo/DXF counts, archive bytes and verification status. An explicit
+second confirmation authorizes complete replacement and closing unsaved editors and
+drafts. There is no merge, selective import, UUID regeneration or Excel synchronization.
+
+`OfflineRestore.prepare` reuses `BackupValidator` and `BackupArchiveReader`; it adds
+no ZIP parser. Both the independently derived report and manifest must be complete.
+Incomplete B1a recovery evidence is never eligible. Unsupported/truncated/unsafe ZIPs,
+invalid UUIDs, missing or damaged originals, unresolved operations, staging/orphan files
+and unknown managed files fail before activation. B1a ZIP32/entry/manifest/journal
+limits remain. B1b additionally refuses DXF originals over 32 MiB and photographs over
+128 MiB to bound the existing in-memory decoders; no bytes are truncated. Preview reserves three archive sizes plus 32 MiB; activation reserves
+three current inventory sizes plus two incoming archive sizes plus 32 MiB. Capacity
+checks are conservative admission checks; later disk-full/I/O errors also fail safely.
+
+Extraction streams 256 KiB chunks through the existing CRC-checking reader into a
+new private package directory. It preserves exact JSON, photo/EXIF/GPS and DXF bytes.
+After extraction, and again at activation, verification compares the full file set,
+manifest, sizes, SHA-256, authoritative schema-8 graph, counts, attachment register and
+independent IDs. ImageIO checks original image structure/dimensions; the existing DXF
+parser checks each original. Cancellation checks run while copying/extracting/hashing
+and remove only that preview directory. Activation is deliberately noncancellable
+once confirmation has been accepted; closing a screen cannot abandon the transaction.
+
+### Current-data protection and unreadable-data policy
+
+The production roots inspected in B1a all live under Application Support/FieldForge:
+`mapping-v1.json`, `measurements-v1.json`, `photos/`, `plans/`, sibling recovery files
+and other storage metadata. B1b relies on that common parent on the same filesystem;
+it refuses mismatched journal paths rather than partially activating separate roots.
+UI-test namespace journals are not restore targets.
+
+Under the existing mapping FIFO reservation and independent recursive file-access
+lock, the owner checks its latest committed mapping bytes and expected independent
+bytes. It captures/packages/verifies a B1a **complete** protection ZIP. The ZIP and
+candidate files are synchronized before an activation intent is written. The entire
+old directory is later retained by rename, including thumbnails, unknown top-level
+metadata and every previous recovery/operation file. Nothing in it is overwritten.
+Protection requires a readable complete current backup: pending operations, damaged
+originals, corrupt/unsupported journals or unreliable protection refuse replacement.
+There is **no bypass** for an unreadable database. All bytes remain in place for
+reviewed external recovery; B1b does not repair/reset the database. A never-written,
+empty installation is valid and receives a protected empty dataset.
+
+### Durable activation protocol
+
+The sibling `Application Support/FieldForge-Restore/` is outside the replaceable root:
+
+```text
+active.json                       # bounded version-1 activation intent
+<transaction UUID>/pre-restore.zip # independently verified B1a protection package
+<transaction UUID>/incoming/       # new installed layout before rename
+<transaction UUID>/previous/       # exact old root after rename, retained on success
+<transaction UUID>/rejected/       # displaced incoming data if rollback was needed
+```
+
+1. Validate source ZIP and extracted package again. Reserve the mapping FIFO for
+   installation. Permanently retire that owner; queued and later commands
+   from old views are rejected. Block AppModel writes and invalidate other loaded
+   independent-store write epochs under its file lock.
+2. Secure and verify `pre-restore.zip`. Build the installed candidate privately;
+   validate its complete file set and reopen semantics. Synchronize files and
+   directories, including existing data. No live replacement has happened.
+3. Atomically write/synchronize `active.json` with version, transaction UUID,
+   original root inode, expected source-manifest SHA-256 and `committed: false`; synchronize containing directories.
+4. Rename `FieldForge` to this transaction's `previous`, synchronize both parents.
+5. Rename `incoming` to `FieldForge`, synchronize both parents.
+6. Revalidate every installed byte/reference and trial-open mapping and independent
+   stores without modifying content. Return a `PendingActivation` token; keep
+   `active.json` **uncommitted**. File/store success is not application readiness.
+7. Construct both actual application models privately. Await mapping initialization,
+   check its workflow, error/loading state and attachment stores, and check independent
+   model readiness. Independent decoding runs off MainActor. The new mapping FIFO
+   rejects generic attachment work and commands while suspended; the independent
+   model cannot save. No candidate model or empty fallback is published to views.
+8. `RestoreSessionFinalizer` revalidates the installed dataset, then atomically
+   persists/synchronizes `committed: true` and removes/synchronizes the active intent.
+   Enable candidate writes and publish both models/new navigation generation together
+   on MainActor. The progress screen remains until this finishes; only then show
+   success. Keep the transaction/protection ZIP and previous root indefinitely.
+
+The two renames are **not** one atomic operation. While busy, application screens
+are replaced by a progress screen and no valid dataset is published. `ApplicationSession`
+runs recovery off MainActor **before constructing either application store** on
+launch and after installation errors. Provisional candidate construction intentionally
+skips startup recovery so it cannot accidentally roll back its own pending installation. An uncommitted intent deterministically rolls
+back: displace any incoming live root to `rejected`, return `previous` to live. If
+`previous` is absent, the live root must have the original recorded inode (either
+activation never moved it or rollback already returned it). This makes recovery
+idempotent across interruption after either recovery rename. A committed intent is
+finished only if its manifest matches the intent's SHA-256 and the complete installed
+package still verifies; otherwise rollback
+uses the retained old directory. Corrupt intents, missing/ambiguous roots, rename or
+sync errors block opening/writes and preserve all files. No missing journal is
+interpreted as a fresh empty installation while an unresolved intent exists.
+
+Synchronization failures are errors, not ignored successes. This is a filesystem
+crash-recovery protocol, not a claim of protection against broken hardware, a hostile
+external filesystem writer or an OS violating its synchronization guarantees.
+The old inode is a local recovery identity, never a portable geological record ID.
+
+### Exact evidence, sidecars and model replacement
+
+All UUIDs, original observations, diagnostics/acquisition provenance, J1–J5, geology,
+ratings, tectonics, plan relationships, photo/correction history, numeric precision,
+wire timestamps/time zones, north references and coordinate metadata stay in exact
+original JSON. No engineering recalculation or normalization occurs. Thumbnails can
+regenerate independently; they never replace originals.
+
+Incoming `mapping/recovery/*` and `measurements/recovery/*` are stored under
+`FieldForge/restored-format-v1/history/<original archive path>`; the exact incoming
+manifest is also retained in that marker directory. They are **opaque history**, never
+current `.previous` or `.phase1-backup`, and cannot collide with the separate current
+transaction's protection copy. Subsequent backups include the marker/history under
+`mapping/recovery/restored/`. Repeated restore cycles can nest these history paths;
+all existing ZIP32/path limits still apply and excessive history fails explicitly.
+
+A restored independent schema-1 journal is decoded with the deployed compatibility
+reader without invoking its migration. The durable `restored-format-v1` marker keeps
+loads read-only across launches; the first ordinary user save still writes the
+existing schema-2 format. Installations without that marker retain their deployed
+migration/backup behavior. Schema-2 restored bytes and an explicitly absent journal
+also remain unchanged on load. No original journal or historical sidecar is rewritten
+by restoration.
+
+On model-readiness/finalization failure, retire and drain the candidate mapping owner
+and disable its independent model **before** filesystem recovery. Persist an
+uncommitted rollback decision, move the incoming live root intact to `rejected`,
+return the original directory to live, and invalidate all independent loaded-writer
+epochs under the file-access lock. This includes writers that loaded the provisional
+incoming root. Reopen the original dataset into a new suspended model pair, require
+both models usable, then enable/publish it. A rollback or original-model reopening
+error removes all accessible models and displays a Russian write-blocked error; it
+never falls through to ordinary partial startup or retries the incoming root.
+
+The pending token retains the original intent identity, inode and manifest binding.
+It permits a durable rollback decision even if a finalization I/O error occurred after
+writing `committed: true` or removing the active pointer, or final publication admission
+fails. It verifies the retained original directory identity before reconstructing that
+intent. Rollback is idempotent if the original root has already been returned. A crash
+before durable finalization (including after model readiness) leaves an uncommitted
+intent and rolls back on launch. A crash after durable finalization may retain the
+incoming dataset: both model readiness checks have already succeeded. No candidate
+writes or UI publication precede that decision.
+
+The old MappingStorageOwner is permanently retired even on failure; its generic
+attachment callbacks and durable commands cannot touch the reopened dataset. Old
+AppModel saves are disabled, and low-level loaded independent writers are rejected
+by a lock-protected write epoch. The replacement models clear drafts, retained
+memory-only photo sessions, pending editor requests and active navigation. Disk
+recovery evidence is retained; unsaved in-memory drafts are deliberately discarded
+only after the replacement confirmation. Disposable active-plan preferences retain
+their existing unavailable-selection behavior rather than inventing a plan match.
+
+### B1b limitations and verification
+
+Archives remain unencrypted and unauthenticated; original private EXIF/GPS is retained.
+Recovery copies live inside the app sandbox at the disclosed FieldForge-Restore
+path; B1b does not provide a recovery-copy browser, pruning or an automatic rollback
+button after a committed restore. Keep external backups in Files as well. Current
+unreadable/incomplete datasets need reviewed external recovery before this UI can
+replace them. Power-loss/device-volume-full qualification and native Files/iCloud
+provider testing remain manual-device work. ZIP64, cloud sync, Excel exchange (#68),
+selective restore and changes to engineering methods are outside B1b.
+
+Focused tests extend the B1a two-project fixture (original mixed measurements,
+J1–J5/geology/Q/RMR/GSI/tectonics/corrections, photo history and EXIF/GPS, DXF), comparing
+the full graph and every payload byte after restore. Fault injection covers all six
+activation checkpoints and both recovery renames; it also covers corrupt intent,
+staging mutation, unsupported/unsafe/corrupt/incomplete sources, capacity refusal,
+extraction errors, preactivation cancellation/cleanup, concurrent old mapping and
+independent writers, legacy independent bytes/absence and retained protection.
+Independent migration tests remain part of the focused run. These tests inject
+process interruption at durable boundaries; they do not simulate physical power loss.
+
+B1b executed 36 focused tests (23 backup/restore + 13 independent migration): 35
+passed and one unsafe-ZIP fixture failed before reaching restore because the
+production writer correctly refused its illegal path. The fixture now mutates safe
+ZIP headers; its isolated rerun passed. After the final restore bounds/manifest-binding
+changes, **all 8 restore tests passed**. No source concurrency warnings were emitted.
+The incremental generic iOS Simulator Debug build succeeded with signing disabled;
+CoreSimulator runtime/service errors and the unrelated AppIntents metadata notice are
+environment limitations, not launch/device verification. Full regression, broad UI
+automation, benchmarks and physical iPhone qualification were deliberately skipped.
+Local logs: `/tmp/fieldforge-b1b-focused.log`, `/tmp/fieldforge-b1b-repair.log`,
+`/tmp/fieldforge-b1b-restore-final.log`, `/tmp/fieldforge-b1b-simulator.log`.
+
+### Post-activation model-readiness audit (2026-10-24)
+
+The original implementation had a confirmed ordering gap: `activate` trial-opened
+low-level stores, wrote committed=true and removed active.json before
+`ApplicationSession.reopen` constructed the actual models. A mapping or independent
+model error then caused another ordinary reopen, with no pending transaction left to
+roll back. A low-level valid incoming dataset could remain installed without a usable
+application session. The lifecycle trace established this before the correction;
+new deterministic readiness-failure injections exercise that exact post-install window.
+
+Installation and application finalization are now separate phases of the **same**
+version-1 intent protocol. No schema, backup format, sensor/engineering calculation,
+measurement compatibility, or second persistence system is introduced. The exact
+success boundary is: installed bytes and trial stores validated, both real models
+ready, durable finalization completed, both models enabled/published while the UI is
+still guarded, then the guard is released. `OfflineRestore` remains independent of
+SwiftUI; the MainActor finalizer accepts application callbacks and is shared with
+fault-injection tests. Readiness errors preserve the incoming installed layout under
+`rejected`, the original directory (returned to live) and exact `pre-restore.zip` bytes.
+
+One focused run: **13 restore tests passed, 0 failures**, including five new regression
+tests. Cases include independent/mapping model-readiness failure after successful
+file/store opens, failure before commit, termination after readiness before commit,
+finalization failure after committed=true, publication admission failure after pointer
+removal, both interrupted rollback renames, repeated automatic/explicit recovery,
+original and protection-byte preservation, stale old/candidate mapping and independent
+writers, and success only after readiness/finalization. Model-readiness faults are
+injected at the shared application coordinator boundary after real store loads;
+these host tests do not instantiate the iOS sensor-backed AppModel or render SwiftUI.
+
+One incremental generic iOS Simulator Debug build **succeeded** with signing disabled.
+No source concurrency warnings; the existing SwiftPM cache, CoreSimulator runtime
+and unrelated AppIntents metadata notices remain. Full regression, UI automation,
+physical-device tests and repeated clean builds were deliberately not run. No failed
+command reruns were needed. Logs: `/tmp/fieldforge-b1b-postactivation-tests.log` and
+`/tmp/fieldforge-b1b-postactivation-simulator.log`. Filesystem/hardware and provider
+limitations described above remain; there is no guarantee against an OS/volume that
+violates synchronization semantics. A rollback that cannot persist its decision or
+complete its renames blocks access and retains all bytes for subsequent recovery.
