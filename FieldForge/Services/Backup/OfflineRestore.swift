@@ -15,14 +15,21 @@ struct RestorePreview: Sendable {
 /// Only MappingStorageOwner may call activate. Recovery runs before either store opens.
 enum OfflineRestore {
     enum Checkpoint: String, CaseIterable, Sendable {
-        case protected, intent, oldMoved, newMoved, reopened, committed
+        case protected, intent, oldMoved, newMoved, reopened, modelsReady, committed
     }
-    struct Intent: Codable {
+    struct Intent: Codable, Equatable, Sendable {
         let version: Int
         let id: UUID
         let originalInode: UInt64
         let manifestSHA256: String
         var committed: Bool
+    }
+    /// Installation is provisional until the application confirms both models.
+    /// The retained intent also permits rollback after uncertain finalization I/O.
+    struct PendingActivation: Sendable {
+        let live: URL
+        let intent: Intent
+        let protection: URL
     }
     static let marker = "restored-format-v1"
     static let mappingName = "mapping-v1.json"
@@ -165,7 +172,7 @@ enum OfflineRestore {
     static func activate(_ preview: RestorePreview, live: URL, journal: MappingJournal, mappingBytes: Data?,
                          measurements: MeasurementBackupSource,
                          capacity: (@Sendable (URL) throws -> Int64)? = nil,
-                         checkpoint: (Checkpoint) throws -> Void = { _ in }) throws -> URL {
+                         checkpoint: (Checkpoint) throws -> Void = { _ in }) throws -> PendingActivation {
         guard !exists(pointer(live)), live.lastPathComponent == "FieldForge",
               measurements.url == live.appendingPathComponent(measurementName) else { throw StorageError.writesBlocked }
         let manifest = try eligible(BackupValidator.verify(preview.archive))
@@ -205,7 +212,7 @@ enum OfflineRestore {
         try checkpoint(.protected)
         let inode = try inode(live)
         let manifestHash = try OfflineBackup.digest(destination("manifest.json", root: incoming, installed: true), cancellation: BackupCancellation()).1
-        var intent = Intent(version: 1, id: id, originalInode: inode, manifestSHA256: manifestHash, committed: false)
+        let intent = Intent(version: 1, id: id, originalInode: inode, manifestSHA256: manifestHash, committed: false)
         try writeIntent(intent, live: live)
         try checkpoint(.intent)
         try fm.moveItem(at: live, to: previous)
@@ -219,11 +226,54 @@ enum OfflineRestore {
         _ = try MappingWorkflow(store: FileMappingStore(url: live.appendingPathComponent(mappingName)))
         _ = try FileMeasurementStore(url: live.appendingPathComponent(measurementName)).loadRestored()
         try checkpoint(.reopened)
+        return PendingActivation(live: live, intent: intent, protection: protection)
+    }
+
+    /// Called only after application-model readiness, while candidate writers are
+    /// suspended and no UI session has been published. No SwiftUI dependency.
+    static func finalize(_ pending: PendingActivation, checkpoint: (Checkpoint) throws -> Void = { _ in }) throws {
+        FileMeasurementStore.fileAccess.lock(); defer { FileMeasurementStore.fileAccess.unlock() }
+        var intent = try readIntent(live: pending.live)
+        guard intent == pending.intent, !intent.committed else { throw StorageError.writesBlocked }
+        let manifestURL = destination("manifest.json", root: pending.live, installed: true)
+        guard try OfflineBackup.digest(manifestURL, cancellation: BackupCancellation()).1 == intent.manifestSHA256 else {
+            throw StorageError.changedFile
+        }
+        let manifest = try JSONDecoder().decode(BackupManifest.self, from: Data(contentsOf: manifestURL))
+        try validateFiles(manifest, root: pending.live, installed: true)
+        try checkpoint(.modelsReady)
         intent.committed = true
-        try writeIntent(intent, live: live)
+        try writeIntent(intent, live: pending.live)
         try checkpoint(.committed)
-        try fm.removeItem(at: pointer(live)); try syncDirectory(recoveryRoot(live))
-        return protection
+        try fm.removeItem(at: pointer(pending.live)); try syncDirectory(recoveryRoot(pending.live))
+    }
+
+    /// Candidate owners must be retired/drained first. Persist the rollback decision
+    /// before renames, even if finalization had persisted committed=true or removed
+    /// the pointer before a later sync/admission error. Repeated calls are safe.
+    static func rollback(_ pending: PendingActivation,
+                         checkpoint: (RecoveryCheckpoint) throws -> Void = { _ in }) throws {
+        FileMeasurementStore.fileAccess.lock(); defer { FileMeasurementStore.fileAccess.unlock() }
+        let live = pending.live
+        let previous = recoveryRoot(live).appendingPathComponent(pending.intent.id.uuidString + "/previous")
+        if exists(pointer(live)) {
+            var active = try readIntent(live: live); active.committed = false
+            guard active == pending.intent else { throw StorageError.writesBlocked }
+        }
+        if exists(previous) {
+            guard try inode(previous) == pending.intent.originalInode else { throw StorageError.invalidRecord }
+        } else {
+            guard exists(live), try inode(live) == pending.intent.originalInode else { throw StorageError.writesBlocked }
+        }
+        try writeIntent(pending.intent, live: live)
+        try recover(live: live, checkpoint: checkpoint)
+    }
+    private static func readIntent(live: URL) throws -> Intent {
+        let bytes = try Data(contentsOf: pointer(live))
+        guard bytes.count < 4096 else { throw StorageError.invalidRecord }
+        let intent = try JSONDecoder().decode(Intent.self, from: bytes)
+        guard intent.version == 1 else { throw StorageError.unsupportedVersion }
+        return intent
     }
     /// Idempotent across crashes during recovery too. Original directory inode binds
     /// the no-previous case to the old dataset; missing/ambiguous data fails closed.
@@ -231,10 +281,10 @@ enum OfflineRestore {
     static func recover(live: URL, checkpoint: (RecoveryCheckpoint) throws -> Void = { _ in }) throws {
         let active = pointer(live)
         guard exists(active) else { return }
-        let bytes = try Data(contentsOf: active)
-        guard bytes.count < 4096 else { throw StorageError.invalidRecord }
-        let intent = try JSONDecoder().decode(Intent.self, from: bytes)
-        guard intent.version == 1 else { throw StorageError.unsupportedVersion }
+        let intent = try readIntent(live: live)
+        FileMeasurementStore.fileAccess.lock(); defer { FileMeasurementStore.fileAccess.unlock() }
+        // Includes every independent store loaded against the provisional root.
+        FileMeasurementStore.invalidateWriters(at: live.appendingPathComponent(measurementName))
         let transaction = recoveryRoot(live).appendingPathComponent(intent.id.uuidString)
         let previous = transaction.appendingPathComponent("previous"), rejected = transaction.appendingPathComponent("rejected")
         if intent.committed, exists(live) {

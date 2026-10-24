@@ -149,8 +149,8 @@ import Combine
         self.workflow = MappingWorkflow(snapshot: workflow.snapshot); self.photoStore = photoStore; self.planStore = planStore
         Task { await refreshPhotoRecovery() }
     }
-    init() {
-        storage = MappingStorageOwner()
+    init(restoring: Bool = false) {
+        storage = MappingStorageOwner(suspended: restoring)
         preferences = .standard
         activePlanIDs = preferences.dictionary(forKey: "FieldForge.activePlans.v1") as? [String: String] ?? [:]
         do {
@@ -173,9 +173,12 @@ import Combine
                 defer { loading = false }
                 do { workflow = MappingWorkflow(snapshot: try await storage.open { FileMappingStore(url: storeURL) }) }
                 catch { self.error = "Не удалось открыть картирование. Запись заблокирована: \(error.localizedDescription)" }
-                await refreshPhotoRecovery()
+                if !restoring { await refreshPhotoRecovery() }
             }
         } catch { self.error = "Не удалось открыть картирование. Запись заблокирована: \(error.localizedDescription)" }
+    }
+    var readyForRestore: Bool {
+        workflow != nil && !loading && error == nil && photoStore != nil && planStore != nil
     }
     func waitUntilOpened() async { await opening?.value }
 

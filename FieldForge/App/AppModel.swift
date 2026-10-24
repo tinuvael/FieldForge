@@ -33,7 +33,7 @@ enum MeasurementMode: String, CaseIterable {
     }
     var canSaveManual: Bool { storageWritable && !backupInProgress && savedManual == nil && manualValidationMessage == nil }
 
-    init(captureOnly: Bool = false, opened: OpenedMeasurements? = nil, openingError: String? = nil) {
+    init(captureOnly: Bool = false, opened: OpenedMeasurements? = nil, openingError: String? = nil, restoring: Bool = false) {
         #if targetEnvironment(simulator)
         acquisition = MeasurementAcquisition(provider: MockSensorProvider())
         #else
@@ -50,7 +50,8 @@ enum MeasurementMode: String, CaseIterable {
         }
         do {
             let loaded = try opened ?? Self.openJournal()
-            records = loaded.records; store = FileMeasurementStore(opened: loaded); storageWritable = true
+            records = loaded.records; store = FileMeasurementStore(opened: loaded)
+            storageWritable = !restoring; backupInProgress = restoring
         } catch { errorMessage = "Не удалось открыть журнал: \(error.localizedDescription) Запись заблокирована для сохранности файла." }
         acquisition.onChange = { [weak self] in self?.objectWillChange.send() }
     }
@@ -80,6 +81,8 @@ enum MeasurementMode: String, CaseIterable {
         return source
     }
     func endBackup() { backupInProgress = false }
+    var readyForRestore: Bool { store != nil && errorMessage == nil }
+    func enableAfterRestore() { storageWritable = true; backupInProgress = false }
     func retireForRestore() {
         storageWritable = false; backupInProgress = true
         acquisition.setVisible(false); acquisition.reset()

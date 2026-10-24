@@ -392,6 +392,7 @@ extension OfflineBackupTests {
         let measurements: FileMeasurementStore
         let owner: MappingStorageOwner
         let original: Data
+        let originalMeasurements: Data
     }
     private func restoreLive(parent: URL) async throws -> LiveFixture {
         let live = parent.appendingPathComponent("FieldForge")
@@ -406,7 +407,7 @@ extension OfflineBackupTests {
         let owner = MappingStorageOwner()
         let mappingURL = file.url
         _ = try await owner.open { FileMappingStore(url: mappingURL) }
-        return .init(url: live, journal: journal, measurements: measurements, owner: owner, original: try Data(contentsOf: file.url))
+        return .init(url: live, journal: journal, measurements: measurements, owner: owner, original: try Data(contentsOf: file.url), originalMeasurements: try Data(contentsOf: measurements.url))
     }
     private enum RestoreInterruption: Error { case crash }
 
@@ -419,7 +420,9 @@ extension OfflineBackupTests {
         // Preview/staging never changes current data; activation is a separate call.
         XCTAssertEqual(try Data(contentsOf: source.url), source.expectedBytes)
         XCTAssertEqual(try Data(contentsOf: live.url.appendingPathComponent(OfflineRestore.mappingName)), live.original)
-        let recovery = try await live.owner.restore(preview, measurements: source)
+        let pending = try await live.owner.restore(preview, measurements: source)
+        try OfflineRestore.finalize(pending)
+        let recovery = pending.protection
         let reopened = try MappingWorkflow(store: FileMappingStore(url: live.url.appendingPathComponent(OfflineRestore.mappingName)))
         XCTAssertEqual(reopened.journal, f.journal)
         XCTAssertEqual(reopened.journal.revisions.last?.snapshot.geology?.jointSets.count, 5)
@@ -455,7 +458,8 @@ extension OfflineBackupTests {
         for step in OfflineRestore.Checkpoint.allCases {
             let parent = try directory(), live = try await restoreLive(parent: parent)
             do {
-                _ = try await live.owner.restore(preview, measurements: live.measurements.backupSource()) { if $0 == step { throw RestoreInterruption.crash } }
+                let pending = try await live.owner.restore(preview, measurements: live.measurements.backupSource()) { if $0 == step { throw RestoreInterruption.crash } }
+                try OfflineRestore.finalize(pending) { if $0 == step { throw RestoreInterruption.crash } }
                 XCTFail("Expected interruption")
             } catch { XCTAssertTrue(error is RestoreInterruption) }
             try OfflineRestore.recover(live: live.url)
@@ -556,7 +560,8 @@ extension OfflineBackupTests {
             let backup = try await package(changed); defer { backup.files.cleanup() }
             let preview = try OfflineRestore.prepare(backup.files.urls[0]); defer { preview.cleanup() }
             let live = try await restoreLive(parent: f.root)
-            _ = try await live.owner.restore(preview, measurements: live.measurements.backupSource())
+            let pending = try await live.owner.restore(preview, measurements: live.measurements.backupSource())
+            try OfflineRestore.finalize(pending)
             let url = live.url.appendingPathComponent(OfflineRestore.measurementName)
             let reopened = FileMeasurementStore(url: url)
             XCTAssertEqual(try reopened.load().count, legacy ? 3 : 0)
@@ -589,11 +594,168 @@ extension OfflineBackupTests {
             do { try await live.owner.run { return () }; return false } catch { return error is StorageError }
         }
         attempt.signal(); release.signal()
-        _ = try await restore.value
+        let pending = try await restore.value
+        try OfflineRestore.finalize(pending)
         let rejectedMeasurement = try await writer.value, rejectedMapping = await queued.value
         XCTAssertTrue(rejectedMeasurement); XCTAssertTrue(rejectedMapping)
         XCTAssertEqual(try Data(contentsOf: source.url), f.measurementSource.expectedBytes)
         XCTAssertEqual(try Data(contentsOf: live.url.appendingPathComponent(OfflineRestore.mappingName)), f.mappingBytes)
+    }
+
+    private enum ModelReopenFailure: String, LocalizedError {
+        case mapping, independent
+        var errorDescription: String? { "Injected \(rawValue) model initialization failure" }
+    }
+    private func assertRestoreRolledBack(_ pending: OfflineRestore.PendingActivation, live: LiveFixture,
+                                         incoming: Fixture, protectionBytes: Data) throws {
+        XCTAssertEqual(try Data(contentsOf: live.url.appendingPathComponent(OfflineRestore.mappingName)), live.original)
+        XCTAssertEqual(try FileMappingStore(url: live.url.appendingPathComponent(OfflineRestore.mappingName)).load(), live.journal)
+        XCTAssertEqual(try Data(contentsOf: live.url.appendingPathComponent(OfflineRestore.measurementName)), live.originalMeasurements)
+        XCTAssertEqual(try Data(contentsOf: pending.protection), protectionBytes)
+        XCTAssertTrue(try BackupValidator.verify(pending.protection).report.complete)
+        let rejected = pending.protection.deletingLastPathComponent().appendingPathComponent("rejected")
+        XCTAssertEqual(try Data(contentsOf: rejected.appendingPathComponent(OfflineRestore.mappingName)), incoming.mappingBytes)
+        XCTAssertEqual(try Data(contentsOf: rejected.appendingPathComponent(OfflineRestore.measurementName)), incoming.measurementSource.expectedBytes)
+        // This includes exact originals, histories and every other installed byte.
+        let manifest = try JSONDecoder().decode(BackupManifest.self, from: Data(contentsOf: OfflineRestore.destination("manifest.json", root: rejected, installed: true)))
+        try OfflineRestore.validateFiles(manifest, root: rejected, installed: true)
+    }
+    private func assertRetired(_ owner: MappingStorageOwner, measurement: FileMeasurementStore) async {
+        do { try await owner.run { return () }; XCTFail("Stale mapping callback admitted") }
+        catch { if case StorageError.writesBlocked = error {} else { XCTFail("Unexpected \(error)") } }
+        XCTAssertThrowsError(try measurement.save([])) { error in
+            if case StorageError.writesBlocked = error {} else { XCTFail("Stale epoch not invalidated: \(error)") }
+        }
+    }
+    func testRestoreApplicationModelFailuresRollbackBeforePublication() async throws {
+        let incoming = try seed(), backup = try await package(incoming); defer { backup.files.cleanup() }
+        let preview = try OfflineRestore.prepare(backup.files.urls[0]); defer { preview.cleanup() }
+        for failure in [ModelReopenFailure.mapping, .independent] {
+            let live = try await restoreLive(parent: directory())
+            let pending = try await live.owner.restore(preview, measurements: live.measurements.backupSource())
+            let protection = try Data(contentsOf: pending.protection)
+            let tentative = MappingStorageOwner(suspended: true), mappingURL = live.url.appendingPathComponent(OfflineRestore.mappingName)
+            let independent = FileMeasurementStore(url: live.url.appendingPathComponent(OfflineRestore.measurementName))
+            var published = false, retired = false
+            do {
+                try await RestoreSessionFinalizer.finish(pending, reopen: {
+                    let snapshot = try await tentative.open { FileMappingStore(url: mappingURL) }
+                    XCTAssertEqual(snapshot.journal, incoming.journal) // file and store levels succeeded
+                    _ = try independent.loadRestored()
+                    XCTAssertTrue(FileManager.default.fileExists(atPath: OfflineRestore.recoveryRoot(live.url).appendingPathComponent("active.json").path))
+                    // Inject the two distinct application readiness failures after
+                    // successful installed-file/store validation, without mutation.
+                    throw failure
+                }, discard: {
+                    await tentative.retire(); retired = true
+                }, publish: { (_: Bool) in published = true })
+                XCTFail("Model readiness failure accepted")
+            } catch let error as RestoreSessionFinalizer.Failure {
+                XCTAssertNil(error.recoveryError); XCTAssertTrue(error.reason.contains(failure.rawValue))
+            }
+            XCTAssertTrue(retired); XCTAssertFalse(published)
+            try assertRestoreRolledBack(pending, live: live, incoming: incoming, protectionBytes: protection)
+            await assertRetired(live.owner, measurement: live.measurements)
+            await assertRetired(tentative, measurement: independent)
+            try OfflineRestore.recover(live: live.url)
+            try OfflineRestore.rollback(pending) // explicit rollback is idempotent too
+        }
+    }
+    func testRestoreApplicationRollbackFailureBlocksThenRecoversRepeatedly() async throws {
+        let incoming = try seed(), backup = try await package(incoming); defer { backup.files.cleanup() }
+        let preview = try OfflineRestore.prepare(backup.files.urls[0]); defer { preview.cleanup() }
+        for stop in OfflineRestore.RecoveryCheckpoint.allCases {
+            let live = try await restoreLive(parent: directory())
+            let pending = try await live.owner.restore(preview, measurements: live.measurements.backupSource())
+            let protection = try Data(contentsOf: pending.protection)
+            let tentative = MappingStorageOwner(suspended: true), url = live.url.appendingPathComponent(OfflineRestore.mappingName)
+            _ = try await tentative.open { FileMappingStore(url: url) }
+            let independent = FileMeasurementStore(url: live.url.appendingPathComponent(OfflineRestore.measurementName)); _ = try independent.loadRestored()
+            var published = false
+            do {
+                try await RestoreSessionFinalizer.finish(pending, reopen: { throw ModelReopenFailure.independent },
+                    discard: { await tentative.retire() }, publish: { (_: Bool) in published = true },
+                    recoveryCheckpoint: { if $0 == stop { throw RestoreInterruption.crash } })
+                XCTFail("Rollback fault ignored")
+            } catch let error as RestoreSessionFinalizer.Failure {
+                XCTAssertNotNil(error.recoveryError)
+                XCTAssertTrue(error.localizedDescription.contains("заблокированы"))
+            }
+            XCTAssertFalse(published)
+            await assertRetired(tentative, measurement: independent)
+            let intent = try JSONDecoder().decode(OfflineRestore.Intent.self, from: Data(contentsOf: OfflineRestore.recoveryRoot(live.url).appendingPathComponent("active.json")))
+            XCTAssertFalse(intent.committed)
+            try OfflineRestore.recover(live: live.url) // next launch finishes interrupted rollback
+            try OfflineRestore.recover(live: live.url)
+            try assertRestoreRolledBack(pending, live: live, incoming: incoming, protectionBytes: protection)
+        }
+    }
+    func testRestoreInterruptionAfterModelsReopenBeforeCommitRollsBackOnLaunch() async throws {
+        let incoming = try seed(), backup = try await package(incoming); defer { backup.files.cleanup() }
+        let preview = try OfflineRestore.prepare(backup.files.urls[0]); defer { preview.cleanup() }
+        let live = try await restoreLive(parent: directory())
+        let pending = try await live.owner.restore(preview, measurements: live.measurements.backupSource())
+        let protection = try Data(contentsOf: pending.protection)
+        let tentative = MappingStorageOwner(suspended: true), url = live.url.appendingPathComponent(OfflineRestore.mappingName)
+        _ = try await tentative.open { FileMappingStore(url: url) }
+        let independent = FileMeasurementStore(url: live.url.appendingPathComponent(OfflineRestore.measurementName)); _ = try independent.loadRestored()
+        // No failure handler runs: model process death after readiness and before
+        // durable commit. The next launch must resolve the still-pending intent.
+        XCTAssertThrowsError(try OfflineRestore.finalize(pending) { if $0 == .modelsReady { throw RestoreInterruption.crash } })
+        await tentative.retire()
+        try OfflineRestore.recover(live: live.url)
+        try OfflineRestore.recover(live: live.url)
+        try assertRestoreRolledBack(pending, live: live, incoming: incoming, protectionBytes: protection)
+        await assertRetired(tentative, measurement: independent)
+    }
+    func testRestoreFinalizationErrorsAndPublicationAdmissionFailureRollback() async throws {
+        let incoming = try seed(), backup = try await package(incoming); defer { backup.files.cleanup() }
+        let preview = try OfflineRestore.prepare(backup.files.urls[0]); defer { preview.cleanup() }
+        // Covers failure before commit, after writing committed=true and after
+        // removing the pointer (publication admission failed). All retain a token
+        // that can persist a rollback decision before touching directories.
+        for stop in [OfflineRestore.Checkpoint.modelsReady, .committed, nil] as [OfflineRestore.Checkpoint?] {
+            let live = try await restoreLive(parent: directory())
+            let pending = try await live.owner.restore(preview, measurements: live.measurements.backupSource())
+            let protection = try Data(contentsOf: pending.protection)
+            var published = false
+            do {
+                try await RestoreSessionFinalizer.finish(pending, reopen: { return true }, discard: {}, publish: { _ in
+                    XCTAssertNil(stop)
+                    throw ModelReopenFailure.mapping
+                }, checkpoint: { if $0 == stop { throw RestoreInterruption.crash } })
+                published = true
+            } catch let error as RestoreSessionFinalizer.Failure { XCTAssertNil(error.recoveryError) }
+            XCTAssertFalse(published)
+            try assertRestoreRolledBack(pending, live: live, incoming: incoming, protectionBytes: protection)
+            try OfflineRestore.recover(live: live.url)
+        }
+    }
+    func testRestoreApplicationReadyPairFinalizesThenPublishesOnce() async throws {
+        let incoming = try seed(), backup = try await package(incoming); defer { backup.files.cleanup() }
+        let preview = try OfflineRestore.prepare(backup.files.urls[0]); defer { preview.cleanup() }
+        let live = try await restoreLive(parent: directory())
+        let pending = try await live.owner.restore(preview, measurements: live.measurements.backupSource())
+        let tentative = MappingStorageOwner(suspended: true), url = live.url.appendingPathComponent(OfflineRestore.mappingName)
+        var ready = false, published = false
+        try await RestoreSessionFinalizer.finish(pending, reopen: {
+            let snapshot = try await tentative.open { FileMappingStore(url: url) }
+            let records = try FileMeasurementStore(url: live.url.appendingPathComponent(OfflineRestore.measurementName)).loadRestored()
+            XCTAssertEqual(snapshot.journal, incoming.journal); XCTAssertEqual(records.count, incoming.journal.measurements.count)
+            do { try await tentative.run { return () }; XCTFail("Provisional writer admitted") } catch {}
+            XCTAssertFalse(published); ready = true
+            return snapshot
+        }, discard: { await tentative.retire() }, publish: { snapshot in
+            XCTAssertTrue(ready); XCTAssertFalse(published)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: OfflineRestore.recoveryRoot(live.url).appendingPathComponent("active.json").path))
+            try await tentative.enableAfterRestore()
+            let current = try await tentative.transaction(snapshot: snapshot) { $0.journal.projects.count }
+            XCTAssertEqual(current.1, incoming.journal.projects.count)
+            published = true
+        })
+        XCTAssertTrue(published)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: pending.protection.deletingLastPathComponent().appendingPathComponent("previous").path))
+        XCTAssertEqual(try Data(contentsOf: url), incoming.mappingBytes)
     }
 
 }

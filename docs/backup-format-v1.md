@@ -332,7 +332,7 @@ active.json                       # bounded version-1 activation intent
 ```
 
 1. Validate source ZIP and extracted package again. Reserve the mapping FIFO for
-   the whole operation. Permanently retire that owner; queued and later commands
+   installation. Permanently retire that owner; queued and later commands
    from old views are rejected. Block AppModel writes and invalidate other loaded
    independent-store write epochs under its file lock.
 2. Secure and verify `pre-restore.zip`. Build the installed candidate privately;
@@ -342,18 +342,25 @@ active.json                       # bounded version-1 activation intent
    original root inode, expected source-manifest SHA-256 and `committed: false`; synchronize containing directories.
 4. Rename `FieldForge` to this transaction's `previous`, synchronize both parents.
 5. Rename `incoming` to `FieldForge`, synchronize both parents.
-6. Revalidate every installed byte/reference and reopen mapping and independent
-   stores without modifying their content.
-7. Atomically persist/synchronize `committed: true`, then remove/synchronize the
-   active intent. Keep the transaction/protection ZIP and previous root indefinitely.
-8. Recreate both application models and the entire SwiftUI navigation generation;
-   mapping reopens on its new FIFO owner and publishes new committed indexes.
-   Independent decoding runs off MainActor. Show success only after both models open.
+6. Revalidate every installed byte/reference and trial-open mapping and independent
+   stores without modifying content. Return a `PendingActivation` token; keep
+   `active.json` **uncommitted**. File/store success is not application readiness.
+7. Construct both actual application models privately. Await mapping initialization,
+   check its workflow, error/loading state and attachment stores, and check independent
+   model readiness. Independent decoding runs off MainActor. The new mapping FIFO
+   rejects generic attachment work and commands while suspended; the independent
+   model cannot save. No candidate model or empty fallback is published to views.
+8. `RestoreSessionFinalizer` revalidates the installed dataset, then atomically
+   persists/synchronizes `committed: true` and removes/synchronizes the active intent.
+   Enable candidate writes and publish both models/new navigation generation together
+   on MainActor. The progress screen remains until this finishes; only then show
+   success. Keep the transaction/protection ZIP and previous root indefinitely.
 
 The two renames are **not** one atomic operation. While busy, application screens
 are replaced by a progress screen and no valid dataset is published. `ApplicationSession`
-runs recovery off MainActor **before constructing either application store**, on
-launch and after any activation error. An uncommitted intent deterministically rolls
+runs recovery off MainActor **before constructing either application store** on
+launch and after installation errors. Provisional candidate construction intentionally
+skips startup recovery so it cannot accidentally roll back its own pending installation. An uncommitted intent deterministically rolls
 back: displace any incoming live root to `rejected`, return `previous` to live. If
 `previous` is absent, the live root must have the original recorded inode (either
 activation never moved it or rollback already returned it). This makes recovery
@@ -392,6 +399,26 @@ existing schema-2 format. Installations without that marker retain their deploye
 migration/backup behavior. Schema-2 restored bytes and an explicitly absent journal
 also remain unchanged on load. No original journal or historical sidecar is rewritten
 by restoration.
+
+On model-readiness/finalization failure, retire and drain the candidate mapping owner
+and disable its independent model **before** filesystem recovery. Persist an
+uncommitted rollback decision, move the incoming live root intact to `rejected`,
+return the original directory to live, and invalidate all independent loaded-writer
+epochs under the file-access lock. This includes writers that loaded the provisional
+incoming root. Reopen the original dataset into a new suspended model pair, require
+both models usable, then enable/publish it. A rollback or original-model reopening
+error removes all accessible models and displays a Russian write-blocked error; it
+never falls through to ordinary partial startup or retries the incoming root.
+
+The pending token retains the original intent identity, inode and manifest binding.
+It permits a durable rollback decision even if a finalization I/O error occurred after
+writing `committed: true` or removing the active pointer, or final publication admission
+fails. It verifies the retained original directory identity before reconstructing that
+intent. Rollback is idempotent if the original root has already been returned. A crash
+before durable finalization (including after model readiness) leaves an uncommitted
+intent and rolls back on launch. A crash after durable finalization may retain the
+incoming dataset: both model readiness checks have already succeeded. No candidate
+writes or UI publication precede that decision.
 
 The old MappingStorageOwner is permanently retired even on failure; its generic
 attachment callbacks and durable commands cannot touch the reopened dataset. Old
@@ -434,3 +461,43 @@ environment limitations, not launch/device verification. Full regression, broad 
 automation, benchmarks and physical iPhone qualification were deliberately skipped.
 Local logs: `/tmp/fieldforge-b1b-focused.log`, `/tmp/fieldforge-b1b-repair.log`,
 `/tmp/fieldforge-b1b-restore-final.log`, `/tmp/fieldforge-b1b-simulator.log`.
+
+### Post-activation model-readiness audit (2026-10-24)
+
+The original implementation had a confirmed ordering gap: `activate` trial-opened
+low-level stores, wrote committed=true and removed active.json before
+`ApplicationSession.reopen` constructed the actual models. A mapping or independent
+model error then caused another ordinary reopen, with no pending transaction left to
+roll back. A low-level valid incoming dataset could remain installed without a usable
+application session. The lifecycle trace established this before the correction;
+new deterministic readiness-failure injections exercise that exact post-install window.
+
+Installation and application finalization are now separate phases of the **same**
+version-1 intent protocol. No schema, backup format, sensor/engineering calculation,
+measurement compatibility, or second persistence system is introduced. The exact
+success boundary is: installed bytes and trial stores validated, both real models
+ready, durable finalization completed, both models enabled/published while the UI is
+still guarded, then the guard is released. `OfflineRestore` remains independent of
+SwiftUI; the MainActor finalizer accepts application callbacks and is shared with
+fault-injection tests. Readiness errors preserve the incoming installed layout under
+`rejected`, the original directory (returned to live) and exact `pre-restore.zip` bytes.
+
+One focused run: **13 restore tests passed, 0 failures**, including five new regression
+tests. Cases include independent/mapping model-readiness failure after successful
+file/store opens, failure before commit, termination after readiness before commit,
+finalization failure after committed=true, publication admission failure after pointer
+removal, both interrupted rollback renames, repeated automatic/explicit recovery,
+original and protection-byte preservation, stale old/candidate mapping and independent
+writers, and success only after readiness/finalization. Model-readiness faults are
+injected at the shared application coordinator boundary after real store loads;
+these host tests do not instantiate the iOS sensor-backed AppModel or render SwiftUI.
+
+One incremental generic iOS Simulator Debug build **succeeded** with signing disabled.
+No source concurrency warnings; the existing SwiftPM cache, CoreSimulator runtime
+and unrelated AppIntents metadata notices remain. Full regression, UI automation,
+physical-device tests and repeated clean builds were deliberately not run. No failed
+command reruns were needed. Logs: `/tmp/fieldforge-b1b-postactivation-tests.log` and
+`/tmp/fieldforge-b1b-postactivation-simulator.log`. Filesystem/hardware and provider
+limitations described above remain; there is no guarantee against an OS/volume that
+violates synchronization semantics. A rollback that cannot persist its decision or
+complete its renames blocks access and retains all bytes for subsequent recovery.

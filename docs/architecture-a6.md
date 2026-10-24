@@ -25,8 +25,11 @@ These are consumers of an already adequate concrete repository boundary. No new
 `ApplicationSession` now owns both models and the navigation generation. It resolves
 any durable restore intent before either store opens. A confirmed restore reserves
 and permanently retires the old `MappingStorageOwner`, invalidates independent
-writers, validates/activates the whole root with retained protection, then reconstructs
-both models. New committed indexes come from reopening through a new owner; old
+writers, installs the whole root provisionally with retained protection, then constructs
+both candidate models with writes suspended. Only application readiness permits durable
+finalization and publication. Failure retires/drains candidates before rollback and
+requires both original models usable before republishing; otherwise access is blocked.
+New committed indexes come from reopening through a new owner; old
 snapshots remain immutable but their editors and queued writers cannot reach the new
 dataset. See [B1b protocol](backup-format-v1.md#durable-activation-protocol). The A6
 normal command/query contract below remains unchanged within one dataset lifetime.
