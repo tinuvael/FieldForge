@@ -201,7 +201,7 @@ final class MappingExportFiles: Sendable {
                       write: (Data, URL) throws -> Void = { try $0.write(to: $1, options: .atomic) },
                       xlsxAppend: @escaping (Data, FileHandle) throws -> Void = { try $1.write(contentsOf: $0) }) throws -> MappingExportFiles {
         try Task.checkCancellation()
-        guard format != .photoPackage else { throw MappingError.invalid("Для ZIP требуется проверенный снимок фотографий.") }
+        guard format != .photoPackage && format != .exchange else { throw MappingError.invalid("Для ZIP требуется проверенный снимок фотографий.") }
         let directory = parent.appendingPathComponent("FieldForge-Mapping-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
         do {

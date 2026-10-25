@@ -2,6 +2,7 @@ import Foundation
 
 enum MappingExportFormat: String, CaseIterable {
     case enterpriseGeotechnical = "Геотехническое картирование — регламент"
+    case exchange = "Excel Exchange · обмен (.xlsx)"
     case csv = "CSV", xlsx = "Excel (.xlsx)", photoPackage = "Фотографии + Excel (.zip)"
 }
 
@@ -30,6 +31,30 @@ enum MappingXLSXExport {
             if enterprise && sheet == 2 { return [32, 39, 39, 39, 12, 30, 22, 28, 18, 27, 60, 18, 24, 100][columnIndex] }
             return sheet == summaryIndex ? (columnIndex == 0 ? 37 : 105) : columnWidth(sheets[sheet].columns[columnIndex])
         }
+        try writeWorkbook(sheets, to: url, exportID: snapshot.id, snapshotAt: snapshot.snapshotAt,
+            timeZoneID: snapshot.selection.timeZoneID, summaryIndex: summaryIndex,
+            numericSheetCount: numericSheetCount, technicalVisible: technicalVisible,
+            enterprise: enterprise, textOnly: false, width: width, append: append)
+    }
+
+    /// Shared OOXML writer; exchange supplies text cells and exposes every sheet.
+    static func writeExchange(_ tables: [MappingCSVExport.Table], to url: URL, id: UUID, at: Date) throws {
+        try writeWorkbook(tables, to: url, exportID: id, snapshotAt: at, timeZoneID: "GMT",
+            summaryIndex: -1, numericSheetCount: 0, technicalVisible: true,
+            enterprise: false, textOnly: true, width: { sheet, column in
+                switch tables[sheet].name {
+                case "Формат": return column == 0 ? 38 : 110
+                case "Колонки": return [28, 60, 90, 55][column]
+                default: return columnWidth(tables[sheet].columns[column])
+                }
+            },
+            append: { try $1.write(contentsOf: $0) })
+    }
+
+    private static func writeWorkbook(_ sheets: [MappingCSVExport.Table], to url: URL,
+        exportID: UUID, snapshotAt: Date, timeZoneID: String, summaryIndex: Int,
+        numericSheetCount: Int, technicalVisible: Bool, enterprise: Bool, textOnly: Bool,
+        width: (Int, Int) -> Int, append: @escaping (Data, FileHandle) throws -> Void) throws {
         let archive = try XLSXArchive(url: url, append: append)
         defer { archive.close() }
         func part(_ name: String, _ xml: String) throws { try archive.part(name) { try $0(declaration + xml) } }
@@ -54,8 +79,8 @@ enum MappingXLSXExport {
         try part("docProps/core.xml", """
         <cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
         <dc:title>FieldForge — картирование</dc:title><dc:creator>FieldForge</dc:creator>
-        <dc:identifier>\(snapshot.id.uuidString)</dc:identifier>
-        <dcterms:created xsi:type="dcterms:W3CDTF">\(MappingCSVExport.iso(snapshot.snapshotAt))</dcterms:created>
+        <dc:identifier>\(exportID.uuidString)</dc:identifier>
+        <dcterms:created xsi:type="dcterms:W3CDTF">\(MappingCSVExport.iso(snapshotAt))</dcterms:created>
         </cp:coreProperties>
         """)
         try part("docProps/app.xml", """
@@ -71,7 +96,8 @@ enum MappingXLSXExport {
         \(sheets.indices.map { "<Relationship Id=\"rId\($0 + 1)\" Type=\"\(relationships)/worksheet\" Target=\"worksheets/sheet\($0 + 1).xml\"/>" }.joined())
         <Relationship Id="rIdStyles" Type="\(relationships)/styles" Target="styles.xml"/></Relationships>
         """)
-        try part("xl/styles.xml", styles)
+        try part("xl/styles.xml", textOnly ? styles.replacingOccurrences(of: "<cellXfs count=\"6\">", with: "<cellXfs count=\"8\">")
+            .replacingOccurrences(of: "</cellXfs>", with: "<xf numFmtId=\"49\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\" applyAlignment=\"1\"><alignment vertical=\"top\" wrapText=\"1\"/></xf><xf numFmtId=\"49\" fontId=\"0\" fillId=\"3\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\" applyAlignment=\"1\"><alignment vertical=\"top\" wrapText=\"1\"/></xf></cellXfs>") : styles)
         for (index, table) in sheets.enumerated() {
             try Task.checkCancellation()
             guard !table.columns.isEmpty, table.columns.count <= 16_384, table.rows.count < 1_048_576 else {
@@ -86,7 +112,7 @@ enum MappingXLSXExport {
                 """)
                 for i in table.columns.indices {
                     let width = width(index, i)
-                    try emit("<col min=\"\(i + 1)\" max=\"\(i + 1)\" width=\"\(width)\" customWidth=\"1\"/>")
+                    try emit("<col min=\"\(i + 1)\" max=\"\(i + 1)\" width=\"\(width)\" customWidth=\"1\"\(textOnly ? " style=\"6\"" : "")/>")
                 }
                 try emit("</cols><sheetData><row r=\"1\" ht=\"36\" customHeight=\"1\">")
                 for (i, name) in table.columns.enumerated() {
@@ -98,7 +124,7 @@ enum MappingXLSXExport {
                     guard row.count == table.columns.count else { throw StorageError.invalidRecord }
                     let r = i + 2
                     let height: Int
-                    if enterprise || index < numericSheetCount {
+                    if enterprise || index < numericSheetCount || (textOnly && ["Формат", "Колонки"].contains(table.name)) {
                         let lines = row.enumerated().map { column, value -> Int in
                             guard case .text(let text) = value else { return 1 }
                             let width = max(1, width(index, column) - 3)
@@ -112,7 +138,7 @@ enum MappingXLSXExport {
                         if index < numericSheetCount {
                             // Civil dates in the selected zone; exact UTC remains on raw sheets.
                             if case .timestamp(let date) = value {
-                                let zone = TimeZone(identifier: snapshot.selection.timeZoneID) ?? .gmt
+                                let zone = TimeZone(identifier: timeZoneID) ?? .gmt
                                 let serial = date.map { ($0.timeIntervalSince1970 + Double(zone.secondsFromGMT(for: $0))) / 86400 + 25569 }
                                 try emit(cell(.number(serial), reference: reference, style: 3, fieldNumeric: true))
                             } else {
@@ -121,7 +147,7 @@ enum MappingXLSXExport {
                                 try emit(cell(value, reference: reference, style: oneDecimal ? 4 : 5, fieldNumeric: true))
                             }
                         } else {
-                            try emit(cell(value, reference: reference, style: i % 2 == 0 ? 0 : 2))
+                            try emit(cell(value, reference: reference, style: textOnly ? (i % 2 == 0 ? 6 : 7) : (i % 2 == 0 ? 0 : 2)))
                         }
                     }
                     try emit("</row>")
