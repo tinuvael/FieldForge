@@ -58,6 +58,7 @@ struct MappingExportView: View {
             Section {
                 Picker("Выгрузка", selection: $format) {
                     Text("Полная книга Excel").tag(MappingExportFormat.xlsx)
+                    Text("Excel Exchange · обмен").tag(MappingExportFormat.exchange)
                     Text("Геотехническое картирование — регламент").tag(MappingExportFormat.enterpriseGeotechnical)
                     Text("CSV · технический").tag(MappingExportFormat.csv)
                     Text("Фотографии + Excel").tag(MappingExportFormat.photoPackage)
@@ -75,10 +76,11 @@ struct MappingExportView: View {
                 }
             }.disabled(busy || sharing)
             Section {
-                Text("Подтверждённый снимок журнала при открытии выгрузки. Незавершённые сохранения не включены.").font(.caption).foregroundStyle(.secondary)
+                Text(format == .exchange ? "Обмен: подтверждённый снимок после ранее принятых сохранений. Импорт пока недоступен." : "Подтверждённый снимок журнала при открытии выгрузки. Незавершённые сохранения не включены.").font(.caption).foregroundStyle(.secondary)
                 Text("Наблюдений: \(selectedCount)").accessibilityIdentifier("mappingExportPointCount")
-                Button(format == .enterpriseGeotechnical ? "Экспортировать по регламенту" : format == .xlsx ? "Экспортировать Excel" : format == .csv ? "Экспортировать CSV" : "Экспортировать фотографии ZIP") {
-                    if let preview { shareOrConfirm(preview) } else { prepare(shareWhenReady: true) }
+                Button(format == .exchange ? "Экспортировать Excel Exchange" : format == .enterpriseGeotechnical ? "Экспортировать по регламенту" : format == .xlsx ? "Экспортировать Excel" : format == .csv ? "Экспортировать CSV" : "Экспортировать фотографии ZIP") {
+                    if format == .exchange { shareExchange() }
+                    else if let preview { shareOrConfirm(preview) } else { prepare(shareWhenReady: true) }
                 }.disabled(busy || sharing || selection == nil).accessibilityIdentifier("mappingExportShare")
                 if busy {
                     ProgressView("Подготовка выгрузки…")
@@ -108,7 +110,10 @@ struct MappingExportView: View {
             Section {
                 Text("Одна книга Excel; оригиналы фото — отдельный ZIP. Выгрузка не является полной резервной копией.").font(.caption)
                 DisclosureGroup("Состав и ограничения") {
-                    if format == .enterpriseGeotechnical {
+                    if format == .exchange {
+                        Text("FieldForge Exchange.xlsx: связанные таблицы точек, J1–J5, тектоники и оценок; UUID, базовые версии и отпечатки, полные исходные записи и история. Числа и даты сохранены текстом без округления. Пусто означает отсутствие значения.")
+                        Text("B2a: только экспорт. Можно подготовить предложения на компьютере, но загрузить их обратно в этой версии нельзя. Не меняйте базовые UUID, версии, отпечатки и source_records. Оригиналы фото и DXF не включены; сохраняйте отдельную резервную копию ZIP.")
+                    } else if format == .enterpriseGeotechnical {
                         Text("Ровно три листа: «Геотех картирование», «Справочники», «Исходные данные». Одна строка на актуальное наблюдение; SD — среднее сохранённых значений J1–J5. Исходный лист содержит записи и историю исправлений. Оригиналы фото не включены.")
                     } else if format == .photoPackage {
                         Text("ZIP: оригиналы, FieldForge-Mapping.xlsx с реестром photo_register и manifest.json. Файлы проверяются по размеру и SHA-256. Путь и статус каждого оригинала указаны в реестре.")
@@ -117,8 +122,10 @@ struct MappingExportView: View {
                     Text(format == .csv ? "Связанные CSV и manifest.json передаются вместе через меню iOS, в том числе «Сохранить в Файлы»." : "Одна книга Excel: пять полевых листов, сводка и скрытые технические листы. Закреплённые заголовки и фильтры. Передача через меню iOS, в том числе «Сохранить в Файлы».")
                     Text("Только метаданные фотографий. Оригиналы изображений не включены; их наличие и целостность не проверяются. Неизвестное место съёмки остаётся неизвестным.")
                     }
+                    if format != .exchange {
                     Text("Выгрузка для анализа, не полная резервная копия. Оценки сохранены без пересчёта; базовый RMR — при наличии рассчитанной оценки.")
                     Text(format == .csv ? "UTF-8 с BOM, запятая, CRLF. Excel может ограничивать числа 15 значащими цифрами. Исходный десятичный текст сохранён там, где он есть. Текст, похожий на формулу, защищён апострофом." : "Полевые листы содержат числа; Excel использует до 15 значащих цифр. На технических листах более точные значения сохраняются точным текстом. Отсутствующие значения — пустые ячейки. Пользовательские строки — текст, формулы не создаются.")
+                    }
                 }.font(.caption)
             }
         }
@@ -156,6 +163,26 @@ struct MappingExportView: View {
             $0.projectID == selection.projectID && (horizonID == nil || $0.horizonID == horizonID) &&
             (excavationID == nil || $0.excavationID == excavationID) && $0.observedAt >= bounds.start && $0.observedAt < bounds.end
         }.count
+    }
+    private func shareExchange() {
+        guard !busy, !sharing, let selection else { return }
+        let storage = mapping.storage
+        busy = true; errorMessage = nil
+        operation = Task { @MainActor in
+            defer { busy = false }
+            do {
+                let snapshot = try await storage.exchangeSnapshot()
+                committed = snapshot
+                try Task.checkCancellation()
+                let worker = Task.detached(priority: .userInitiated) {
+                    try MappingExchangeExport.prepare(committed: snapshot, selection: selection).write()
+                }
+                let result = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
+                try Task.checkCancellation()
+                files = result; sharing = true
+            } catch is CancellationError { }
+            catch { errorMessage = "Не удалось создать Excel Exchange: \(error.localizedDescription)" }
+        }
     }
     private func shareOrConfirm(_ snapshot: MappingCSVExport) {
         if format == .photoPackage && (photoPreview?.unavailableCount ?? 0) > 0 { confirmIncomplete = true }

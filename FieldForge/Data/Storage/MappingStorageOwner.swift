@@ -56,6 +56,15 @@ final class MappingStorageOwner: @unchecked Sendable {
         try await enqueue(allowSuspended: true) { self.suspended = false }
     }
 
+    /// A read queued after admitted writes retains exactly one committed generation.
+    /// Export projection/ZIP work happens after releasing the storage queue.
+    func exchangeSnapshot() async throws -> MappingCommittedSnapshot {
+        try await run {
+            guard let committed = self.committed else { throw StorageError.writesBlocked }
+            return committed
+        }
+    }
+
     /// Queue reservation covers generation selection, source checks and all durable
     /// attachment/recovery copying. Hashing/ZIP verification subsequently use staging.
     func captureBackup(measurements: MeasurementBackupSource, photos: URL, plans: URL,
