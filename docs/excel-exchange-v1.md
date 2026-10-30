@@ -1,8 +1,8 @@
 # FieldForge Exchange v1 — B2a export contract
 
-Status: **export only**. Workbook filename: `FieldForge Exchange.xlsx`; discriminator:
+Status: **export and B2b read-only preparation**; applying proposals remains B2c. See [B2b implementation and write-stage design](excel-exchange-b2b.md). Workbook filename: `FieldForge Exchange.xlsx`; discriminator:
 `FieldForge-Exchange/1`; mapping schema: **8**. Parent: [#68](https://github.com/tinuvael/FieldForge/issues/68).
-B2b import is not implemented. This contract does not authorize replacement of evidence,
+B2b validates and previews proposals without writes; B2c import is not implemented. This contract does not authorize replacement of evidence,
 and does not close #68 or backup/restore #23.
 
 ## Audit and implementation boundary
@@ -61,8 +61,8 @@ and does not close #68 or backup/restore #23.
 4. Prepare proposed edits in the current `points`, `joint_sets`, `tectonic_structures` and
    `assessments` rows. Keep exact-value cells formatted as **Text**; do not convert them to
    dates/numbers or paste formulas. Preserve the complete row when sorting.
-5. B2a cannot read this workbook back. B2b must provide a read-only preview and explicit
-   confirmation before any accepted change. Until then, desktop changes remain proposals.
+5. Open «Картирование → Журнал → Проверка Excel» to validate the workbook and inspect
+   the read-only B2b preview. There is no Apply action; desktop changes remain proposals.
 
 A workbook is scoped to one project and the selected effective observations. All horizons,
 excavations, membership links, project catalogue and plan metadata of that project are

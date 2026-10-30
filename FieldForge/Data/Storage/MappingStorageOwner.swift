@@ -65,6 +65,11 @@ final class MappingStorageOwner: @unchecked Sendable {
         }
     }
 
+    /// Read-only freshness check also fails closed for retired/suspended owners.
+    func exchangePreviewIsCurrent(_ generationID: UUID) async throws -> Bool {
+        try await run { self.committed?.generationID == generationID }
+    }
+
     /// Queue reservation covers generation selection, source checks and all durable
     /// attachment/recovery copying. Hashing/ZIP verification subsequently use staging.
     func captureBackup(measurements: MeasurementBackupSource, photos: URL, plans: URL,

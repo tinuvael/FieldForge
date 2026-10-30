@@ -62,6 +62,9 @@ struct MappingJournalView: View {
         }.accessibilityIdentifier("journalObservations")
             .navigationTitle("Журнал проекта")
             .toolbar {
+                NavigationLink { MappingExchangeImportView() } label: {
+                    Label("Проверка Excel", systemImage: "square.and.arrow.down")
+                }.accessibilityIdentifier("mappingExchangeImportAction")
                 if let committed = mapping.workflow?.committed {
                     NavigationLink { MappingExportView(committed: committed, projectID: projectID) } label: {
                         Label("Выгрузка", systemImage: "square.and.arrow.up")

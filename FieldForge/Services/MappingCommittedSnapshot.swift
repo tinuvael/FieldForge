@@ -4,6 +4,8 @@ import Foundation
 /// the storage queue after load/commit; never encode indexes or update them in place.
 /// Retaining this value freezes committed evidence independently of capture drafts.
 final class MappingCommittedSnapshot: Sendable {
+    /// Ephemeral generation identity; never persisted or encoded.
+    let generationID = UUID()
     let journal: MappingJournal
     let effectiveObservations: [MappingObservation]
     let latestRevisions: [UUID: MappingObservationRevision]
