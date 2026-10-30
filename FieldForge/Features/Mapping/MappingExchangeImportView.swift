@@ -7,32 +7,30 @@ struct MappingExchangeImportView: View {
     @EnvironmentObject private var mapping: MappingModel
     @State private var picker = false
     @State private var selectedURL: URL?
-    @State private var preview: MappingExchangePreview?
-    @State private var stale = false
-    @State private var busy = false
-    @State private var message: String?
-    @State private var operation: Task<Void, Never>?
+    @StateObject private var coordinator = MappingExchangePreviewCoordinator()
 
     var body: some View {
+        let state = coordinator.state
         List {
             Section {
                 Text("Предварительный просмотр. Данные ещё не импортированы").font(.headline)
                     .accessibilityIdentifier("exchangePreviewReadOnly")
                 Button("Выбрать книгу Excel…", systemImage: "doc.badge.plus") { picker = true }
-                    .disabled(busy).accessibilityIdentifier("exchangeSelectWorkbook")
+                    .accessibilityIdentifier("exchangeSelectWorkbook")
                 if let selectedURL { LabeledContent("Файл", value: selectedURL.lastPathComponent) }
-                if busy {
+                if state.busy {
                     ProgressView("Проверка книги и сравнение…")
-                    Button("Отменить проверку", role: .cancel) { operation?.cancel() }
+                    let operationID = coordinator.operationID
+                    Button("Отменить проверку", role: .cancel) { coordinator.cancel(operationID: operationID) }
                 }
-                if let message { Text(message).foregroundStyle(.red).textSelection(.enabled) }
+                if let message = state.message { Text(message).foregroundStyle(.red).textSelection(.enabled) }
             }
-            if let preview {
-                if stale {
+            if let preview = state.preview, let publicationID = state.publicationID {
+                if state.stale {
                     Section {
                         Text("Предпросмотр устарел: подтверждённый журнал изменился или хранилище недоступно. Требуется повторная проверка.")
                             .foregroundStyle(.orange).accessibilityIdentifier("exchangePreviewStale")
-                        Button("Пересоздать предпросмотр") { if let selectedURL { prepare(selectedURL) } }.disabled(busy)
+                        Button("Пересоздать предпросмотр") { if let selectedURL { prepare(selectedURL) } }.disabled(state.busy)
                     }
                 }
                 Section("Книга обмена") {
@@ -48,7 +46,7 @@ struct MappingExchangeImportView: View {
                 Section("Результат проверки") {
                     ForEach(MappingExchangePreview.Classification.allCases, id: \.self) { classification in
                         NavigationLink {
-                            ExchangePreviewRecords(preview: preview, classification: classification, stale: $stale)
+                            ExchangePreviewRecords(preview: preview, classification: classification, publicationID: publicationID, coordinator: coordinator)
                         } label: { LabeledContent(classification.title, value: String(preview.count(classification))) }
                     }
                     if preview.hasBlockingRecords { Text("Есть блокирующие ошибки. Исправьте книгу или создайте новую выгрузку.").foregroundStyle(.orange) }
@@ -62,60 +60,38 @@ struct MappingExchangeImportView: View {
         }
         .navigationTitle("Проверка Excel Exchange")
         .fileImporter(isPresented: $picker, allowedContentTypes: [UTType(filenameExtension: "xlsx") ?? .data]) { result in
+            guard coordinator.isActive else { return }
             switch result {
             case .success(let url): selectedURL = url; prepare(url)
-            case .failure(let error): message = "Выбор файла: \(error.localizedDescription)"
+            case .failure(let error): coordinator.selectionFailed(error)
             }
         }
-        .task(id: preview?.generationID) {
-            guard let generation = preview?.generationID else { return }
-            while !Task.isCancelled && !stale {
-                do { stale = try await !mapping.storage.exchangePreviewIsCurrent(generation) }
-                catch { stale = true }
-                if stale { break }
-                try? await Task.sleep(for: .seconds(1))
+        .onAppear { coordinator.activate(generation: mapping.workflow?.committed.generationID) }
+        .task(id: coordinator.state.publicationID) {
+            guard let id = coordinator.state.publicationID else { return }
+            let storage = mapping.storage
+            while !Task.isCancelled && coordinator.isActive && coordinator.state.publicationID == id && !coordinator.state.stale {
+                await coordinator.refresh(id) { try await storage.exchangePreviewIsCurrent($0) }
+                if coordinator.state.publicationID != id || coordinator.state.stale { break }
+                do { try await Task.sleep(for: .seconds(1)) } catch { break }
             }
         }
         .onChange(of: mapping.workflow?.committed.generationID) { _, generation in
-            if let preview, generation != preview.generationID { stale = true }
+            coordinator.journalChanged(to: generation)
         }
-        .onDisappear { operation?.cancel() }
+        .onDisappear { coordinator.deactivate() }
     }
     private func prepare(_ url: URL) {
-        operation?.cancel(); preview = nil; message = nil; stale = false; busy = true
-        let storage = mapping.storage
-        operation = Task { @MainActor in
-            defer { busy = false }
-            do {
-                let committed = try await storage.exchangeSnapshot()
-                try Task.checkCancellation()
-                let worker = Task.detached(priority: .userInitiated) {
-                    let access = url.startAccessingSecurityScopedResource()
-                    defer { if access { url.stopAccessingSecurityScopedResource() } }
-                    var coordinationError: NSError?
-                    var parsed: Result<MappingExchangePreview, Error>?
-                    NSFileCoordinator().coordinate(readingItemAt: url, options: .withoutChanges, error: &coordinationError) { coordinated in
-                        parsed = Result { try MappingExchangePreview.prepare(url: coordinated, committed: committed) }
-                    }
-                    if let coordinationError { throw coordinationError }
-                    guard let parsed else { throw ExchangeImportError("Файловый провайдер не предоставил книгу.") }
-                    return try parsed.get()
-                }
-                let result = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
-                try Task.checkCancellation()
-                preview = result
-                do { stale = try await !storage.exchangePreviewIsCurrent(result.generationID) }
-                catch { stale = true }
-            } catch is CancellationError { message = "Проверка отменена. Данные не изменены." }
-            catch { message = "Книга отклонена: \(error.localizedDescription)" }
-        }
+        coordinator.prepare(url, work: .init(storage: mapping.storage))
     }
 }
 
 private struct ExchangePreviewRecords: View {
     let preview: MappingExchangePreview
     let classification: MappingExchangePreview.Classification
-    @Binding var stale: Bool
+    let publicationID: UUID
+    @ObservedObject var coordinator: MappingExchangePreviewCoordinator
+    private var stale: Bool { coordinator.state.publicationID != publicationID || coordinator.state.stale }
     var body: some View {
         List {
             Text("Предварительный просмотр. Данные ещё не импортированы").font(.headline)

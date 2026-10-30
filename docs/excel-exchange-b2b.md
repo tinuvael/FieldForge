@@ -25,6 +25,47 @@ invoke transaction/save/restore. New-point values are detached proposals, not jo
 insertions. B2b creates no parsing directory, extracts no ZIP entries and opens no
 photo/DXF/backup/independent-journal files.
 
+## Preview operation lifecycle (2026-10-30)
+
+`MappingExchangePreviewCoordinator` is a small screen-local MainActor object. A new
+operation first revokes the previous operation UUID, then requests cancellation. Only
+that UUID on an active screen can publish `preview`, `message`, `stale` or `busy`, including
+from catch/defer paths. Admission is checked after snapshot admission, detached reading,
+and freshness admission. User cancellation clears the active operation immediately;
+leaving the screen revokes it without waiting for an uncooperative provider. Reopening
+permits a new operation. No parser, classification, storage format or write API changes.
+
+The original race was cancellation without publication ownership: an older cancelled
+Task could resume after an await, write an error, clear a newer operation's busy flag in
+its unconditional defer, or publish preview before the awaited freshness result. The
+periodic reader could likewise apply an earlier response to a later preview or clear a
+stale notification. A completed preview and its checked staleness now publish in one
+state value; journal notifications received during checking are retained. Staleness only
+advances to true for that publication. The existing one-second monitor is keyed by a
+publication UUID rather than the journal generation (regenerations can share a generation),
+and its result also checks the screen-appearance UUID after suspension. Cancelled monitors
+and responses from a closed appearance cannot affect a reopened preview.
+
+`MappingExchangeFileRead` retains the detached worker boundary and only reads bounded
+bytes in the NSFileCoordinator accessor. The file handle and any acquired security scope
+are balanced with defer, including failure/cancellation. They are released before archive
+parsing/comparison or storage freshness awaits. Cancelling the worker invokes that read's
+own `NSFileCoordinator.cancel()`; NSFileCoordinator.h permits this method from any thread
+and documents that cancellation may race with an already-running accessor. The accessor
+therefore checks task cancellation too. No access escapes its synchronous block, no file
+is written or extracted, and no mapping/attachment/backup mutation is reachable.
+
+Regression coverage uses controlled async continuations that deliberately ignore
+cancellation, with explicit arrival/release/join barriers and no sleeps: A after B; A
+while B remains busy; stale errors/defers; scoped cancellation; late snapshot/freshness;
+journal changes during checking; no pre-freshness publication; leaving/reopening; late
+periodic checks on the same generation or reopened appearance; monotonic stale state.
+Files tests check acquired/not-acquired scope balance, success/failure/cancelled coordination,
+production read/cancellation, unchanged bytes and directory inventory in isolated temporary
+fixtures. No real Files-provider or physical-device qualification is claimed. Cancellation
+cannot forcibly interrupt a synchronous file read already in progress; it must unwind its
+accessor and defers, while UUID revocation already prevents any UI publication.
+
 ## Supported package profile and limits
 
 The parser is intentionally narrower than general OOXML (ECMA-376 Transitional
@@ -231,3 +272,20 @@ A final concrete defect could substitute a point's ten-metre convention for an e
 interval's nil/legacy convention on correction; the convention is now retained explicitly,
 with a dedicated regression case. The incremental Simulator build was repeated once for
 that final production change. No unrelated tests were added to these runs.
+
+Lifecycle follow-up verification (2026-10-30):
+
+- `swift test --filter 'MappingExchange(PreviewCoordinator|FileRead)Tests'`: initial
+  12 coordinator + 3 Files tests passed. After adding the closed/reopened-appearance
+  guard and its specific case, `swift test --filter MappingExchangePreviewCoordinatorTests`
+  passed all **13** coordinator tests; Files code was unchanged (**3** passing tests).
+- `swift test --filter MappingExchangePreviewTests`: **15 passed**, unchanged parser/
+  classification suite. **31 distinct passing tests** across the three focused classes.
+- One incremental generic iOS Simulator Debug build, arm64/x86_64, signing disabled:
+  **BUILD SUCCEEDED**; Complete Strict Concurrency Checking, no source warnings. Only
+  the existing AppIntents metadata-extraction notice remains.
+- `git diff --check` clean; deterministic project regeneration verified. No full suites,
+  benchmarks, unrelated generators, real Excel/Files providers or runtime UI testing.
+- Logs: `/tmp/fieldforge-b2b-races-tests.log`,
+  `/tmp/fieldforge-b2b-races-coordinator.log`, `/tmp/fieldforge-b2b-races-preview.log`,
+  `/tmp/fieldforge-b2b-races-simulator.log`.
