@@ -7,7 +7,11 @@ Owner decisions listed below gate the corresponding implementation PRs.
 
 The owner's current instruction supersedes the old custom regulatory layout in
 [#74](https://github.com/tinuvael/FieldForge/issues/74): the primary sheet is
-`Data`, exactly A:AD. Existing detailed XLSX, CSV and Exchange formats remain separate.
+`Data`, exactly A:AD, with **no additional worksheets**. For multiple tectonic
+records, repeat the effective observation's report values/coordinates once per
+tectonic record and vary S:U; this supersedes the earlier one-row-per-observation
+reporting rule. No duplicate observation is created in the database. Existing
+detailed XLSX, CSV and Exchange formats remain separate.
 Related: [#68](https://github.com/tinuvael/FieldForge/issues/68),
 [#45](https://github.com/tinuvael/FieldForge/issues/45),
 [#24](https://github.com/tinuvael/FieldForge/issues/24),
@@ -77,21 +81,25 @@ required-value/validation specification. `Context` means required external impor
 context or a required FieldForge identity/location field; `Optional` means retain
 blank when absent; `Paired` means validate only if that joint exists. These are
 proposed admission rules, not requirements inferred from populated Excel cells.
-Column A's source, column O's spacing definition and the policy for multiple fault
-records in S:U remain **explicitly unresolved**. No candidate mapping or projection
-policy for them is approved or may be implemented by this documentation PR.
+The owner's subsequent answers approve A = excavation name, O = mean positive
+saved J1–J4 spacing, J = actual UCS only and AD = stored final GSI only. The later
+clarification fixes exactly one sheet, Data A:AD. Each tectonic record gets its own
+report row with the observation's other properties/coordinates repeated; there is
+one row with blank S:U when no tectonic record exists. Do not create database points
+or select/drop one tectonic record to implement this report-only row expansion.
+These answers update the specification only; this PR implements none of them.
 
 Property shorthand: `p` = latest effective `MappingObservation`; `r` =
 `p.ratings?.rmr89?.input`; `q` = `p.ratings?.bartonQ?.input`; `jN` = interpreted
-joint with identifier JN. `fault` property references below describe the fields of
-one tectonic record only; they do not establish how multiple records map to S:U.
+joint with identifier JN; `fault` = the tectonic record represented by the current
+export row. Repeated report rows share one underlying observation identity.
 Raw = original input; categorical = explicitly selected description/coefficient;
 derived = stored assessment or explicitly defined report projection.
 
 | Column / row-4 header | Original row-3 header | Meaning / units / kind | Proposed source and export | Import / requiredness / unresolved mapping |
 | --- | --- | --- | --- | --- |
-| A `ID` | Место картирования | Location label, text; raw | **Unresolved: no FieldForge source selected** | Owner must define the label and its source. Excavation name and observation label are unapproved alternatives; template labels are nonunique and never prove observation identity. |
-| B `PK` | Пикетаж | Picket text, documented convention; raw | `p.displayPicket`, with original picket, `chainageMeters`, convention and origin retained on source sheet | Context for new point; `-` is not chainage zero. Require explicit chainage/convention when missing. No row-number identity. |
+| A `ID` | Место картирования | Excavation name, text; raw/context | **Owner-approved:** excavation name resolved through `p.excavationID` | A reporting label, not a stable observation identity. Repeated names cannot establish an import match; UUID reconciliation remains separate. |
+| B `PK` | Пикетаж | Picket text, documented convention; raw | `p.displayPicket`; original picket, `chainageMeters`, convention and origin stay in storage and separate detailed/Exchange formats | Context for new point; `-` is not chainage zero. Require explicit chainage/convention when missing. No row-number identity. |
 | C `X` | Координаты точек замеров (C3:E3 merged) | X, source frame/units; raw | `p.coordinates?.x`, unchanged | Optional; require supplied CRS/axes/XY units/provenance before admitting coordinates. Workbook alone does not establish metres. |
 | D `Y` | blank under C3:E3 | Y, source frame/units; raw | `p.coordinates?.y`, unchanged | Optional; same spatial contract as C; validate X/Y together. |
 | E `Z` | blank under C3:E3 | Z, metres in FieldForge; raw or provenance-qualified derived | `p.coordinates?.z`; preserve datum and Z origin/plan derivation separately | Optional; unknown stays blank; no horizon/GPS inference during import. |
@@ -99,18 +107,18 @@ derived = stored assessment or explicitly defined report projection.
 | G `A45` | Выветривание стенок трещин | Enterprise wall-weathering score, dimensionless; categorical | Explicit `r.basicSelections[weathering]` via existing enterprise mapping, first four categories only | Optional; score alone loses description/method. Enterprise zero means crushed, RMR89 zero decomposed; no automatic equivalence. Independent enterprise zero not currently represented. |
 | H `JW` | Обводненность | Q Jw coefficient, dimensionless; categorical | Original `q.jw.value`, not RMR groundwater score | Optional; require category/method/description resolution. Never derive RMR water category from this number. |
 | I `A1` | Категория прочности пород | Enterprise strength score, dimensionless; categorical | Existing source: `r.fieldStrength?.rating` (not literal R0–R6 text) | Optional; lab-based score as an alternative needs owner/source approval; score cannot reconstruct exact UCS or field grade without declared method. |
-| J `UCS` | Прочность породы, МПа | Uniaxial compressive strength, MPa; raw | `r.strengthMPa` **only if** `r.strengthTest == .ucs` | Optional; Is(50) stays out; no point-load conversion, interval midpoint or value invented from R0–R6. |
+| J `UCS` | Прочность породы, МПа | Uniaxial compressive strength, MPa; raw | **Owner-approved:** `r.strengthMPa` only if `r.strengthTest == .ucs` | Optional; Is(50) stays out; no point-load conversion, interval midpoint or value invented from R0–R6. |
 | K `RQD` | Качество породы, % | Original RQD percent; raw | `SpacingRQD(q:rmr:)` precedence: Q original, explicit RMR fallback | Optional; Q/RMR disagreement must be resolved or reported unavailable, never silently choose one. Do not export Q's numerical RQD floor. |
 | L `JN` | Количество систем трещин | Q Jn coefficient, dimensionless; categorical | Original `q.jn.value` | Optional; descriptive header is misleading. Not `jointSets.count` and not a value capped at four. |
 | M `JR` | Шероховатость стенок трещин | Q Jr coefficient, dimensionless; categorical | Original `q.jr.value` | Optional; not RMR roughness rating; category/rationale required for safe admission. |
 | N `JA` | Сцепление стенок трещин | Q Ja alteration coefficient, dimensionless; categorical | Original `q.ja.value` | Optional; header does not make this mechanical cohesion. No MPa/kPa cohesion mapping. |
-| O `SD` | Расстояние между трещинами, м | Spacing, metres; raw/derived status depends on the unresolved definition | **Unresolved: no source or aggregation rule selected** | Optional; owner must define interval/determining-system spacing versus an aggregate, including which sets and provenance participate. Current J1–J5 mean is implementation inventory, not an approved replacement rule. One imported spacing cannot be distributed among joint sets without an explicit destination. |
+| O `SD` | Расстояние между трещинами, м | Arithmetic mean spacing, metres; report-derived | **Owner-approved:** arithmetic mean of finite positive saved `spacingMeters` from J1–J4 only | Missing/zero values and J5 are excluded; no participating values means blank. Retain manual/estimated provenance; do not recompute saved spacings from RQD on export. One imported mean cannot be distributed among joint sets without an explicit destination. |
 | P `A43` | Раскрытие трещин | Aperture category score, dimensionless; categorical | Explicit `r.basicSelections[aperture]` rating, not `apertureMillimeters` | Optional; score does not mean millimetres. Require category/method resolution, retaining missing raw dimensions. |
 | Q `JCON76` | Свойства трещин | Independent 1976 condition score, dimensionless; categorical | `r.jcond76?.rating`, currently stored inside RMR89 input | Optional; explicit JCond76 category, independent of RMR89 condition and Barton Jr/Ja; not a complete RMR76 assessment. |
 | R `A42` | Длина трещин | Persistence category score, dimensionless; categorical | Explicit `r.basicSelections[persistence]` rating, not `persistenceMeters` | Optional; do not treat score as metres. Require category/method resolution. |
-| S `F_DIP` | Угол падения разлома, ° (trailing space in source) | Fault dip, degrees; interpreted/raw manual | Single-record field: `fault.orientation.validatedTectonic().dipAngle`; **multiple-record policy unresolved** | Optional; no selection, aggregation, omission or extra-row rule is approved. Partial orientation remains partial. |
-| T `F_AZI` | Азимут падения разлома, ° | Fault dip direction, degrees with explicit north; interpreted/raw manual | Single-record field: `fault.orientation.validatedTectonic().dipDirection`; **multiple-record policy unresolved** | Optional; no north conversion or automatic first-record choice. Owner must define the S:U projection when several faults exist. |
-| U `F_THI` | Мощность разлома, м | Fault thickness, metres; raw | Single-record field: `fault.thicknessMeters`; **multiple-record policy unresolved** | Optional; S/T/U must describe the same record whenever a record is represented. No speculative aggregation or duplicate observation rows. |
+| S `F_DIP` | Угол падения разлома, ° (trailing space in source) | Fault dip, degrees; interpreted/raw manual | `fault.orientation.validatedTectonic().dipAngle` for this row's tectonic record | **Owner-approved:** one report row per tectonic record, repeating other observation properties/coordinates. No database duplicates or discarded faults. Partial orientation stays partial. |
+| T `F_AZI` | Азимут падения разлома, ° | Fault dip direction, degrees with explicit north; interpreted/raw manual | `fault.orientation.validatedTectonic().dipDirection` for the same record | No north conversion or automatic first-record selection. Represent every tectonic record on a separate report row. |
+| U `F_THI` | Мощность разлома, м | Fault thickness, metres; raw | `fault.thicknessMeters` for the same record | Optional; S/T/U describe one record together. With no tectonic records emit one observation row with blank S:U. |
 | V `J_DIP_1` | Угол падения 1 й системы трещин, ° | J1 dip, degrees; interpretation | J1 representative validated `dipAngle` | Paired; no default 0, retain UUID/evidence/north separately. |
 | W `J_AZI_1` | Азимут падения 1 й системы трещин, ° | J1 dip direction, degrees; interpretation | J1 representative validated `dipDirection` | Paired; explicit north and horizontal/vertical convention; no automatic measurement grouping. |
 | X `J_DIP_2` | Угол падения 2 й системы трещин, ° | J2 dip, degrees; interpretation | J2 representative validated `dipAngle` | Paired; same rules as J1. |
@@ -119,33 +127,38 @@ derived = stored assessment or explicitly defined report projection.
 | AA `J_AZI_3` | Азимут падения 3 й системы трещин, ° | J3 dip direction, degrees; interpretation | J3 representative validated `dipDirection` | Paired; same rules as J1. |
 | AB `J_DIP_4` | Угол падения 4 й системы трещин, ° | J4 dip, degrees; interpretation | J4 representative validated `dipAngle` | Paired; same rules as J1. |
 | AC `J_AZI_4` | Азимут падения 4 й системы трещин, ° | J4 dip direction, degrees; interpretation | J4 representative validated `dipDirection` | Paired; same rules as J1. |
-| AD `GSI` | GSI | Versioned GSI estimate, dimensionless; interpreted/derived | `p.ratings?.gsi?.finalValue` only; leave blank when absent | Optional; no midpoint of lower/upper bounds or Q correlation. Incoming number cannot fabricate chart position/range/method; needs explicit interpretation support or remains unsupported source data. |
+| AD `GSI` | GSI | Versioned GSI estimate, dimensionless; interpreted/derived | **Owner-approved:** `p.ratings?.gsi?.finalValue` only; leave blank when absent | Optional; no midpoint of lower/upper bounds or Q correlation. Incoming number cannot fabricate chart position/range/method; needs explicit interpretation support or remains unsupported source data. |
 
 Row-2 groups are A:E `Место картирования`, F:H `Строение`, I:J `Прочность`,
 K:L `Структура`, M:R `Свойства трещин`, V:AC `Ориентация трещиноватости`,
 AD `Рейтинг массива`. C3:E3 is the only row-3 merge. All original header wording,
 including misleading legacy labels, should remain in the report with clarification
-on `Справочники`; do not silently replace the template headings.
+in documentation/export guidance; do not silently replace the template headings or
+add a reference worksheet to this Data-only export.
 
 A:AD has **no Q, RMR89 or RMR76 total columns**: these are AE:AH in the supplied
 book and must not be appended to Data. RMR-related inputs remain G/I/P/Q/R, with
-shared raw inputs J/K/O. Method totals/breakdowns may live on additional source or
-reference sheets. Date, UUIDs, revisions, CRS, units, north and provenance also need
-those sheets; A:AD is not lossless exchange or backup.
+shared raw inputs J/K/O. This regulatory export has no additional source/reference
+sheets, hidden metadata sheets or columns beyond AD. Method totals, dates, UUIDs,
+revisions, CRS, units, north and provenance stay in storage and separate detailed/
+Exchange/backup formats where supported; A:AD cannot carry them completely. It is
+not lossless exchange or backup.
 
 The ordinary regulatory `.xlsx` is an owner-facing reporting projection. **FieldForge
 Exchange.xlsx** is the separate versioned, lossless interchange representation within
 its documented selected-record/schema-8 metadata scope: UUIDs, base revisions,
 fingerprints, exact text values and original/history records. It does not include
 original photo/DXF bytes or the independent measurement journal and is not a complete
-backup. Adding reference/source sheets to a regulatory report does not turn it into
-Exchange or make it a valid Exchange import baseline. B2b remains read-only.
+backup. The Data-only report is not an Exchange import baseline. Its repeated
+tectonic rows are not separate observation identities; future ordinary import needs
+explicit identity/relationship reconciliation rather than one new point per row.
+B2b remains read-only.
 
 ## Current implementation and confirmed export gaps
 
 | Area | Existing implementation | Gap / reuse boundary |
 | --- | --- | --- |
-| Regulatory projection | `EnterpriseGeotechnicalWorkbook.tables` returns `Геотех картирование`, `Справочники`, `Исходные данные`; effective rows, history scalar records, preserved originals and optional cells | First sheet is 88 + 6 × maximum tectonic-count columns, with all five joint sets; wrong name, order, width and headings. Keep useful source/reference records including J5, not their old Data layout. |
+| Regulatory projection | `EnterpriseGeotechnicalWorkbook.tables` returns `Геотех картирование`, `Справочники`, `Исходные данные`; effective rows, history scalar records, preserved originals and optional cells | Wrong sheet count/name/order/width/headings. Replace with only Data A:AD and report-only row expansion per tectonic record. Preserve J5/history in storage and separate detailed/Exchange/backup formats, not extra regulatory sheets. |
 | Shared XLSX writer | `MappingXLSXExport.write` / `writeWorkbook`, typed cells, ZIP writer, literal inline strings, formula-safe content, cancellation and field/technical precision policies | Enterprise sheet names hard-coded; flat one-row header, row-1 freeze/filter, generic widths/styles, no merges. Add explicit regulatory layout capability without changing default detailed/Exchange contracts. |
 | Current values | Q original coefficients, explicit field A1, JCond76, GSI, selected persistence/aperture/weathering, mean SD and tectonics already exported | Current generic lab-strength output does not restrict to UCS. K chooses Q even on conflict; SD includes J5. These cannot be copied blindly to the new named fields. |
 | RMR89 | `RMR89Basic.swift`, `RockMassRatings.swift`, `MappingRatingsForm.swift`, detail view and controlled revision storage | Categorical UI already exists; do not rebuild it. Orientation adjustment and quantitative groundwater reconciliation remain absent. |
@@ -157,14 +170,17 @@ Exchange or make it a valid Exchange import baseline. B2b remains read-only.
 The 88-column minimum follows 39 leading + 25 J-set + 24 trailing columns in
 `EnterpriseGeotechnicalWorkbook`; fault columns are variable. The current source
 sheet includes revisions, measurements and photo metadata, not original photo/DXF
-bytes. Keep its preservation role and no-backup warning. Detailed `MappingFieldWorkbook`,
-relational CSV, photo packages and `FieldForge Exchange.xlsx` retain their contracts.
+bytes. That is existing behavior, superseded for the new Data-only regulatory profile.
+Detailed `MappingFieldWorkbook`, relational CSV, photo packages and
+`FieldForge Exchange.xlsx` retain their contracts and preservation roles.
 
-Engineering numbers must retain full values in source records. Excel numeric cells
+Engineering numbers retain full values in storage and separate lossless formats.
+Excel numeric cells
 have approximately 15 significant digits; the current field-numeric writer bypasses
 its technical-sheet text safeguard. For C:E and any higher-precision fields, Stage 2
 must explicitly select exact-text cells where required or expose the limitation and
-exact companion values; never claim an Excel numeric cell preserves arbitrary Double
+exact values in the separate formats. No companion columns/sheets may be added to
+this Data-only export. Never claim an Excel numeric cell preserves arbitrary Double
 precision. Template display formats alone are insufficient.
 
 ## RMR76 / RMR89 methodology and workbook discrepancies
@@ -177,7 +193,32 @@ Verify the full strength/test, RQD, spacing, condition, groundwater and
 application-specific orientation rules, including boundaries and special cases,
 before creating executable scores or categories.
 
-Reference register (accessed 2026-11-07):
+### Owner-specified enterprise category descriptions
+
+In the subsequent specification reply the owner supplied these intended categories.
+This records their source as **owner-entered requirements**, not independently
+verified published RMR76 tables or new executable engineering rules.
+
+| Field | Owner-specified categories and scores |
+| --- | --- |
+| A42, persistence / length | <1 m → 6; 1–3 m → 4; 3–10 m → 2; 10–20 m → 1; >20 m → 0 |
+| A43, aperture | No aperture → 6; nonzero <0.1 mm → 5; 0.1–1 mm → 4; 1–5 mm → 1; >5 mm → 0 |
+| A45, wall alteration | None → 6; slightly weathered → 5; moderately weathered → 3; highly weathered → 1; crushed → 0 |
+| A1, intact strength | <1 MPa → 0; 1–5 MPa → 1; 5–25 MPa → 2; 25–50 MPa → 4; 50–100 MPa → 7; 100–250 MPa → 12; >250 MPa → 15 |
+
+The stated ranges share endpoints. Preserve explicit category selection; do not
+invent half-open intervals or automatic boundary precedence. A1's measured-UCS
+versus field-grade source/precedence still needs a precise contract before changing
+export behavior. A45 crushed=0 remains distinct from RMR89 decomposed=0, and the
+current model has no independent enterprise crushed-wall category. No existing
+assessment or historical value is reinterpreted by recording these requirements.
+
+The owner also suggested checking template formulas linking RMR and Barton.
+The formula audit below already identifies such expressions and their limitations:
+inferred Jr/Ja-based condition ratings are not approved substitutions for geological
+RMR categories. No Q↔RMR conversion or RMR76 scoring is authorized by this suggestion.
+
+### Published reference register (accessed 2026-11-07)
 
 1. Bieniawski, Z.T. (1976), *Rock Mass Classification in Rock Engineering*,
    Symposium on Exploration for Rock Engineering, vol. 1, pp. 97–106, Balkema.
@@ -297,7 +338,7 @@ Audit of every production `JointSetIdentifier.allCases` use at this revision:
 | `MappingJointSetsSection.swift` | Main capture add/edit/evidence assignment uses four; remove `/5`/five-limit assumptions. |
 | `MappingObservationDifference.swift` | Continue enumerating all persisted identifiers so J5 changes/history cannot disappear from comparisons. |
 | `MappingFieldWorkbook.swift` (headers and row population) | Preserve detailed export J5 contract; clearly historical, independent of the new regulatory sheet. |
-| `EnterpriseGeotechnicalWorkbook.swift` (headers and row population) | Replace Data projection with explicit J1–J4; keep J5 on source/history sheets. Review SD independently. |
+| `EnterpriseGeotechnicalWorkbook.swift` (headers and row population) | Replace regulatory projection with Data only and explicit J1–J4; use approved J1–J4 SD mean. Keep J5/history in storage and separate detailed/Exchange/backup formats. |
 
 Additional dependencies not using `allCases`:
 
@@ -359,7 +400,10 @@ Proposed pipeline:
    and timezone, picket convention/origin, north and spatial metadata absent from Data.
    Do not substitute import time for the observation date or GPS for location.
 3. Exchange identities use UUID + base revision/fingerprint and immutable evidence.
-   Ordinary ID/PK/XYZ only generate **candidates**. Ask the reviewer to create a new
+   Ordinary ID/PK/XYZ only generate **candidates**. Regulatory rows repeated for
+   tectonic records must be reconciled to one parent observation with its multiple
+   structures, never blindly admitted as one point per row or silently grouped by
+   shared properties/coordinates. Ask the reviewer to create a new
    observation, explicitly bind to a local UUID, or skip. Duplicate identical rows
    can also be distinct observations; never silently collapse ambiguous identity.
 4. Display complete field comparisons, grouped by observation UUID/client token and
@@ -450,7 +494,7 @@ ordinary numeric-cell policy before advertising this workflow as supported.
 | Stage / PR | Deliverable | Gate / targeted validation |
 | --- | --- | --- |
 | 1 — this documentation PR | Exact mapping, inventory, published-source comparison, J5/replay design, questions | Read-only two-reader workbook check; source/diff/link review. No application changes. |
-| 2 — regulatory Data export | Fixed A:AD, four-row header, merges/formats, effective observations, explicit blanks and source/reference sheets | Resolve mapping/layout decisions below. Synthetic tests for all 30 headers/order/values, no AE:BB, J1–J4, missing/zero, revisions/multiple points; unchanged detailed/CSV/Exchange contracts. One targeted test run and Simulator compile; independently read generated XLSX. Native Excel visual acceptance separately recorded. |
+| 2 — regulatory Data export | Exactly one sheet Data A:AD, four-row header, merges/formats, effective observations, explicit blanks and one report row per tectonic record | Resolve remaining value/precision/spatial policies. Synthetic tests for one sheet, all 30 headers/order/values, no AE:BB, J1–J4, approved SD mean, missing/zero, revisions/multiple points and 0/1/multiple tectonic records with repeated properties but no database duplicates; unchanged detailed/CSV/Exchange contracts. One targeted test run and Simulator compile; independently read generated XLSX. Native Excel visual acceptance separately recorded. |
 | 3a — routine J1–J4 | Capture/correction/assignment/wedge controls and policy guards; read-only historical J5 | Retain schema 8/global five-value decoding; targeted admission/legacy revision/Exchange/backup round-trips and one Simulator compile. Do not rewrite historical evidence or fixtures to erase J5. |
 | 3b — RMR89 refinement | Reuse selectors/evaluator; verified water/condition rules and explicitly supported orientation adjustment | Complete published source/applicability pack; preserve old method versions. Independent expected components/boundaries/missing inputs/basic-vs-adjusted/no-Q-substitution tests and one Simulator compile. |
 | 3c — independent RMR76 | Separate versioned categories, assessment/storage/UI/export integration | Complete 1976 water/orientation/low-strength/endpoint sources and storage/old-writer preservation decision. Independent benchmark 75 plus boundaries and missing/invalid tests; one Simulator compile. No cloned RMR89 weights. |
@@ -469,47 +513,46 @@ Simulator build each. Full final qualification remains separate.
 Already settled: the reference is `example(2).xlsb` with the hash above; primary
 regulatory sheet `Data`, exactly A:AD; four routine sets J1–J4; preservation of
 historical J5; independent RMR89/RMR76; separate regulatory and Exchange formats.
-These requirements do not need reconfirmation. The following items remain open:
+The subsequent owner answers also settle A = excavation name, O = mean positive
+saved J1–J4 SD (no valid values → blank), J = actual UCS only, AD = stored final GSI
+only. The later answers settle exactly one worksheet, Data A:AD, and one report row
+per tectonic record with repeated observation properties/coordinates (one blank-S:U
+row if no tectonics). This replaces the earlier one-row-per-observation export rule;
+it never duplicates database observations. The supplied enterprise category
+descriptions are recorded above with their owner-entered provenance. These settled
+requirements do not need reconfirmation. The following items remain open:
 
-1. **A / ID:** define the owner-facing label and exact source property. No excavation,
-   observation-label or UUID mapping has been selected; nonunique labels cannot be
-   imported as proven observation identity.
-2. **O / SD:** define what spacing represents and its source: interval observation,
-   determining system or specified aggregate. If an aggregate is selected, define
-   participating sets (including treatment of historical J5), estimated/manual
-   provenance, missing/zero values and the destination of imported values. No mean
-   or other aggregation is approved.
-3. **S:U / multiple faults:** define how one report row represents multiple tectonic
-   records while retaining one effective observation per row and all evidence. No
-   first-record, explicit-selection, aggregation or omission policy is approved.
-4. **Other report value policies:** decide whether I/A1 is field-strength-only or
-   also admits a verified laboratory-derived score; whether AD/GSI uses only the
-   stored final value; and how conflicting Q/RMR RQD inputs are exposed/resolved.
+1. **Other report value policies:** decide whether I/A1 is field-strength-only or
+   also admits a verified measured-UCS score, including precedence; establish endpoint
+   handling for automatic categorization if requested and a separate A45 crushed-wall
+   input if needed; define how conflicting Q/RMR RQD inputs are exposed/resolved.
    J/UCS may contain only actual UCS, never an implicit Is(50) conversion or invented
    field-grade midpoint. Missing values must not become zero.
-5. **Supplementary layout and precision:** choose useful reference/source sheets
-   without reinstating a mandatory legacy three-sheet contract; confirm merge
+2. **Layout and precision:** Data-only and omission of all supplementary sheets are
+   settled. Confirm merge
    cropping at AD and exact-text precision exceptions. Resolve remaining visual
    fidelity through a sanitized header/style reference or owner inspection. The
    primary Data name and 30-column width are already fixed.
-6. **Spatial/context reporting and ordinary import:** decide how supplementary
-   CRS/units/axes/north/provenance are presented and which unresolved or mixed frames
+3. **Spatial/context reporting and ordinary import:** decide how retained
+   CRS/units/axes/north/provenance are exposed outside the Data-only workbook and which unresolved or mixed frames
    cause warnings/refusal. Ordinary imports also need explicit parent/date/timezone,
    picket-convention and spatial context absent from A:AD. No conversion or inferred
    underground location is permitted.
-7. **Engineering reference pack and scope:** locate the enterprise DOCX/title/revision
+4. **Engineering reference pack and scope:** locate the enterprise DOCX/title/revision
    and complete edition-specific published method/applicability tables; select the
    supported applications and groundwater/orientation workflows. The original 1989
    core tables were checked; complete 1976 verification remains outstanding. Owner
    approval cannot waive the RMR76 source-verification gate above.
-8. **Storage/compatibility design:** review separate RMR76 storage and atomic durable
+5. **Storage/compatibility design:** review separate RMR76 storage and atomic durable
    import ledger/audit/recovery/backup representation, including preservation by old
    writers. Schema 8 remains unchanged; any independently justified exception needs
    a separate owner decision. An independently saved receipt is insufficient.
-9. **Ordinary-import reconciliation:** choose stable companion metadata/Exchange or
+6. **Ordinary-import reconciliation:** choose a separate companion/Exchange workflow or
    repeated explicit identity resolution for anonymous colleague-edited books;
    approve the durable binding/replay policy and handling of explicit clears and
-   unsupported derived values. Neither row numbers nor ID/PK/coordinates alone
+   unsupported derived values, including a destination for an imported aggregate SD
+   and explicit reconciliation of repeated tectonic rows to one parent observation.
+   Neither row numbers nor ID/PK/coordinates alone
    establish identity. The conversion procedure remains unqualified until tested.
 
 This review authorizes documentation corrections only. Do not start Stage 2 or any
