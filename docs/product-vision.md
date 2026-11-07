@@ -50,6 +50,8 @@ Record Barton Q inputs **RQD, Jn, Jr, Ja, Jw, SRF** and optional RMR using an ex
 
 Retain independent **RMR76 and RMR89** categories, method versions, descriptions, scores and missing-data states. Basic and orientation-adjusted totals are distinct. Reuse observations only where their meaning is compatible; never substitute Barton Jr/Ja for RMR condition scores, convert point-load strength to UCS implicitly, or infer excavation orientation. Implementation requires the complete verified edition-specific source and independent engineering examples.
 
+Do not implement RMR76 scoring until its complete edition-specific rating and applicability tables are verified against published references. Partial reproductions or workbook results do not satisfy this gate. The regulatory XLSX remains a reporting projection, separate from lossless FieldForge Exchange within its documented selected-record scope; neither replaces a complete backup. Column A/ID, column O/SD and multiple-fault S:U projection remain unresolved in the Stage 1 specification.
+
 Before implementing any classification calculation, document and verify the published method, edition/version, rating tables, applicable assumptions and independent engineering examples/tests. Never invent coefficients, methods or scales. Keep original inputs, calculated results and missing-data indicators distinct.
 
 ### Export and preservation
