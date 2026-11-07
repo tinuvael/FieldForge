@@ -8,6 +8,8 @@
 
 This is the authoritative source for intended product requirements and scope. Technical documents describe how to realize this vision; the [README](../README.md) and [verification report](phase2-verification.md) describe implemented and verified behavior. Future requirements below are not claims of available features or engineering validation.
 
+**Owner specification update (2026-11-07):** routine mapping targets J1–J4, with historical J5 evidence preserved. Regulatory reporting targets the supplied workbook's `Data!A:AD`; RMR76 and RMR89 remain independent methods. These changes and confirmed Excel import are not yet implemented. See the [Stage 1 audit, exact column mapping and implementation gates](regulatory-excel-audit.md).
+
 ## Purpose and boundaries
 
 FieldForge is a professional, offline-first geological and geomechanical field mapping application for iPhone, with future native iPad support from one codebase. It replaces paper mapping journals, simplifies surveyed spatial reference inside underground excavations, and provides compact preliminary wedge analysis. It remains a focused engineering field instrument. Russian is the user-interface language; code identifiers and technical documentation are English.
@@ -40,11 +42,13 @@ Typical intervals are 5–10 m, but arbitrary valid lengths are supported. Displ
 
 Support automatic iPhone Core Motion capture where hardware is available and manual geological-compass entry. Every observation records source, timestamp, magnetic/true/grid/unknown north, quality and available original diagnostics or manual inputs. Preserve numerical precision and undefined directions; no silent north conversion. Device availability or display resolution is not validated accuracy.
 
-Allow up to five representative sets **J1–J5 per interval**, each optionally linked to multiple original observations. Representatives are explicit interpretations with author/time, method/version where applicable and evidence links. Five observations do not automatically constitute five statistical sets. Original observations remain independent evidence and are never overwritten by interpretation or analysis.
+Routine capture, editing and measurement assignment support four representative sets **J1–J4 per interval**, each optionally linked to multiple original observations. Existing J5 records retain their identifiers, values, revisions and evidence links, remain readable in historical/advanced views, and survive detailed exchange and backup/restore. They are not deleted, renumbered or merged. Representatives are explicit interpretations with author/time, method/version where applicable and evidence links; measurements do not automatically constitute statistical sets. Original observations remain independent evidence and are never overwritten by interpretation or analysis.
 
 ### Rock-mass characterization
 
 Record Barton Q inputs **RQD, Jn, Jr, Ja, Jw, SRF** and optional RMR using an explicitly selected published version. General joint conditions primarily belong to the interval, not a repeated form for every representative set. Q/RMR assessments also belong to the interval. Support multiple tectonic structures without arbitrary count limits.
+
+Retain independent **RMR76 and RMR89** categories, method versions, descriptions, scores and missing-data states. Basic and orientation-adjusted totals are distinct. Reuse observations only where their meaning is compatible; never substitute Barton Jr/Ja for RMR condition scores, convert point-load strength to UCS implicitly, or infer excavation orientation. Implementation requires the complete verified edition-specific source and independent engineering examples.
 
 Before implementing any classification calculation, document and verify the published method, edition/version, rating tables, applicable assumptions and independent engineering examples/tests. Never invent coefficients, methods or scales. Keep original inputs, calculated results and missing-data indicators distinct.
 
