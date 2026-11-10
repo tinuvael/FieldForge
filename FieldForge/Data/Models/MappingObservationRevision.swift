@@ -24,6 +24,18 @@ extension MappingJournal {
         let latest = Dictionary(revisions.map { ($0.observationID, $0.snapshot) }, uniquingKeysWith: { _, last in last })
         return observations.map { latest[$0.id] ?? $0 }
     }
+    /// Shared append path for approved corrections. The caller validates the
+    /// baseline and commits the whole resulting journal through MappingStore.
+    @discardableResult mutating func appendCorrection(id: UUID, snapshot: MappingObservation, now: Date,
+                                   author: String?, reason: String) -> MappingObservationRevision {
+        let previous = revisions.last { $0.observationID == snapshot.id }
+        let revision = MappingObservationRevision(id: id, observationID: snapshot.id,
+            version: (previous?.version ?? 1) + 1, previousRevisionID: previous?.id,
+            correctedAt: now, author: author, reason: reason, snapshot: snapshot)
+        revisions.append(revision)
+        return revision
+    }
+
     func validateRevisions() throws {
         // Standalone diagnostics also validate the authoritative base once. The full
         // validator passes its existing context and does not repeat this work.
@@ -160,11 +172,10 @@ extension MappingWorkflow {
             throw StorageError.invalidRecord
         }
         let snapshot = try draft.snapshot(now: now)
-        let revision = MappingObservationRevision(id: UUID(), observationID: current.id,
-            version: (journal.history(for: current.id).last?.version ?? 1) + 1, previousRevisionID: draft.previousRevisionID,
-            correctedAt: now, author: draft.author.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : draft.author,
-            reason: draft.reason, snapshot: snapshot)
-        var next = journal; next.revisions.append(revision)
+        var next = journal
+        let revision = next.appendCorrection(id: UUID(), snapshot: snapshot, now: now,
+            author: draft.author.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : draft.author,
+            reason: draft.reason)
         try next.validate()
         try commit(next)
         return revision

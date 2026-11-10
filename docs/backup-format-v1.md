@@ -70,6 +70,10 @@ record identity. Their payloads are not upgraded or assumed to use current schem
 | `completenessStatus` | `complete` or `incomplete`, checked against the independently derived report. |
 | `report.problems` | Array of `{path, reason}` objects. Empty only for a verified complete package. |
 
+The optional [Stage 4a import ledger](excel-import-stage-4a.md) is covered by the
+existing mapping file digests. A pending Excel intent is part of the mapping snapshot.
+It has no staged photo/plan payload or separate manifest path.
+
 Each `attachments` object has `kind` (`photo`/`dxf`), `recordID` (photo or plan UUID),
 `attachmentID`, `projectID`, `path`, expected `byteCount` and expected `sha256`.
 Photos also have `pointID` and `pointRevisionID`; original-point context uses the
