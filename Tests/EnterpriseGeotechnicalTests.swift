@@ -236,7 +236,7 @@ import XCTest
             let result = try input.basicEvaluation()
             XCTAssertEqual(result.components["strength"], rating); XCTAssertEqual(result.value, 64 - 12 + rating)
             let assessment = try RMR89Assessment(input: input, now: now); try assessment.validate()
-            XCTAssertEqual(assessment.method, RMR89Assessment.fieldStrengthVersion)
+            XCTAssertEqual(assessment.method, RMR89Assessment.verifiedVersion)
             input.strengthMPa = "150"; XCTAssertThrowsError(try input.basicEvaluation())
         }
         var laboratory = FinalFieldPolishTests.referenceInput()
@@ -552,6 +552,9 @@ import XCTest
             var edit = try w.correction(for: original.id)
             edit.reason = "Record field categories"
             edit.fields.regulatory = .init(strength: .below1, wallAlteration: .crushed)
+            edit.fields.bartonQ.contact = .wall
+            edit.fields.bartonQ.jr.select("B", parameter: .jr)
+            edit.fields.bartonQ.ja.select("C", parameter: .ja)
             let revised = try w.saveCorrection(edit, now: now.addingTimeInterval(1)).snapshot
             let persisted = try MappingWorkflow(store: FileMappingStore(url: store.url)).journal
             XCTAssertEqual(persisted.schemaVersion, 8)
@@ -559,6 +562,8 @@ import XCTest
             XCTAssertEqual(persisted.effectiveObservation(id: original.id), revised)
             XCTAssertEqual(revised.ratings?.regulatory, edit.fields.regulatory)
             XCTAssertEqual(revised.ratings?.rmr89, original.ratings?.rmr89)
+            XCTAssertEqual(revised.ratings?.bartonQ?.input.jr, edit.fields.bartonQ.jr)
+            XCTAssertEqual(revised.ratings?.bartonQ?.input.ja, edit.fields.bartonQ.ja)
             XCTAssertEqual(revised.ratings?.gsi, original.ratings?.gsi)
             let after = try EnterpriseGeotechnicalWorkbook.prepare(points: [revised], journal: persisted).table.rows[0]
             for column in [6, 8] {

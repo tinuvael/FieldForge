@@ -268,9 +268,10 @@ enum RMRStrengthTest: String, Codable, CaseIterable, Sendable {
     }
 }
 enum RMREngineeringApplication: String, Codable, CaseIterable, Sendable { case tunnelsAndMines, foundations, slopes }
-/// Original free-text evidence remains intact; optional explicit selections enable basic-v1.
+/// Original free-text evidence and explicitly selected category identifiers.
 struct RMR89Input: Codable, Equatable, Sendable {
     var basicSelections: [String: String]? = nil
+    var overallConditionContinuity: RMR89DiscontinuityContinuity? = nil
     var fieldStrength: FieldStrengthAssessment? = nil
     var jcond76: JCond76Assessment? = nil
     var strengthTest: RMRStrengthTest?
@@ -278,6 +279,7 @@ struct RMR89Input: Codable, Equatable, Sendable {
     var persistenceMeters = "", apertureMillimeters = "", roughness = "", infill = "", weathering = ""
     var groundwater = "", inflowLitersPerMinutePer10m = "", waterPressureRatio = ""
     var application: RMREngineeringApplication?
+    var orientationFavorability: RMR89OrientationFavorability? = nil
     var orientationDescription = "", source = "", assessor = "", missingReason = ""
     var hasChanges: Bool { self != RMR89Input() }
     func validate() throws {
@@ -310,29 +312,59 @@ struct RMR89Assessment: Codable, Equatable, Sendable {
     static let version = "Bieniawski-RMR89/input-only-v1"
     static let calculatedVersion = "Bieniawski-RMR89/basic-categories-v1"
     static let fieldStrengthVersion = "Bieniawski-RMR89/basic-categories-field-strength-v2"
-    static let reference = "Bieniawski, Z.T. (1989). Engineering Rock Mass Classifications. Wiley. ISBN 0-471-60172-1."
+    static let preA4VerificationVersion = "Bieniawski-RMR89/table-4.1-categories-v3"
+    static let verifiedVersion = "Bieniawski-RMR89/table-4.1-categories-v4"
+    static let reference = "Bieniawski, Z.T. (1989). Engineering Rock Mass Classifications. Wiley. ISBN 0-471-60172-1. Таблица 4.1, с. 54–55; диаграмма E, с. 58; таблица 4.2, с. 59."
     let method: String
     let revision: Int
     let assessedAt: Date
     let input: RMR89Input
     let missing: [String]
     let calculation: RMR89BasicEvaluation?
-    init(input: RMR89Input, now: Date) throws {
+    var usesHistoricalMethod: Bool { method != Self.verifiedVersion && method != Self.preA4VerificationVersion }
+    var orientationStatus: String {
+        calculation.flatMap { usesHistoricalMethod ? nil : $0.orientationStatus } ?? "Историческая методика: поправка не рассчитывалась."
+    }
+    init(input: RMR89Input, now: Date, method requestedMethod: String? = nil) throws {
         try input.validate(); revision = 1; assessedAt = now; self.input = input
-        calculation = try input.basicSelections == nil && input.strengthTest != .fieldEstimate ? nil : input.basicEvaluation()
-        method = input.strengthTest == .fieldEstimate ? Self.fieldStrengthVersion : calculation == nil ? Self.version : Self.calculatedVersion
+        let hasSelections = input.basicSelections != nil || input.strengthTest == .fieldEstimate || input.overallConditionContinuity != nil
+        method = requestedMethod ?? (hasSelections || input.orientationFavorability != nil ? Self.verifiedVersion : Self.version)
+        switch method {
+        case Self.version: calculation = nil
+        case Self.calculatedVersion, Self.fieldStrengthVersion: calculation = try input.historicalBasicEvaluation()
+        case Self.preA4VerificationVersion: calculation = try input.v3BasicEvaluation()
+        case Self.verifiedVersion: calculation = try input.basicEvaluation()
+        default: throw StorageError.invalidRecord
+        }
         missing = calculation?.missing ?? input.missing
+        try validateMethod()
     }
     func validate() throws {
         try input.validate()
         guard revision == 1, assessedAt.timeIntervalSinceReferenceDate.isFinite else { throw StorageError.invalidRecord }
-        if method == Self.version {
-            guard input.strengthTest != .fieldEstimate, calculation == nil, input.basicSelections == nil, missing == input.missing else { throw StorageError.invalidRecord }
-        } else {
-            guard method == (input.strengthTest == .fieldEstimate ? Self.fieldStrengthVersion : Self.calculatedVersion),
-                  input.basicSelections != nil || input.strengthTest == .fieldEstimate,
-                  calculation == (try input.basicEvaluation()), missing == calculation?.missing else { throw StorageError.invalidRecord }
+        try validateMethod()
+        let expected: RMR89BasicEvaluation?
+        switch method {
+        case Self.version: expected = nil
+        case Self.preA4VerificationVersion: expected = try input.v3BasicEvaluation()
+        case Self.verifiedVersion: expected = try input.basicEvaluation()
+        default: expected = try input.historicalBasicEvaluation()
         }
+        guard calculation == expected, missing == (expected?.missing ?? input.missing) else { throw StorageError.invalidRecord }
+    }
+
+    private func validateMethod() throws {
+        if method == Self.verifiedVersion { return }
+        guard input.overallConditionContinuity == nil else { throw StorageError.invalidRecord }
+        if method == Self.preA4VerificationVersion { return }
+        let valid: Bool
+        switch method {
+        case Self.version: valid = input.basicSelections == nil && input.strengthTest != .fieldEstimate
+        case Self.calculatedVersion: valid = input.basicSelections != nil && input.strengthTest != .fieldEstimate
+        case Self.fieldStrengthVersion: valid = input.strengthTest == .fieldEstimate
+        default: throw StorageError.invalidRecord
+        }
+        guard valid, input.orientationFavorability == nil else { throw StorageError.invalidRecord }
     }
 }
 struct MappingRatings: Codable, Equatable, Sendable {

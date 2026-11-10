@@ -14,6 +14,8 @@ The plan canvas, original-file verification, active revision selection and overl
 
 ## Preliminary basic RMR89
 
+This section records the historical basic-only method. Stage 3b defines the [current method, orientation correction and preservation rules](rmr89-stage-3b.md).
+
 Published method: Bieniawski, Z.T. (1989), *Engineering Rock Mass Classifications*, Wiley, ISBN 0-471-60172-1, Table 4.1 A/C/E. Tables and special-condition footnote were checked against E. Hoek, *Practical Rock Engineering*, [Rock mass classification, Table 4, printed pp. 9–10](https://www.rocscience.com/assets/resources/learning/hoek/Practical-Rock-Engineering-Chapter-3-Rock-Mass-Classification.pdf), accessed 2026-10-21. Its worked example independently supplies the acceptance calculation below. This is a preliminary classification tool, not support design or mechanical wedge assessment.
 
 The operator explicitly chooses the test basis and published categories. No descriptive text, source or author is required to preview the basic number. Measured values and original evidence remain optional secondary fields; any supplied numeric value must agree with the selected category. Source descriptions are never interpreted as categories automatically. New classifications do not group original orientations or reuse Q coefficients.
