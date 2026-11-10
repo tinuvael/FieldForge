@@ -14,6 +14,9 @@ and does not close #68 or backup/restore #23.
   observation UUID. Corrections append `MappingObservationRevision` records (version >= 2).
   The first correction's `previousRevisionID` is null; later corrections link to the previous
   correction UUID. `correctedAt` is separate from field `observedAt`.
+- Stage 3a keeps separate A1/A45 selections in the existing `source_records` JSON
+  and carries them through read-only previews. Old workbooks remain readable;
+  workbooks with the new optional fields require a reader that understands them.
 - J1–J5 are explicit, versioned `InterpretedJointSet` interpretations, with their own UUID,
   author/time/method, manual source spelling, north/conventional-side metadata, linked
   original measurement UUIDs and spacing provenance. They are not five automatic sensor groups.
@@ -86,7 +89,7 @@ macros, hidden rows/sheets, numeric cells or Excel serial dates are generated.
 | excavation_horizons | Composite `(excavation_id, horizon_id)` | Context only |
 | points | One current effective row per `point_id`; stable parents, base IDs/version/hash, location/time/geology and proposal fields | Controlled correction or new point |
 | measurements | `measurement_id → point_id`, exact original acquisition/orientation/manual/sensor data | Immutable evidence |
-| joint_sets | `joint_set_id → point_id`, unique J1–J5, own revision, representative, spacing/provenance | Proposed interpretation correction/new interpretation |
+| joint_sets | `joint_set_id → point_id`, unique J1–J5, own revision, representative, spacing/provenance | Proposed interpretation correction/new interpretation for J1–J4; historical J5 is read-only |
 | interpretation_evidence | `(joint_set_id, joint_set_revision, point_id, measurement_id)` | Immutable links in v1 |
 | tectonic_structures | `structure_id → point_id`, incomplete orientation, type/thickness/location/description | Proposed correction/new description |
 | assessments | `(point_id, kind)`; Q, RMR89 or GSI input/method/time/missing/results | Inputs may be proposed; derived fields immutable |

@@ -44,11 +44,11 @@ import UniformTypeIdentifiers
     }
     private func seed() throws -> Fixture {
         let root = try directory()
-        let (_, initial, first) = try P33RevisionTests().seed(); var w = initial
+        let (_, initial, first) = try P33RevisionTests().seed(includeHistoricalJ5: true); var w = initial
         for i in 1...2 {
             var edit = try w.correction(for: first.id); edit.reason = "Correction \(i)"; edit.fields.notes = "Revision \(i)"
             if i == 1 {
-                for id in [JointSetIdentifier.J3, .J4, .J5] {
+                for id in [JointSetIdentifier.J3, .J4] {
                     var set = JointSetDraft(identifier: id)
                     set.representative = ManualOrientationInput(dipAngleText: "32.123456789", dipDirectionText: "150", reference: .gridNorth)
                     edit.fields.jointSets.append(set)
@@ -426,6 +426,11 @@ extension OfflineBackupTests {
         let reopened = try MappingWorkflow(store: FileMappingStore(url: live.url.appendingPathComponent(OfflineRestore.mappingName)))
         XCTAssertEqual(reopened.journal, f.journal)
         XCTAssertEqual(reopened.journal.revisions.last?.snapshot.geology?.jointSets.count, 5)
+        let originalJ5 = try XCTUnwrap(reopened.journal.observations.first?.geology?.jointSets.first { $0.identifier == .J5 })
+        XCTAssertEqual(originalJ5.measurementIDs.count, 2)
+        for revision in reopened.journal.revisions {
+            XCTAssertEqual(revision.snapshot.geology?.jointSets.first { $0.identifier == .J5 }, originalJ5)
+        }
         XCTAssertEqual(reopened.journal.photoRevisions.count, 2)
         for file in backup.manifest.files {
             XCTAssertEqual(try Data(contentsOf: OfflineRestore.destination(file.path, root: live.url, installed: true)),

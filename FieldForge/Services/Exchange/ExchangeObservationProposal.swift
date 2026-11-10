@@ -150,6 +150,7 @@ enum ExchangeObservationProposal {
             guard ["", "1"].contains(row["revision", default: ""]), row["interpreted_at_utc", default: ""].isEmpty, row["interpreted_at_reference_seconds", default: ""].isEmpty else { throw bad("Новая система: версия 1, время интерпретации назначается при принятии.") }
         }
         guard let identifier = row["identifier"].flatMap(JointSetIdentifier.init(rawValue:)), row["method"] == "user-interpretation-v1" else { throw bad("Неверная система J1–J5 или метод интерпретации.") }
+        guard identifier.isRoutine else { throw unsupported("Историческая система J5 доступна только для просмотра.") }
         let representative = try object(ManualOrientationInput.self, row["representative_json", default: ""])
         let validated = try representative.validated()
         guard row["original_direction_text"] == representative.dipDirectionText, row["original_dip_text"] == representative.dipAngleText, row["north"] == representative.reference.rawValue,
@@ -243,8 +244,9 @@ enum ExchangeObservationProposal {
                 try input.validate(); gsi = input
             }
         }
-        guard q != nil || rmr != nil || gsi != nil else { return nil }
-        return MappingRatings(bartonQ: q, rmr89: rmr, gsi: gsi)
+        let regulatory = point?.ratings?.regulatory
+        guard q != nil || rmr != nil || gsi != nil || regulatory != nil else { return nil }
+        return MappingRatings(bartonQ: q, rmr89: rmr, gsi: gsi, regulatory: regulatory)
     }
     static func patched<T: Codable>(_ old: T, fields: [String: String]) throws -> T {
         var obj = try JSONSerialization.jsonObject(with: Data(MappingExchangeExport.json(old).utf8)) as! [String: Any]

@@ -252,6 +252,9 @@ struct MappingWorkflow {
             geology: try draft.geology(now: now), ratings: try draft.ratings(now: now), picketConvention: draft.picketConvention, rock: draft.rock)
     }
     @discardableResult mutating func save(now: Date = Date(), preparedPhotos: [PhotoImportOperation] = []) throws -> MappingObservation {
+        guard draft.jointSets.allSatisfy({ $0.identifier.isRoutine }) else {
+            throw MappingError.invalid("В новом наблюдении доступны системы J1–J4.")
+        }
         guard draft.photoSessions.isEmpty else { throw MappingError.invalid("Дождитесь завершения выбора и получения всех фотографий.") }
         guard preparedPhotos == draft.photos else { throw MappingError.invalid("Сначала запишите все фотографии черновика. Повторите сохранение наблюдения.") }
         let record = try draftRecord(now: now)
@@ -314,6 +317,7 @@ extension MappingWorkflow {
     }
     mutating func acceptJointSet(_ updated: JointSetDraft?, originals: [Measurement], request: MappingEditorRequest<JointSetDraft>) throws {
         try validateOwner(request)
+        guard request.initial.identifier.isRoutine else { throw MappingError.invalid("Для ввода доступны системы J1–J4.") }
         var next = draft
         for reading in originals { try next.addMeasurement(reading) }
         if var updated {

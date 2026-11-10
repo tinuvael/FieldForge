@@ -16,7 +16,7 @@ private typealias OriginalReading = FieldForge.Measurement
         XCTAssertTrue(reading.isSavable)
         return reading
     }
-    func testMeasuredJ1ThroughJ5AcceptSaveAndReopenImmutableOriginals() async throws {
+    func testMeasuredJ1ThroughJ4AcceptSaveAndReopenImmutableOriginals() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let (memory, _) = try P2MappingTests().configured()
@@ -25,7 +25,7 @@ private typealias OriginalReading = FieldForge.Measurement
         var workflow = try MappingWorkflow(store: store)
         workflow.draft.picket = "12,18"
         var readings: [OriginalReading] = []
-        for identifier in JointSetIdentifier.allCases {
+        for identifier in JointSetIdentifier.routine {
             let request = workflow.editorRequest(JointSetDraft(identifier: identifier))
             let original = try reading(); readings.append(original)
             var staged = request.initial
@@ -42,7 +42,7 @@ private typealias OriginalReading = FieldForge.Measurement
         let reopened = try MappingWorkflow(store: FileMappingStore(url: store.url))
         XCTAssertEqual(reopened.journal.measurements(for: saved), readings)
         let sets = try XCTUnwrap(reopened.observations.first?.geology?.jointSets)
-        XCTAssertEqual(sets.map(\.identifier), JointSetIdentifier.allCases)
+        XCTAssertEqual(sets.map(\.identifier), [.J1, .J2, .J3, .J4])
         for (set, original) in zip(sets, readings) {
             XCTAssertEqual(set.measurementIDs, [original.id])
             XCTAssertEqual(try set.representative.validated().orientation.dipAngle, original.orientation.dipAngle)

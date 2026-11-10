@@ -140,6 +140,74 @@ struct FieldStrengthAssessment: Codable, Equatable, Sendable {
     func validate() throws { guard self == Self(grade) else { throw StorageError.invalidRecord } }
 }
 
+/// Owner-approved Data A:AD field categories (issue #74 / regulatory Excel audit).
+/// These are explicit reporting selections, independent of RMR89 and lab tests.
+enum RegulatoryStrengthBand: String, Codable, CaseIterable, Sendable {
+    case below1, from1To5, from5To25, from25To50, from50To100, from100To250, above250
+
+    var rating: Int {
+        switch self {
+        case .below1: 0
+        case .from1To5: 1
+        case .from5To25: 2
+        case .from25To50: 4
+        case .from50To100: 7
+        case .from100To250: 12
+        case .above250: 15
+        }
+    }
+
+    var interval: String {
+        switch self {
+        case .below1: "<1"
+        case .from1To5: "1–5"
+        case .from5To25: "5–25"
+        case .from25To50: "25–50"
+        case .from50To100: "50–100"
+        case .from100To250: "100–250"
+        case .above250: ">250"
+        }
+    }
+}
+
+enum RegulatoryWallAlteration: String, Codable, CaseIterable, Sendable {
+    case unweathered, slightlyWeathered, moderatelyWeathered, highlyWeathered, crushed
+
+    var rating: Int {
+        switch self {
+        case .unweathered: 6
+        case .slightlyWeathered: 5
+        case .moderatelyWeathered: 3
+        case .highlyWeathered: 1
+        case .crushed: 0
+        }
+    }
+}
+
+struct RegulatoryFieldCategories: Codable, Equatable, Sendable {
+    var strength: RegulatoryStrengthBand?
+    var wallAlteration: RegulatoryWallAlteration?
+
+    var isEmpty: Bool { strength == nil && wallAlteration == nil }
+
+    // Preserve PR #76's projection when no independent field selection was saved.
+    func strengthRating(rmr: RMR89Input?) -> Int? { strength?.rating ?? rmr?.fieldStrength?.rating }
+
+    static func sharedChoice(_ parameter: RMR89Parameter, rmr: RMR89Input?) -> RMR89Parameter.Choice? {
+        guard let rmr, let id = rmr.basicSelections?[parameter.rawValue] else { return nil }
+        return parameter.choices(test: rmr.strengthTest).first { $0.id == id }
+    }
+
+    static func equivalentWallChoice(rmr: RMR89Input?) -> RMR89Parameter.Choice? {
+        guard let choice = sharedChoice(.weathering, rmr: rmr), choice.id != "weathering-4" else { return nil }
+        return choice
+    }
+
+    func wallAlterationRating(rmr: RMR89Input?) -> Int? {
+        wallAlteration?.rating ?? Self.equivalentWallChoice(rmr: rmr)?.rating
+    }
+}
+
 /// Bieniawski (1976), reproduced by Hoek, Carter & Diederichs (2013), Table 2.
 /// Independent historical score; never added to RMR89 basic.
 enum JCond76Category: String, Codable, CaseIterable, Sendable {

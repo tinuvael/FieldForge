@@ -25,7 +25,7 @@ in the dimensionless variable `x=0.1 λ`, using a growing bounded bracket and 16
 
 The original Barton Q input RQD is preferred, without Q's numerical minimum replacement of 10%. If absent, RMR89 original RQD is an explicit, visibly labelled fallback. If both supplied RQD inputs disagree or either is invalid, a visible discrepancy blocks automatic estimates until the inputs are reconciled. Ratings retain their independent inputs and are not modified to support SD.
 
-RQD/source changes update only automatic values in the active `MappingDraft`, including correction drafts. Acceptance of a staged system refreshes automatic provenance from the owning draft. Legacy/manual values do not change. Rehydration restores saved sets **after** loading Q/RMR inputs, preserving exact historic snapshots. Saving a correction increments only changed local joint revisions through the existing correction path; saved historical revisions are never edited or refreshed on read/export.
+RQD/source changes update only automatic J1–J4 values in the active `MappingDraft`, including correction drafts. Historical J5 is kept exactly as saved. Acceptance of a staged system refreshes automatic provenance from the owning draft. Legacy/manual values do not change. Rehydration restores saved sets **after** loading Q/RMR inputs, preserving exact historic snapshots. Saving a correction increments only changed local joint revisions through the existing correction path; saved historical revisions are never edited or refreshed on read/export.
 
 `JointSpacingMean` includes positive finite effective spacing from saved accepted J1–J5 only. It uses an ordinary arithmetic mean with no orientation, persistence, RQD or system-count weighting. Missing/zero values are excluded; no valid values yields a missing mean and count 0. The regulatory report passes only J1–J4 to this shared mean and exports the value as SD. 0.20, 0.40 and 0.09 produce 0.23; if the third value is the unrounded 70%-RQD estimate, the precise mean is approximately 0.230376231201701.
 
@@ -37,7 +37,51 @@ RMR89 offers one active strength method: field R0–R6, UCS or Is(50). The field
 
 Optional `RMR89Input.jcond76` stores category, rating and `Bieniawski-1976/JCond76-Hoek2013-table2-v1`. Its timestamp belongs to the enclosing RMR assessment. It appears **inside RMR89** and never changes the RMR89 condition subtotal or basic sum. Category/rating/method consistency is revalidated on load/save. It is independent of the existing RMR89 A.4 and E condition categories.
 
-Enterprise A1 is exported from the explicitly selected field grade only. A42/A43 map from verified explicit RMR89 persistence/aperture categories, retaining the engineer's choice at shared endpoints. A45 maps only the first four corresponding weathering categories. Enterprise A45=0 describes crushed walls, whereas RMR89's last category means decomposed: that mapping is intentionally absent. Free text, raw dimensions and Q categories are not guessed into enterprise categories.
+## Regulatory field categories (Stage 3a)
+
+Source: owner-approved [issue #74](https://github.com/tinuvael/FieldForge/issues/74) and
+[Stage 1 audit](regulatory-excel-audit.md#owner-specified-enterprise-category-descriptions)
+for `example(2).xlsb`, sheet `Data` (SHA-256 recorded in the audit). The
+equivalent A42 and A43 categories also match Bieniawski (1989), Table 4.1 E,
+reproduced in Hoek, *Practical Rock Engineering*, Rock mass classification,
+Table 4, pp. 9–10. These reporting categories do not define RMR76 scoring.
+
+| Data field | Explicit choices → score | Stored selection |
+| --- | --- | --- |
+| I / A1 field strength | <1 MPa → 0; 1–5 → 1; 5–25 → 2; 25–50 → 4; 50–100 → 7; 100–250 → 12; >250 → 15 | Optional independent field band; otherwise the saved R0–R6 field grade projects as before. |
+| R / A42 persistence | <1 m → 6; 1–3 → 4; 3–10 → 2; 10–20 → 1; >20 → 0 | Existing RMR89 `persistence-0…4`, entered once. |
+| P / A43 aperture | None → 6; nonzero <0.1 mm → 5; 0.1–1 → 4; 1–5 → 1; >5 → 0 | Existing RMR89 `aperture-0…4`, entered once. |
+| G / A45 wall alteration | Unweathered → 6; slightly weathered → 5; moderately weathered → 3; highly weathered → 1; crushed → 0 | Optional independent choice; otherwise reuse an equivalent RMR89 `weathering-0…3` choice. RMR89 `weathering-4` (decomposed) stays blank in A45 without an explicit selection. |
+
+A1 and A45 are optional menus under «Регламент · прочность и стенки». A42 and
+A43 stay in the RMR89 menu and show their report codes, units and scores.
+Selecting an independent category never changes RMR89 inputs or stored results.
+The independent A1 <1 MPa band includes values below 0.25 MPa. The original
+R0 field estimate still displays its documented 0.25–1 MPa interval. UCS,
+Is(50) and field grades keep their distinct meanings; laboratory inputs never
+set A1 automatically. J still reports only UCS in MPa. Selecting a band is
+explicit, including at shared endpoints. Raw dimensions, free text and Barton
+Jr/Ja never fill these categories. Missing values stay blank and an explicit
+zero remains numeric.
+
+Schema 8 stores the optional `MappingRatings.regulatory` object in the
+observation or correction snapshot only when a separate A1 or A45 choice was
+entered. Existing files omit the object and keep their previous projection and
+canonical JSON. No migration, reset, evidence edit or historical recalculation
+is performed. Backup and Exchange v1 source records include the optional object
+and preserve it through unrelated correction previews. Exchange sheets and
+columns are unchanged; these two independent selections are edited in FieldForge.
+Use a Stage 3a or newer app for artifacts containing the new fields: an older
+build cannot retain them when rewriting a journal and its strict Exchange
+reader cannot validate the new canonical records.
+
+Routine capture and correction offer J1–J4; the wedge picker uses the same
+four identifiers. The journal, correction and history views display historical
+J5 in a separate read-only section. Codable, revision comparisons, detailed
+XLSX/CSV, Exchange and backup/restore retain historical J5 and its evidence.
+Exchange preview accepts unchanged J5 and rejects proposals to add, edit or
+delete it. The regulatory workbook continues to omit J5.
+
 
 ## GSI interaction and compatibility
 
@@ -84,13 +128,8 @@ share the same stored observation identity.
   export action when it finds them. Narrow the selection or check spatial
   references in the detailed workbook before combining rows. The export performs
   no coordinate, unit or north conversion.
-- G/I/P/R use explicitly supported categories. A1 is field-grade-only. The
-  stored R0 grade has a documented field interval of 0.25–1 MPa and does not
-  separately represent the part of the enterprise <1 MPa band below 0.25 MPa.
-  Laboratory UCS remains available in J. A45 stays
-  blank for the decomposed-wall category, and a separate crushed-wall score is
-  unavailable. J uses only stored UCS in MPa. JCond76 stays independent of RMR89
-  and Barton Q inputs.
+- G/I/P/R use the explicit [field category selections](#regulatory-field-categories-stage-3a).
+  J uses only stored UCS in MPa. JCond76 stays independent of RMR89 and Barton Q inputs.
 - H/L/M/N use original Q coefficients. K uses original RQD as a percentage from
   the shared conflict-aware source selector. When both RQD sources disagree, K
   is blank. Before sharing, the export screen lists affected observations and

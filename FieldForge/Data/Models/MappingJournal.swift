@@ -423,6 +423,7 @@ struct MappingDraft: Equatable, Sendable {
     var rmr89 = RMR89Input() { didSet {
         if rmr89.rqd != oldValue.rqd || rmr89.rqdEvidence != oldValue.rqdEvidence { updateSpacingEstimates() }
     } }
+    var regulatory = RegulatoryFieldCategories()
     var gsi: GSIAssessment?
     var rock: RockLithology?
     var jointSets: [JointSetDraft] = []
@@ -488,7 +489,7 @@ struct MappingDraft: Equatable, Sendable {
     var hasChanges: Bool {
         !photos.isEmpty || !photoSessions.isEmpty || ![picket, chainageOriginAndDirection, x, y, crs, axes, coordinateProvenance, notes].allSatisfy(\.isEmpty) ||
             observedAtOverride != nil || zOrigin == .manualOverride || !measurements.isEmpty ||
-            rock != nil || gsi != nil || bartonQ.hasChanges || rmr89.hasChanges || !jointSets.isEmpty || !tectonicStructures.isEmpty || !startPicket.isEmpty || !endPicket.isEmpty || observationPosition != nil
+            rock != nil || gsi != nil || !regulatory.isEmpty || bartonQ.hasChanges || rmr89.hasChanges || !jointSets.isEmpty || !tectonicStructures.isEmpty || !startPicket.isEmpty || !endPicket.isEmpty || observationPosition != nil
     }
     func coordinates() throws -> MappingCoordinates? {
         func number(_ text: String) throws -> Double? {
@@ -524,6 +525,7 @@ extension MappingDraft {
         }
         bartonQ = observation.ratings?.bartonQ?.input ?? BartonQInput()
         rmr89 = observation.ratings?.rmr89?.input ?? RMR89Input()
+        regulatory = observation.ratings?.regulatory ?? RegulatoryFieldCategories()
         gsi = observation.ratings?.gsi; rock = observation.rock
         if let g = observation.geology {
             startPicketConvention = g.start?.convention ?? .legacyMeters

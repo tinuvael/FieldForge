@@ -104,15 +104,12 @@ struct MappingCorrectionDraft: Equatable, Sendable {
             throw MappingError.invalid("Исходные замеры и их принадлежность точке изменять нельзя.")
         }
         let old = baseline
+        guard fields.jointSets.filter({ !$0.identifier.isRoutine }) == initial.jointSets.filter({ !$0.identifier.isRoutine }) else {
+            throw MappingError.invalid("Историческая система J5 доступна только для просмотра.")
+        }
         let date = fields.observedAtOverride ?? old.observedAt
         guard let zone = TimeZone(identifier: fields.timeZoneID) else { throw StorageError.invalidRecord }
-        var geology = try fields.geology(now: now)
-        if let g = geology {
-            geology = MappingGeology(start: g.start, end: g.end, position: g.position,
-                jointSets: try fields.jointSets.map { draft in
-                    try draft.corrected(previous: old.geology?.jointSets.first { $0.id == draft.id }, now: now)
-                }, tectonicStructures: g.tectonicStructures)
-        }
+        let geology = try fields.geology(now: now, previousJointSets: old.geology?.jointSets ?? [])
         let q = fields.bartonQ == initial.bartonQ ? old.ratings?.bartonQ :
             (try fields.bartonQ.hasChanges ? BartonQAssessment(input: fields.bartonQ, now: now) : nil)
         let rmr = fields.rmr89 == initial.rmr89 ? old.ratings?.rmr89 :
@@ -120,7 +117,10 @@ struct MappingCorrectionDraft: Equatable, Sendable {
         let geologyUnchanged = fields.startPicket == initial.startPicket && fields.endPicket == initial.endPicket &&
             fields.jointSets == initial.jointSets && fields.tectonicStructures == initial.tectonicStructures &&
             fields.observationPosition == initial.observationPosition
-        let ratings = q == nil && rmr == nil && fields.gsi == nil ? nil : MappingRatings(bartonQ: q, rmr89: rmr, gsi: fields.gsi)
+        let regulatory = fields.regulatory == initial.regulatory ? old.ratings?.regulatory :
+            (fields.regulatory.isEmpty ? nil : fields.regulatory)
+        let ratings = q == nil && rmr == nil && fields.gsi == nil && regulatory == nil ? nil :
+            MappingRatings(bartonQ: q, rmr89: rmr, gsi: fields.gsi, regulatory: regulatory)
         // Preserve exact historic offset (including historic zone rules) unless field date/zone changes.
         let unchangedTime = date == old.observedAt && fields.timeZoneID == old.observedTimeZoneID
         let origin = fields.chainageOriginAndDirection.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -134,7 +134,8 @@ struct MappingCorrectionDraft: Equatable, Sendable {
             coordinates: fields == initial ? old.coordinates : try correctedCoordinates(),
             measurementIDs: old.measurementIDs, notes: fields.notes,
             geology: geologyUnchanged ? old.geology : geology,
-            ratings: fields.bartonQ == initial.bartonQ && fields.rmr89 == initial.rmr89 && fields.gsi == initial.gsi ? old.ratings : ratings,
+            ratings: fields.bartonQ == initial.bartonQ && fields.rmr89 == initial.rmr89 && fields.gsi == initial.gsi &&
+                fields.regulatory == initial.regulatory ? old.ratings : ratings,
             picketConvention: old.picketConvention, rock: fields.rock)
     }
     private func correctedCoordinates() throws -> MappingCoordinates? {

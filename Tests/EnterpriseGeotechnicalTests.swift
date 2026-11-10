@@ -7,7 +7,7 @@ import XCTest
 
 @MainActor final class EnterpriseGeotechnicalTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
-    private func draft(rqd: String = "70", count: Int = 5) -> MappingDraft {
+    private func draft(rqd: String = "70", count: Int = 4) -> MappingDraft {
         var draft = MappingDraft(); draft.bartonQ.rqd = rqd
         for _ in 0..<count { draft.addJointSet() }
         for index in draft.jointSets.indices {
@@ -51,7 +51,7 @@ import XCTest
     }
     func testAllSystemsInitialiseThenOnlyAutomaticValuesFollowRQD() throws {
         var d = draft()
-        XCTAssertEqual(d.jointSets.map(\.identifier), JointSetIdentifier.allCases)
+        XCTAssertEqual(d.jointSets.map(\.identifier), [.J1, .J2, .J3, .J4])
         let estimate = try XCTUnwrap(PriestHudsonSpacing.estimate(rqd: 70))
         for set in d.jointSets {
             XCTAssertEqual(try set.record(now: now).spacingMeters, estimate)
@@ -163,10 +163,13 @@ import XCTest
         }
     }
     func testMeanUsesEffectiveValuesAndDoesNotAddMissingOrZero() throws {
-        var d = draft(count: 5)
-        for (i, raw) in ["0.20", "0.40", "0.09", "", "0"].enumerated() { d.jointSets[i].spacing = raw }
+        var d = draft()
+        for (i, raw) in ["0.20", "0.40", "0.09", ""].enumerated() { d.jointSets[i].spacing = raw }
         // Zero is only representable here as untouched legacy evidence, never new manual input.
-        d.jointSets[4].spacingProvenance = nil
+        var historical = JointSetDraft(identifier: .J5)
+        historical.representative = d.jointSets[0].representative
+        historical.spacing = "0"; historical.spacingProvenance = nil
+        d.jointSets.append(historical)
         let mean = JointSpacingMean(try d.jointSets.map { try $0.record(now: now) })
         XCTAssertEqual(try XCTUnwrap(mean.value), 0.23, accuracy: 1e-15); XCTAssertEqual(mean.count, 3)
         XCTAssertFalse(mean.includesEstimates)
@@ -309,7 +312,7 @@ import XCTest
         second.orientation = .init(dipDirectionText: "270", reference: .gridNorth)
         second.thickness = "0.875"
         w.draft.tectonicStructures = [first]
-        let original = try w.save(now: now)
+        let original = try w.seedHistoricalJointSetPoint(now: now)
 
         var correction = try w.correction(for: original.id)
         correction.reason = "Уточнение координат и тектоники"
@@ -337,7 +340,7 @@ import XCTest
         historicalJ5.representative = .init(dipAngleText: "55", dipDirectionText: "155")
         historicalJ5.spacing = "100"
         w.draft.jointSets = [historicalJ5]
-        let noFault = try w.save(now: now)
+        let noFault = try w.seedHistoricalJointSetPoint(now: now)
 
         let journal = w.journal
         let selection = MappingExportSelection(projectID: original.projectID, firstDay: now, lastDay: now, timeZoneID: "UTC")
@@ -502,7 +505,66 @@ import XCTest
         let point = try w.save(now: now)
         let report = try EnterpriseGeotechnicalWorkbook.prepare(points: [point], journal: w.journal).table
         if case .number(let mean) = report.rows[0][14] { XCTAssertNil(mean) } else { XCTFail("Missing SD") }
+        for key in ["A1", "A42", "A43", "A45"] {
+            let index = try XCTUnwrap(report.columns.firstIndex(of: key))
+            XCTAssertEqual(report.rows[0][index].csv, MappingCSVExport.Cell.empty.csv, key)
+        }
         let files = try MappingExportFiles.write(MappingCSVExport.prepare(journal: w.journal, selection: MappingExportSelection(projectID: point.projectID, firstDay: now, lastDay: now, timeZoneID: "UTC"), includeEnterprise: true), format: .enterpriseGeotechnical)
         XCTAssertEqual(files.urls.count, 1); files.cleanup()
+    }
+
+    func testRegulatoryCategorySelectionsProjectApprovedScoresWithStableIDs() throws {
+        var w = try configured(MappingTests.MemoryStore())
+        let strength: [RegulatoryStrengthBand] = [.below1, .from1To5, .from5To25, .from25To50, .from50To100, .from100To250, .above250]
+        let wall: [RegulatoryWallAlteration] = [.unweathered, .slightlyWeathered, .moderatelyWeathered, .highlyWeathered, .crushed]
+        let strengthScores = [0, 1, 2, 4, 7, 12, 15], wallScores = [6, 5, 3, 1, 0]
+        let persistenceScores = [6, 4, 2, 1, 0], apertureScores = [6, 5, 4, 1, 0]
+        for index in strength.indices {
+            w.draft.picket = "\(index)"
+            w.draft.regulatory = .init(strength: strength[index], wallAlteration: wall[index % 5])
+            w.draft.rmr89.basicSelections = ["persistence": "persistence-\(index % 5)", "aperture": "aperture-\(index % 5)"]
+            let point = try w.save(now: now)
+            let report = try EnterpriseGeotechnicalWorkbook.prepare(points: [point], journal: w.journal).table
+            for (key, expected) in [("A1", strengthScores[index]), ("A45", wallScores[index % 5]),
+                                    ("A42", persistenceScores[index % 5]), ("A43", apertureScores[index % 5])] {
+                let column = try XCTUnwrap(report.columns.firstIndex(of: key))
+                if case .integer(let score) = report.rows[0][column] { XCTAssertEqual(score, expected, key) }
+                else { XCTFail("\(key) must be numeric, including zero") }
+            }
+            XCTAssertEqual(point.ratings?.rmr89?.input.basicSelections, ["persistence": "persistence-\(index % 5)", "aperture": "aperture-\(index % 5)"])
+            XCTAssertNil(point.ratings?.rmr89?.input.basicSelections?["weathering"])
+            XCTAssertNil(point.ratings?.rmr89?.input.strengthTest)
+        }
+    }
+
+    func testIndependentRegulatoryCorrectionKeepsStoredRMR89GSIAndLaboratoryStrength() throws {
+        try directory { url in
+            let store = FileMappingStore(url: url.appendingPathComponent("mapping.json"))
+            var w = try configured(store)
+            w.draft.rmr89 = FinalFieldPolishTests.referenceInput() // Independent published 64-point example.
+            w.draft.gsi = gsi(final: 41.25)
+            let original = try w.save(now: now)
+            XCTAssertNil(original.ratings?.regulatory)
+            XCTAssertEqual(original.ratings?.rmr89?.calculation?.value, 64)
+            let before = try EnterpriseGeotechnicalWorkbook.prepare(points: [original], journal: w.journal).table.rows[0]
+            XCTAssertEqual(before[8].csv, MappingCSVExport.Cell.empty.csv, "Is(50) must not populate A1")
+
+            var edit = try w.correction(for: original.id)
+            edit.reason = "Record field categories"
+            edit.fields.regulatory = .init(strength: .below1, wallAlteration: .crushed)
+            let revised = try w.saveCorrection(edit, now: now.addingTimeInterval(1)).snapshot
+            let persisted = try MappingWorkflow(store: FileMappingStore(url: store.url)).journal
+            XCTAssertEqual(persisted.schemaVersion, 8)
+            XCTAssertEqual(persisted.observations.first, original)
+            XCTAssertEqual(persisted.effectiveObservation(id: original.id), revised)
+            XCTAssertEqual(revised.ratings?.regulatory, edit.fields.regulatory)
+            XCTAssertEqual(revised.ratings?.rmr89, original.ratings?.rmr89)
+            XCTAssertEqual(revised.ratings?.gsi, original.ratings?.gsi)
+            let after = try EnterpriseGeotechnicalWorkbook.prepare(points: [revised], journal: persisted).table.rows[0]
+            for column in [6, 8] {
+                if case .integer(0?) = after[column] {} else { XCTFail("Explicit zero must be numeric") }
+            }
+            if case .empty = after[9] {} else { XCTFail("Is(50) must not populate UCS") }
+        }
     }
 }

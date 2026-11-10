@@ -18,7 +18,7 @@ struct EnterpriseGeotechnicalWorkbook: Sendable {
     let spatialWarnings: [String]
     var requiresReview: Bool { !rqdConflicts.isEmpty || !spatialWarnings.isEmpty }
 
-    private static let joints: [JointSetIdentifier] = [.J1, .J2, .J3, .J4]
+    private static let joints = JointSetIdentifier.routine
     static let columns = [
         "ID", "PK", "X", "Y", "Z", "ROCK", "A45", "JW", "A1", "UCS", "RQD", "JN", "JR", "JA", "SD", "A43",
         "JCON76", "A42", "F_DIP", "F_AZI", "F_THI", "J_DIP_1", "J_AZI_1", "J_DIP_2", "J_AZI_2",
@@ -50,6 +50,7 @@ struct EnterpriseGeotechnicalWorkbook: Sendable {
             guard let excavation = excavations[point.excavationID] else { throw StorageError.invalidRecord }
             let q = point.ratings?.bartonQ?.input
             let rmr = point.ratings?.rmr89?.input
+            let regulatory = point.ratings?.regulatory ?? RegulatoryFieldCategories()
             let rqd = SpacingRQD(q: q ?? BartonQInput(), rmr: rmr ?? RMR89Input())
             let sets = (point.geology?.jointSets ?? []).filter { joints.contains($0.identifier) }
             let coordinates = point.coordinates
@@ -64,11 +65,11 @@ struct EnterpriseGeotechnicalWorkbook: Sendable {
                 .text(excavation), .text(point.displayPicket),
                 .number(coordinates?.x), .number(coordinates?.y), .number(coordinates?.z),
                 point.rock.map { .text($0.code) } ?? .empty,
-                .integer(categoryRating(.weathering, rmr)), number(q?.jw.value),
-                .integer(rmr?.fieldStrength?.rating), ucs, .number(rqd.value),
+                .integer(regulatory.wallAlterationRating(rmr: rmr)), number(q?.jw.value),
+                .integer(regulatory.strengthRating(rmr: rmr)), ucs, .number(rqd.value),
                 number(q?.jn.value), number(q?.jr.value), number(q?.ja.value), .number(JointSpacingMean(sets).value),
-                .integer(categoryRating(.aperture, rmr)), .integer(rmr?.jcond76?.rating),
-                .integer(categoryRating(.persistence, rmr))
+                .integer(RegulatoryFieldCategories.sharedChoice(.aperture, rmr: rmr)?.rating), .integer(rmr?.jcond76?.rating),
+                .integer(RegulatoryFieldCategories.sharedChoice(.persistence, rmr: rmr)?.rating)
             ]
             let jointOrientations: [Cell] = try joints.flatMap { identifier -> [Cell] in
                 guard let set = sets.first(where: { $0.identifier == identifier }) else { return [.empty, .empty] }
@@ -131,10 +132,4 @@ struct EnterpriseGeotechnicalWorkbook: Sendable {
         .number(raw.flatMap { try? RatingNumber.optional($0, name: "") })
     }
 
-    private static func categoryRating(_ parameter: RMR89Parameter, _ rmr: RMR89Input?) -> Int? {
-        // The enterprise A45 zero denotes crushed walls. RMR89's last category denotes decomposed walls.
-        guard let rmr, let id = rmr.basicSelections?[parameter.rawValue],
-              parameter != .weathering || id != "weathering-4" else { return nil }
-        return parameter.choices(test: rmr.strengthTest).first { $0.id == id }?.rating
-    }
 }

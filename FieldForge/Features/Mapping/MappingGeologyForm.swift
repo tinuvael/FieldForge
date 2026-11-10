@@ -49,14 +49,16 @@ struct MappingGeologyForm: View {
     @Binding var sets: [JointSetDraft]
     @Binding var structures: [TectonicStructureDraft]
     let measurements: [Measurement]
+    let historicalSets: [InterpretedJointSet]
     let addSet: () -> Void
     var spacingRQD = SpacingRQD(q: BartonQInput(), rmr: RMR89Input())
+    private var routineSets: [Binding<JointSetDraft>] { $sets.filter { $0.wrappedValue.identifier.isRoutine } }
     var body: some View {
         Section {
-            DisclosureGroup("Системы трещин: \(sets.count)/5") {
-                Text("J1–J5 — ваши интерпретации, отдельно от исходных замеров. Представительные значения задаются вручную; усреднения и пересчёта севера нет.")
+            DisclosureGroup("Системы трещин: \(routineSets.count)/\(JointSetIdentifier.routine.count)") {
+                Text("J1–J4 — интерпретации отдельно от исходных замеров. Представительная ориентация задаётся без усреднения и пересчёта севера.")
                     .font(.caption).foregroundStyle(.secondary)
-                ForEach($sets) { $set in
+                ForEach(routineSets, id: \.wrappedValue.id) { $set in
                     HStack {
                         NavigationLink { JointSetEditor(draft: $set, measurements: measurements, spacingRQD: spacingRQD) } label: {
                             VStack(alignment: .leading) {
@@ -70,9 +72,10 @@ struct MappingGeologyForm: View {
                     }
                 }
                 Button("Добавить интерпретацию", action: addSet)
-                    .disabled(sets.count >= 5).accessibilityIdentifier("addJointSet")
+                    .disabled(routineSets.count >= JointSetIdentifier.routine.count).accessibilityIdentifier("addJointSet")
             }
         }
+        MappingHistoricalJointSets(sets: historicalSets, measurements: measurements)
         MappingTectonicsForm(structures: $structures)
     }
 }

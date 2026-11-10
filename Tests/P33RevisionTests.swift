@@ -10,7 +10,7 @@ private typealias RevisionReading = FieldForge.Measurement
 @MainActor final class P33RevisionTests: XCTestCase {
     let fieldTime = Date(timeIntervalSince1970: 1_700_000_000.123456)
     let correctionTime = Date(timeIntervalSince1970: 1_800_000_000.987654)
-    func seed() throws -> (MappingTests.MemoryStore, MappingWorkflow, MappingObservation) {
+    func seed(includeHistoricalJ5: Bool = false) throws -> (MappingTests.MemoryStore, MappingWorkflow, MappingObservation) {
         let (store, initial) = try P2MappingTests().configured(); var w = initial
         let manual = try ManualOrientationInput(dipAngleText: "45,125", dipDirectionText: "360", reference: .gridNorth)
             .observation(notes: "Compass log", timestamp: fieldTime)
@@ -20,7 +20,7 @@ private typealias RevisionReading = FieldForge.Measurement
         try w.draft.addMeasurement(manual); try w.draft.addMeasurement(sensor)
         w.draft.picketConvention = .legacyMeters; w.draft.picket = "ПК 0+005"; w.draft.observedAtOverride = fieldTime; w.draft.timeZoneID = "Asia/Almaty"
         w.draft.startPicket = "5"; w.draft.endPicket = "10"; w.draft.observationPosition = .roof
-        for id in [JointSetIdentifier.J1, .J2] {
+        for id in includeHistoricalJ5 ? [JointSetIdentifier.J1, .J2, .J5] : [.J1, .J2] {
             var set = JointSetDraft(identifier: id)
             set.representative = ManualOrientationInput(dipAngleText: "41.123456789", dipDirectionText: "120", reference: .magneticNorth)
             set.measurementIDs = [manual.id, sensor.id]; set.notes = "Field interpretation"; w.draft.jointSets.append(set)
@@ -31,7 +31,8 @@ private typealias RevisionReading = FieldForge.Measurement
         q.assessmentSource = "Field log"; q.jn.select("F", parameter: .jn); q.jr.select("B", parameter: .jr)
         q.ja.select("C", parameter: .ja); q.jw.select("A", parameter: .jw); q.srf.select("G", parameter: .srf)
         w.draft.bartonQ = q; w.draft.rmr89.source = "Input only"
-        let point = try w.save(now: fieldTime.addingTimeInterval(10))
+        let now = fieldTime.addingTimeInterval(10)
+        let point = try includeHistoricalJ5 ? w.seedHistoricalJointSetPoint(now: now) : w.save(now: now)
         return (store, w, point)
     }
     func withDirectory(_ body: (URL) throws -> Void) throws {

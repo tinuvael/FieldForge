@@ -32,12 +32,12 @@ struct WedgeMappingSource: Equatable, Identifiable {
         guard c.projectID != nil, c.horizonID != nil, c.excavationID != nil else { return [] }
         let draft = Self(context: c, pointID: workflow.draft.id, revisionID: nil, version: nil,
                          title: "Текущий черновик · не сохранён",
-                         joints: workflow.draft.jointSets.map { WedgeJoint(origin: .draft($0)) })
+                         joints: workflow.draft.jointSets.filter { $0.identifier.isRoutine }.map { WedgeJoint(origin: .draft($0)) })
         return [draft] + workflow.committed.observations(context: c).map { observation in
             let revision = workflow.committed.latestRevisions[observation.id]
             return Self(context: c, pointID: observation.id, revisionID: revision?.id, version: revision?.version ?? 1,
                         title: "\(observation.displayPicket) · версия \(revision?.version ?? 1) · \(observation.id.uuidString.prefix(8))",
-                        joints: (observation.geology?.jointSets ?? []).map { WedgeJoint(origin: .saved($0)) })
+                        joints: (observation.geology?.jointSets ?? []).filter { $0.identifier.isRoutine }.map { WedgeJoint(origin: .saved($0)) })
         }
     }
     func selectedJoints(_ selection: Set<UUID>, axisNorth: GeographicReference) throws -> [WedgeJoint] {

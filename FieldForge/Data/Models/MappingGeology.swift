@@ -1,7 +1,11 @@
 import Foundation
 
 /// User-entered geological descriptions, not classification scores or calculated joint sets.
-enum JointSetIdentifier: String, Codable, CaseIterable, Sendable { case J1, J2, J3, J4, J5 }
+enum JointSetIdentifier: String, Codable, CaseIterable, Sendable {
+    case J1, J2, J3, J4, J5
+    static let routine: [Self] = [.J1, .J2, .J3, .J4]
+    var isRoutine: Bool { Self.routine.contains(self) }
+}
 enum ObservationPosition: String, Codable, CaseIterable, Sendable { case roof, leftWall, rightWall, face, other }
 enum TectonicStructureType: String, Codable, CaseIterable, Sendable { case fault, shearZone, fractureZone, other }
 
@@ -150,8 +154,11 @@ struct TectonicStructureDraft: Equatable, Identifiable, Sendable {
 }
 
 extension MappingDraft {
+    var nextJointSetIdentifier: JointSetIdentifier? {
+        JointSetIdentifier.routine.first { candidate in !jointSets.contains { $0.identifier == candidate } }
+    }
     mutating func addJointSet() {
-        guard let identifier = JointSetIdentifier.allCases.first(where: { candidate in !jointSets.contains { $0.identifier == candidate } }) else { return }
+        guard let identifier = nextJointSetIdentifier else { return }
         jointSets.append(newJointSet(identifier: identifier))
         jointSets.sort { $0.identifier.rawValue < $1.identifier.rawValue }
     }
@@ -161,9 +168,11 @@ extension MappingDraft {
     }
     mutating func updateSpacingEstimates() {
         let rqd = spacingRQD
-        for index in jointSets.indices { jointSets[index].updateSpacingEstimate(rqd) }
+        for index in jointSets.indices where jointSets[index].identifier.isRoutine {
+            jointSets[index].updateSpacingEstimate(rqd)
+        }
     }
-    func geology(now: Date) throws -> MappingGeology? {
+    func geology(now: Date, previousJointSets: [InterpretedJointSet]? = nil) throws -> MappingGeology? {
         let start = try GeologyInput.optionalPicket(startPicket, field: "Начало интервала", convention: startPicketConvention)
         let end = try GeologyInput.optionalPicket(endPicket, field: "Конец интервала", convention: endPicketConvention)
         guard start != nil || end != nil || observationPosition != nil || !jointSets.isEmpty || !tectonicStructures.isEmpty else { return nil }
@@ -171,8 +180,14 @@ extension MappingDraft {
             do { return try draft.record() }
             catch { throw MappingError.invalid("Тектоника №\(index + 1): \(error.localizedDescription)") }
         }
+        let records = try jointSets.map { draft in
+            if let previousJointSets {
+                return try draft.corrected(previous: previousJointSets.first { $0.id == draft.id }, now: now)
+            }
+            return try draft.record(now: now)
+        }
         let value = MappingGeology(start: start, end: end, position: observationPosition,
-            jointSets: try jointSets.map { try $0.record(now: now) }, tectonicStructures: structures)
+            jointSets: records, tectonicStructures: structures)
         try value.validate(pointMeasurementIDs: measurements.map(\.id))
         return value
     }

@@ -126,14 +126,14 @@ import XCTest
     }
     func testRepresentativeWorkbookFixtureWhenRequested() throws {
         guard let path = ProcessInfo.processInfo.environment["FF_FINAL_EXPORT_FIXTURE_DIR"] else { throw XCTSkip("Opt-in independent workbook fixture") }
-        let (_, initial, original) = try P33RevisionTests().seed(); var workflow = initial
+        let (_, initial, original) = try P33RevisionTests().seed(includeHistoricalJ5: true); var workflow = initial
         try workflow.updateProject(id: original.projectID, name: "Рудник Северный")
         try workflow.updateExcavation(id: original.excavationID, name: "Штрек Восточный № 3", horizonIDs: [original.horizonID])
         var correction = try workflow.correction(for: original.id)
         correction.fields.x = "123456.12345678912"; correction.fields.y = "-0.123456789123456"
         correction.fields.rmr89 = Self.referenceInput(); correction.reason = "Полевой журнал"
         correction.fields.notes = "Кварцевая жила; угол 45°; μ/µ; раскрытие ≤1 мм.\n=1+1 — буквальная заметка"
-        for id in [JointSetIdentifier.J3, .J4, .J5] {
+        for id in [JointSetIdentifier.J3, .J4] {
             var joint = JointSetDraft(identifier: id)
             joint.representative = ManualOrientationInput(dipAngleText: "45.12345678912345", dipDirectionText: "285.125", reference: .magneticNorth)
             joint.roughness = "Шероховатая"; joint.infill = "Кальцит ≤1 мм"

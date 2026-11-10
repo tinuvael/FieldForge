@@ -59,15 +59,17 @@ struct MappingCorrectionEditor: View {
                     }
                 }
                 Section("Исходные замеры · только просмотр") {
-                    Text("Добавление, удаление, правка и перенос исходных замеров при исправлении недоступны. Ссылки J1–J5 могут указывать только на исходные замеры этой точки.").font(.caption)
+                    Text("Исходные замеры и их принадлежность точке сохраняются. Ссылки J1–J4 могут указывать только на замеры этой точки.").font(.caption)
                     ForEach(draft.initial.measurements) { reading in
                         NavigationLink { MeasurementDetailView(record: reading) } label: { MeasurementSummary(reading: reading) }
                     }
                 }
                 RockLithologyField(rock: $draft.fields.rock, projectID: draft.baseline.projectID)
                 MappingGeologyForm(sets: $draft.fields.jointSets, structures: $draft.fields.tectonicStructures,
-                    measurements: draft.initial.measurements, addSet: { draft.fields.addJointSet() }, spacingRQD: draft.fields.spacingRQD)
-                MappingRatingsForm(q: $draft.fields.bartonQ, rmr: $draft.fields.rmr89, gsi: $draft.fields.gsi, focus: $focused)
+                    measurements: draft.initial.measurements, historicalSets: (draft.baseline.geology?.jointSets ?? []).filter { !$0.identifier.isRoutine },
+                    addSet: { draft.fields.addJointSet() }, spacingRQD: draft.fields.spacingRQD)
+                MappingRatingsForm(q: $draft.fields.bartonQ, rmr: $draft.fields.rmr89, gsi: $draft.fields.gsi,
+                                   regulatory: $draft.fields.regulatory, focus: $focused)
                 Section("Примечания") {
                     TextField("Примечания", text: $draft.fields.notes, axis: .vertical).focused($focused).accessibilityIdentifier("correctionNotes")
                 }

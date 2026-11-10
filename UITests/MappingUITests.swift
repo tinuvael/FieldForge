@@ -99,7 +99,7 @@ final class MappingUITests: XCTestCase {
         let field = app.buttons["rmrFieldStrength"]; show(field, app: app); field.tap()
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "R4 ·")).firstMatch.tap()
         for (key, option) in [("rqd", "50–75 · 13 балл."), ("spacing", "0,2–0,6 · 10 балл."),
-            ("persistence", "1–3 · 4 балл."), ("aperture", "0,1–1 · 4 балл."),
+            ("persistence", "1–3 м · 4 балл."), ("aperture", "0,1–1 мм · 4 балл."),
             ("roughness", "Слегка шероховатая · 3 балл."), ("infill", "Нет · 6 балл."),
             ("weathering", "Слабо выветрелые · 5 балл."), ("groundwater", "Мокро · 7 балл.")] {
             let picker = app.buttons["rmrCategory-" + key]; show(picker, app: app); picker.tap(); app.buttons[option].tap()
@@ -108,6 +108,13 @@ final class MappingUITests: XCTestCase {
         XCTAssertEqual(result.label, "RMR89 (базовый): 59")
         let jcond = app.buttons["rmrJCond76"]; show(jcond, app: app); jcond.tap()
         app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Очень шероховатые, прерывистые")).firstMatch.tap()
+        show(result, app: app, upward: false); XCTAssertEqual(result.label, "RMR89 (базовый): 59")
+        let regulatory = disclosure("Регламент · прочность и стенки", app: app)
+        show(regulatory, app: app); regulatory.tap()
+        let a1 = app.buttons["regulatoryStrength"]; show(a1, app: app); a1.tap()
+        app.buttons["<1 МПа · 0 балл."].tap()
+        let a45 = app.buttons["regulatoryWallAlteration"]; show(a45, app: app); a45.tap()
+        app.buttons["Раздробленные · 0 балл."].tap()
         show(result, app: app, upward: false); XCTAssertEqual(result.label, "RMR89 (базовый): 59")
     }
 
@@ -119,8 +126,8 @@ final class MappingUITests: XCTestCase {
         let basis = app.buttons["rmrStrengthBasis"]; show(basis, app: app); basis.tap()
         app.buttons["Is(50) — точечное нагружение"].tap()
         for (key, option) in [("strength", "4–10 · 12 балл."), ("rqd", "50–75 · 13 балл."),
-            ("spacing", "0,2–0,6 · 10 балл."), ("persistence", "1–3 · 4 балл."),
-            ("aperture", "0,1–1 · 4 балл."), ("roughness", "Слегка шероховатая · 3 балл."),
+            ("spacing", "0,2–0,6 · 10 балл."), ("persistence", "1–3 м · 4 балл."),
+            ("aperture", "0,1–1 мм · 4 балл."), ("roughness", "Слегка шероховатая · 3 балл."),
             ("infill", "Нет · 6 балл."), ("weathering", "Слабо выветрелые · 5 балл."), ("groundwater", "Мокро · 7 балл.")] {
             let picker = app.buttons["rmrCategory-" + key]; show(picker, app: app); picker.tap()
             app.buttons[option].tap()
@@ -204,7 +211,7 @@ final class MappingUITests: XCTestCase {
         select("horizonPicker", value: "+393 м", app: app)
         create("excavationPicker", name: "Штрек", app: app); select("excavationPicker", value: "Штрек", app: app)
         fill(app.textFields["mappingPicket"], "12,18", app: app)
-        for index in 1...5 {
+        for index in 1...4 {
             show(app.buttons["addJointSet"], app: app); app.buttons["addJointSet"].tap()
             XCTAssertTrue(app.navigationBars["Система J\(index)"].waitForExistence(timeout: 5), app.debugDescription)
             if index == 1 {
@@ -221,6 +228,9 @@ final class MappingUITests: XCTestCase {
             XCTAssertTrue(app.buttons["editJointSet-J\(index)"].waitForExistence(timeout: 5))
             XCTAssertFalse(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "Черновик точки изменился")).firstMatch.exists)
         }
+        let addSet = app.buttons["addJointSet"]; show(addSet, app: app)
+        XCTAssertFalse(addSet.isEnabled)
+        XCTAssertFalse(app.buttons["editJointSet-J5"].exists)
         save(app); saved(app); top(app)
         app.buttons["mappingJournal"].tap()
         XCTAssertTrue(app.staticTexts["ПК 12+1,8"].firstMatch.waitForExistence(timeout: 5))
@@ -438,7 +448,7 @@ final class MappingUITests: XCTestCase {
             app.buttons["addMappingMeasurement"].tap()
         }
         top(app); show(disclosure("Системы трещин", app: app), app: app); disclosure("Системы трещин", app: app).tap()
-        for index in 1...5 {
+        for index in 1...4 {
             show(app.buttons["addJointSet"], app: app); app.buttons["addJointSet"].tap()
             let edit = app.buttons["editJointSet-J\(index)"]; show(edit, app: app); edit.tap()
             XCTAssertTrue(app.textFields["geologyDip"].waitForExistence(timeout: 5))
@@ -502,7 +512,7 @@ final class MappingUITests: XCTestCase {
             }
             back(app)
         }
-        // The distance utility must also preserve J1–J5, tectonics and original readings.
+        // The distance utility must also preserve J1–J4, tectonics and original readings.
         reveal("mappingDistance", app: app); app.buttons["mappingDistance"].tap()
         XCTAssertTrue(app.buttons["distanceDone"].waitForExistence(timeout: 10))
         app.buttons["distanceDone"].tap()
@@ -514,7 +524,7 @@ final class MappingUITests: XCTestCase {
         XCTAssertTrue(app.buttons["projectPicker"].label.contains(project))
         XCTAssertEqual(app.textFields["mappingPicket"].value as? String, "Пикет: ПК 0+005 или метры")
         XCTAssertEqual(app.textFields["mappingZ"].value as? String, "393")
-        top(app); show(disclosure("Системы трещин", app: app), app: app); XCTAssertTrue(disclosure("Системы трещин", app: app).label.contains("0/5"))
+        top(app); show(disclosure("Системы трещин", app: app), app: app); XCTAssertTrue(disclosure("Системы трещин", app: app).label.contains("0/4"))
         top(app); show(disclosure("Тектоника:", app: app), app: app); XCTAssertTrue(disclosure("Тектоника:", app: app).label.contains("0"))
         top(app); fill(app.textFields["mappingPicket"], "ПК 0+010", app: app); save(app); saved(app)
         app.terminate(); app.launch()
@@ -528,7 +538,7 @@ final class MappingUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["ПК 0+005"].waitForExistence(timeout: 5)); XCTAssertTrue(app.staticTexts["ПК 0+010"].exists)
         app.staticTexts["ПК 0+005"].tap()
         show(journalValue("Положение", "Кровля", app: app), app: app)
-        for index in 1...5 { show(disclosure("J\(index) · интерпретация", app: app), app: app) }
+        for index in 1...4 { show(disclosure("J\(index) · интерпретация", app: app), app: app) }
         show(disclosure("J1 · интерпретация", app: app), app: app, upward: false); disclosure("J1 · интерпретация", app: app).tap()
         show(journalValue("Раскрытие, мм", "0.12500000", app: app), app: app)
         let links = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "jointSource-J1-"))
