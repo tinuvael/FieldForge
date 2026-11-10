@@ -27,7 +27,7 @@ The original Barton Q input RQD is preferred, without Q's numerical minimum repl
 
 RQD/source changes update only automatic values in the active `MappingDraft`, including correction drafts. Acceptance of a staged system refreshes automatic provenance from the owning draft. Legacy/manual values do not change. Rehydration restores saved sets **after** loading Q/RMR inputs, preserving exact historic snapshots. Saving a correction increments only changed local joint revisions through the existing correction path; saved historical revisions are never edited or refreshed on read/export.
 
-`JointSpacingMean` includes positive finite effective spacing from saved accepted J1–J5 only. It uses an ordinary arithmetic mean with no orientation, persistence, RQD or system-count weighting. Missing/zero values are excluded; no valid values yields a missing mean and count 0. Export identifies **«SD среднее, м»**, count and whether the mean contains RQD estimates. 0.20, 0.40 and 0.09 produce 0.23; if the third value is the unrounded 70%-RQD estimate, the precise mean is approximately 0.230376231201701.
+`JointSpacingMean` includes positive finite effective spacing from saved accepted J1–J5 only. It uses an ordinary arithmetic mean with no orientation, persistence, RQD or system-count weighting. Missing/zero values are excluded; no valid values yields a missing mean and count 0. The regulatory report passes only J1–J4 to this shared mean and exports the value as SD. 0.20, 0.40 and 0.09 produce 0.23; if the third value is the unrounded 70%-RQD estimate, the precise mean is approximately 0.230376231201701.
 
 ## ROCK and RMR89
 
@@ -56,15 +56,47 @@ Verified source N/A combinations and dominant-oriented-weakness limitations rema
 The source only provides actual contours from 5 through 95; outer corners are not
 numerically extrapolated. No direct stability or support recommendation is produced.
 
-## Separate enterprise workbook
+## Regulatory Data workbook
 
-«Геотехническое картирование — регламент» opts into an additional value-owned export snapshot through the same selection/date filters and native Share Sheet. Ordinary XLSX/CSV/photo exports use their original preparation contract (the field workbook strength-method cell also recognises R0–R6); enterprise history is prepared only when requested. The existing OOXML/ZIP writer emits one `.xlsx`, exactly three **visible** sheets, no hidden technical sheet, formula, macro, image original or external relationship:
+«Геотехническое картирование — регламент» uses the same date, project, horizon and
+excavation selection as the detailed export. It shares `FieldForge-Geotechnical.xlsx`
+through iOS. The workbook has one visible sheet named `Data`, exactly A:AD, with
+the four header rows and [field mapping from the Stage 1 audit](regulatory-excel-audit.md#exact-aad-mapping).
+The title merge stops at AD and «Рейтинг массива» occupies AD2. The layout uses
+the reference widths, row heights and rotated descriptions. AD2 uses shrink-to-fit
+within the original column width. The filter starts at row 4 and the four header
+rows stay frozen.
 
-1. **Геотех картирование** — one effective saved observation per row, even if incomplete. Context/date, declared coordinates/units/CRS/axes, frozen ROCK, original RQD/source/discrepancy, original and effective Q coefficients, stored Q/basic RMR/class, field grade/A1, independent JCond76, GSI interval/refinement, per-system SD/orientation/north, SD mean/count/estimate flag, verified A42/A43/A45, all tectonic structures (numbered numeric column groups), descriptions and exact observation/revision IDs and method versions.
-2. **Справочники** — relevant category definitions, code/rating versions, GSI category and N/A rules, explicit numeric-verification limit, configured project ROCK dictionary (also for an empty selection), SD origin/method/assumptions, enterprise parameter mappings and source attributions. No proprietary source file/chart is bundled.
-3. **Исходные данные** — scalar audit records for original selected observations, every existing correction snapshot/reason/predecessor, original measurements and diagnostics, photo records and metadata revisions/attachment hashes. Record UUID + field path is stable within the saved record. Observation/revision UUID/version and field context accompany each scalar. Paths preserve the encoded model keys and array indices, including child IDs, original input strings, north and numerical method metadata. Explicit SD `source` rows mark absent legacy provenance as `unknownLegacy`. A missing optional property stays absent, never a zero. Dates inside records retain reference-epoch seconds; every numeric scalar has full-precision text separately from its Excel cell. Long source strings split into numbered lossless chunks. No EXIF coordinates are read or inferred. Attachment availability is not checked.
+Each tectonic structure in the effective observation revision has its own report
+row. The other cells repeat, and S:U use that record's dip and dip direction in
+degrees and thickness in metres. Each missing fault component stays blank. An
+observation with no tectonic structures has one row with blank S:U. Report rows
+share the same stored observation identity.
 
-First-sheet engineering values remain numeric; exact raw numbers are also preserved on the source sheet beyond Excel's 15-significant-digit limit. Date cells use the explicitly selected export time zone; original time zone/offset/instant remain in raw records. This report is an analysis/audit artifact, **not a complete backup**: original photos, DXF bytes and restore operations are outside it.
+- A uses the excavation name, B the display picket and F the exact stored ROCK code as text.
+- C:E use the saved coordinates. XY retain their source units, Z is in metres and
+  azimuths retain their stored north reference. The workbook has no cells for
+  CRS, units, axes or north metadata. Use the journal or Exchange to verify those
+  references before combining rows.
+- G/I/P/R use explicitly supported categories. A1 is field-grade-only. A45 stays
+  blank for the decomposed-wall category, and a separate crushed-wall score is
+  unavailable. J uses only stored UCS in MPa. JCond76 stays independent of RMR89
+  and Barton Q inputs.
+- H/L/M/N use original Q coefficients. K uses original RQD as a percentage from
+  the shared conflict-aware source selector. When both RQD sources disagree, K
+  is blank. O uses the arithmetic mean in metres of finite positive saved J1–J4
+  spacings. With no eligible spacing, O is blank. No spacing estimates are
+  recalculated on export.
+- V:AC use the saved representative orientations for J1–J4. AD uses only the
+  saved final GSI. The report has no derived classification totals or formulas.
+
+Engineering values are numeric cells, written without decimal rounding. Display
+formats show three decimals for C:E, two for O and an integer for AD. Excel
+supports up to 15 significant digits for numbers. The workbook has no separate
+exact-text columns or source sheets. Exact stored values, J5 and historical
+revisions remain in the journal and are available through FieldForge Exchange
+within its documented scope. Complete backup also includes the original
+attachment bytes and independent measurement journal.
 
 ## Persistence
 
@@ -72,14 +104,16 @@ Mapping stays on experimental **schema 8**. Additions are optional Codable field
 
 ## Reproducible validation
 
-```
-swift test
-FF_ENTERPRISE_FIXTURE_DIR=/tmp/enterprise swift test --filter EnterpriseGeotechnicalTests
+```sh
+FF_ENTERPRISE_FIXTURE_DIR=/tmp/enterprise swift test --filter EnterpriseGeotechnicalTests/testRegulatoryEffectiveRowsAndLegacyReports
 python3 scripts/validate_enterprise_xlsx.py /tmp/enterprise
-python3 scripts/generate_project.py
 ```
 
-The Python check requires development-only openpyxl and independently opens ZIP/OOXML/Excel, verifies exactly three visible worksheets, one observation row, numeric mean/count, dates, Cyrillic, blank fields, provenance and full precision text. Fixtures are synthetic and temporary. `EnterpriseGeotechnicalTests` runs through both SPM and Xcode. See the PR for final build/UI results and baseline failures. No physical iPhone validation is claimed.
+The Python check uses development-only openpyxl to validate a synthetic workbook
+generated by the app's export path. It checks the complete headers and merges,
+formatting, typed values, and the report rows for observations with zero, one and
+multiple tectonic records. No original workbook or field records are used as
+test fixtures. Native Excel rendering and printing require separate verification.
 
 ### Historical verification recorded 2026-10-21
 

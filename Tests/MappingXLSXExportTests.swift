@@ -16,8 +16,8 @@ import FoundationXML
     }
     /// Independent central-directory reader (not the production ZIP implementation).
     /// Python zipfile independently checks CRCs and descriptors in the external validation.
-    private func parts(_ export: MappingCSVExport) throws -> [String: Data] {
-        let files = try MappingExportFiles.write(export, format: .xlsx); defer { files.cleanup() }
+    private func parts(_ export: MappingCSVExport, format: MappingExportFormat = .xlsx) throws -> [String: Data] {
+        let files = try MappingExportFiles.write(export, format: format); defer { files.cleanup() }
         return try unzip(Data(contentsOf: XCTUnwrap(files.urls.first)))
     }
     private func unzip(_ data: Data) throws -> [String: Data] {
@@ -87,6 +87,27 @@ import FoundationXML
         let styles = String(decoding: try XCTUnwrap(package["xl/styles.xml"]), as: UTF8.self)
         XCTAssertTrue(styles.contains("FF243746")); XCTAssertTrue(styles.contains("FFF0F5F7"))
         XCTAssertFalse(package.keys.contains { $0.contains("externalLink") || $0.contains("vba") })
+    }
+    func testRegulatoryEmptySelectionRetainsOnlyTheFourHeaderRows() async throws {
+        let (_, w, point) = try P33RevisionTests().seed()
+        let export = try MappingCSVExport.prepare(journal: w.journal, selection: csv.selection(point, "2000-01-01T00:00:00Z"), includeEnterprise: true)
+        let package = try parts(export, format: .enterpriseGeotechnical)
+        let book = try xml(XCTUnwrap(package["xl/workbook.xml"]))
+        XCTAssertEqual(book.sheetNames, ["Data"])
+        XCTAssertEqual(package.keys.filter { $0.hasPrefix("xl/worksheets/") }, ["xl/worksheets/sheet1.xml"])
+        let sheet = try xml(XCTUnwrap(package["xl/worksheets/sheet1.xml"]))
+        XCTAssertEqual(sheet.rowCount, 4)
+        XCTAssertEqual(sheet.formulas, 0)
+        XCTAssertEqual(sheet.filter, "A4:AD4")
+        XCTAssertEqual(sheet.pane?["ySplit"], "4")
+        XCTAssertEqual(sheet.mergeRanges, ["A1:AD1", "A2:E2", "F2:H2", "I2:J2", "K2:L2", "M2:R2", "S2:U2", "V2:AC2", "C3:E3"])
+        XCTAssertEqual(sheet.cells["A1"]?.value, "КАРТИРОВАНИЕ ВЫРАБОТОК")
+        XCTAssertEqual(sheet.cells["S2"]?.value, "")
+        XCTAssertEqual(sheet.cells["AD2"]?.value, "Рейтинг массива")
+        XCTAssertEqual(sheet.cells["S3"]?.value, "Угол падения разлома, ° ")
+        let keys = (1...30).compactMap { sheet.cells[MappingXLSXExport.column($0) + "4"]?.value }
+        XCTAssertEqual(keys.joined(separator: " "), "ID PK X Y Z ROCK A45 JW A1 UCS RQD JN JR JA SD A43 JCON76 A42 F_DIP F_AZI F_THI J_DIP_1 J_AZI_1 J_DIP_2 J_AZI_2 J_DIP_3 J_AZI_3 J_DIP_4 J_AZI_4 GSI")
+        XCTAssertNil(sheet.cells["AE4"])
     }
     func testTwoProjectsDatePeriodsScopesAndEmptySheetsUseSharedSelection() async throws {
         let (_, initial, p) = try P33RevisionTests().seed(); var w = initial
@@ -256,7 +277,9 @@ import FoundationXML
 
 private final class SheetReader: NSObject, XMLParserDelegate {
     struct Cell { let type: String?; var value: String }
-    var cells: [String: Cell] = [:], sheetNames: [String] = [], rowCount = 0, formulas = 0, merges = 0
+    var cells: [String: Cell] = [:], sheetNames: [String] = [], rowCount = 0, formulas = 0
+    var mergeRanges: [String] = []
+    var merges: Int { mergeRanges.count }
     var pane: [String: String]?, filter: String?, current: String?, capture = false
     func parser(_ parser: XMLParser, didStartElement name: String, namespaceURI: String?, qualifiedName: String?, attributes: [String: String]) {
         switch name {
@@ -265,7 +288,7 @@ private final class SheetReader: NSObject, XMLParserDelegate {
         case "sheet": sheetNames.append(attributes["name"] ?? "")
         case "row": rowCount += 1
         case "f": formulas += 1
-        case "mergeCell": merges += 1
+        case "mergeCell": mergeRanges.append(attributes["ref"] ?? "")
         case "pane": pane = attributes
         case "autoFilter": filter = attributes["ref"]
         default: break

@@ -57,7 +57,7 @@ struct MappingCSVExport: Sendable {
     let tables: [Table]
     let manifest: Data
     var fieldTables: [Table] = []
-    var enterpriseTables: [Table] = []
+    var enterpriseTable: Table?
     var pointCount: Int { tables.first { $0.name == "points" }?.rows.count ?? 0 }
 
     static func prepare(journal: MappingJournal, selection: MappingExportSelection, now: Date = Date(), id: UUID = UUID(), includeEnterprise: Bool = false) throws -> Self {
@@ -181,7 +181,7 @@ struct MappingCSVExport: Sendable {
             "limitations": ["Analysis export, not a complete backup; no image originals, thumbnails, DXF bytes or full audit history.", "Original file availability/integrity not checked; missing originals do not exclude metadata.", "unknownBeforeFirstSave means capture location UNKNOWN; referenced point context is linkage context only, never capture coordinates.", "No north/CRS conversions; XY declared units, Z and chainage meters, orientation degrees. No rating recalculation; versioned RMR basic snapshots when available, legacy input-only preserved.", "ISO UTC timestamps have millisecond display precision; companion *_reference_seconds values are exact stored Date seconds since 2001-01-01T00:00:00Z. JSON dates use the same epoch. Nested JSON cells retain detailed stored input/diagnostics; no EXIF GPS is read or exported. Private text/filenames may be present."]]
         var snapshot = Self(id: id, snapshotAt: now, selection: selection, tables: tables, manifest: try JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]))
         snapshot.fieldTables = try MappingFieldWorkbook.tables(points: points, photos: photos, journal: journal)
-        if includeEnterprise { snapshot.enterpriseTables = try EnterpriseGeotechnicalWorkbook.tables(points: points, journal: journal, projectID: selection.projectID) }
+        if includeEnterprise { snapshot.enterpriseTable = try EnterpriseGeotechnicalWorkbook.table(points: points, journal: journal) }
         return snapshot
     }
 

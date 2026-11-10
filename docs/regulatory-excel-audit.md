@@ -2,8 +2,9 @@
 
 Status: Stage 1 specification, 2026-11-07. Audited application revision:
 `a559ee9d575b4da63b67ac66b3713845450bed61` (merged B2b, PR #72).
-This document does not implement export changes, RMR76, J5 restrictions or import writes.
-Owner decisions listed below gate the corresponding implementation PRs.
+The current [Stage 2 export contract](enterprise-geotechnical.md#regulatory-data-workbook)
+documents the implemented regulatory workbook and its limits. The code inventory,
+method comparison and later-stage gates below record the Stage 1 audit.
 
 The owner's current instruction supersedes the old custom regulatory layout in
 [#74](https://github.com/tinuvael/FieldForge/issues/74): the primary sheet is
@@ -87,7 +88,6 @@ clarification fixes exactly one sheet, Data A:AD. Each tectonic record gets its 
 report row with the observation's other properties/coordinates repeated; there is
 one row with blank S:U when no tectonic record exists. Do not create database points
 or select/drop one tectonic record to implement this report-only row expansion.
-These answers update the specification only; this PR implements none of them.
 
 Property shorthand: `p` = latest effective `MappingObservation`; `r` =
 `p.ratings?.rmr89?.input`; `q` = `p.ratings?.bartonQ?.input`; `jN` = interpreted
