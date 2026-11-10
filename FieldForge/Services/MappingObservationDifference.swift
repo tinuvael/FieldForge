@@ -54,6 +54,8 @@ enum MappingObservationDifference {
         if newFaults.contains(where: { new in !oldFaults.contains { $0.id == new.id } }) { result.append("Добавлены тектонические структуры") }
         changed("Barton Q · исходные данные и оценка NGI 2025", before.ratings?.bartonQ, after.ratings?.bartonQ)
         changed("RMR89 · исходные данные и базовая оценка", before.ratings?.rmr89, after.ratings?.rmr89)
+        changed("A1 · Полевая прочность для регламента", before.ratings?.regulatory?.strength, after.ratings?.regulatory?.strength)
+        changed("A45 · Изменение стенок для регламента", before.ratings?.regulatory?.wallAlteration, after.ratings?.regulatory?.wallAlteration)
         changed("GSI · геологическая оценка", before.ratings?.gsi, after.ratings?.gsi)
         changed("ROCK · код и название", before.rock, after.rock)
         changed("Примечания", before.notes, after.notes)

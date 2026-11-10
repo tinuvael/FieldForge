@@ -8,7 +8,7 @@
 
 This is the authoritative source for intended product requirements and scope. Technical documents describe how to realize this vision; the [README](../README.md) and [verification report](phase2-verification.md) describe implemented and verified behavior. Future requirements below are not claims of available features or engineering validation.
 
-**Owner specification update (2026-11-07).** The [regulatory XLSX](enterprise-geotechnical.md#regulatory-data-workbook) implements the supplied workbook's `Data!A:AD` layout. Routine mapping targets J1–J4, with historical J5 evidence preserved. RMR76 and RMR89 remain independent methods. Routine mapping restrictions, RMR76 scoring and confirmed Excel import are future stages. See the [Stage 1 audit, exact column mapping and implementation gates](regulatory-excel-audit.md).
+**Owner specification update (2026-11-07).** The [regulatory XLSX](enterprise-geotechnical.md#regulatory-data-workbook) implements the supplied workbook's `Data!A:AD` layout. Routine mapping targets J1–J4, with historical J5 evidence preserved. RMR76 and RMR89 remain independent methods. Stage 3a limits routine capture and correction to J1–J4 and provides explicit regulatory field categories. RMR76 scoring and confirmed Excel import remain future stages. See the [Stage 1 audit, exact column mapping and implementation gates](regulatory-excel-audit.md).
 
 ## Purpose and boundaries
 

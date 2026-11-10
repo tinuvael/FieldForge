@@ -4,6 +4,7 @@ struct MappingRatingsForm: View {
     @Binding var q: BartonQInput
     @Binding var rmr: RMR89Input
     @Binding var gsi: GSIAssessment?
+    @Binding var regulatory: RegulatoryFieldCategories
     let focus: FocusState<Bool>.Binding
     var body: some View {
         Section("Рейтинги массива") {
@@ -13,11 +14,44 @@ struct MappingRatingsForm: View {
             DisclosureGroup("RMR89 · базовый рейтинг") {
                 RMR89Form(input: $rmr, focus: focus)
             }
+            DisclosureGroup("Регламент · прочность и стенки") {
+                Picker("A1 · Полевая прочность", selection: $regulatory.strength) {
+                    Text(rmr.fieldStrength.map { "По полевой оценке: \($0.grade.rawValue) · \($0.rating) балл." } ?? "Не указано").tag(nil as RegulatoryStrengthBand?)
+                    ForEach(RegulatoryStrengthBand.allCases, id: \.self) { band in
+                        Text(band.selectionLabel).tag(Optional(band))
+                    }
+                }.pickerStyle(.menu).accessibilityIdentifier("regulatoryStrength")
+                Picker("A45 · Изменение стенок", selection: $regulatory.wallAlteration) {
+                    Text(RegulatoryFieldCategories.equivalentWallChoice(rmr: rmr).map { "По RMR89: \($0.title) · \($0.rating) балл." } ?? "Не указано").tag(nil as RegulatoryWallAlteration?)
+                    ForEach(RegulatoryWallAlteration.allCases, id: \.self) { category in
+                        Text(category.selectionLabel).tag(Optional(category))
+                    }
+                }.pickerStyle(.menu).accessibilityIdentifier("regulatoryWallAlteration")
+                Text("A1 — полевая категория, отдельно от UCS и Is(50). A45 «Раздробленные» не заменяет «Разложившиеся» в RMR89. Длина A42 и раскрытие A43 выбираются в RMR89 и используются в отчёте.").font(.caption).foregroundStyle(.secondary)
+            }
             NavigationLink { GSISelectionView(assessment: $gsi) } label: {
                 LabeledContent("GSI", value: gsi.map { $0.chartPosition != nil ? "≈ \(Int($0.finalValue!))" : "\(EngineeringDisplay.number($0.lower))–\(EngineeringDisplay.number($0.upper))" } ?? "Оценить")
             }.accessibilityIdentifier("openGSI")
             if let warning = SpacingRQD(q: q, rmr: rmr).warning { Text(warning).font(.caption).foregroundStyle(.orange) }
         }
+    }
+}
+
+extension RegulatoryStrengthBand {
+    var selectionLabel: String { "\(interval) МПа · \(rating) балл." }
+}
+
+extension RegulatoryWallAlteration {
+    var selectionLabel: String {
+        let title: String
+        switch self {
+        case .unweathered: title = "Не выветрелые"
+        case .slightlyWeathered: title = "Слабо выветрелые"
+        case .moderatelyWeathered: title = "Умеренно выветрелые"
+        case .highlyWeathered: title = "Сильно выветрелые"
+        case .crushed: title = "Раздробленные"
+        }
+        return "\(title) · \(rating) балл."
     }
 }
 private struct BartonQForm: View {
@@ -216,7 +250,7 @@ private struct RMR89Form: View {
                     ForEach(FieldStrengthGrade.allCases, id: \.self) { grade in
                         Text("\(grade.rawValue) · \(grade.recognition) · \(grade.interval) МПа · \(grade.rating) балл.").tag(Optional(grade))
                     }
-                }.accessibilityIdentifier("rmrFieldStrength")
+                }.pickerStyle(.menu).accessibilityIdentifier("rmrFieldStrength")
             } else { category(parameter) }
         }
         if let infill = input.basicSelections?["infill"], infill != "infill-0" {
@@ -240,14 +274,17 @@ private struct RMR89Form: View {
             ForEach(JCond76Category.allCases, id: \.self) { category in Text("\(category.title) · \(category.rating)").tag(Optional(category)) }
         }.accessibilityIdentifier("rmrJCond76")
         DisclosureGroup("Измеренные значения и сведения об оценке") {
-            if input.strengthTest != .fieldEstimate { RatingField("Прочность, МПа", text: $input.strengthMPa, id: "rmrStrength", focus: focus) }
+            if input.strengthTest != .fieldEstimate {
+                let title = input.strengthTest == .ucs ? "UCS, МПа" : input.strengthTest == .pointLoadIs50 ? "Is(50), МПа" : "Прочность, МПа"
+                RatingField(title, text: $input.strengthMPa, id: "rmrStrength", focus: focus, numeric: true)
+            }
             RatingField("Испытание: источник и применимость UCS / Is(50)", text: $input.strengthEvidence, id: "rmrStrengthEvidence", focus: focus)
             RatingField("RMR: RQD исходное, %", text: $input.rqd, id: "rmrRQD", focus: focus)
             RatingField("RMR: источник RQD", text: $input.rqdEvidence, id: "rmrRQDEvidence", focus: focus)
             RatingField("Расстояние между трещинами, м", text: $input.spacingMeters, id: "rmrSpacing", focus: focus)
             DisclosureGroup("Состояние трещин — исходные данные") {
-                RatingField("Протяжённость, м", text: $input.persistenceMeters, id: "rmrPersistence", focus: focus)
-                RatingField("Раскрытие, мм", text: $input.apertureMillimeters, id: "rmrAperture", focus: focus)
+                RatingField("Протяжённость, м", text: $input.persistenceMeters, id: "rmrPersistence", focus: focus, numeric: true)
+                RatingField("Раскрытие, мм", text: $input.apertureMillimeters, id: "rmrAperture", focus: focus, numeric: true)
                 RatingField("Шероховатость — описание", text: $input.roughness, id: "rmrRoughness", focus: focus)
                 RatingField("Заполнитель — тип, мощность и свойства", text: $input.infill, id: "rmrInfill", focus: focus)
                 RatingField("Выветрелость стенок — описание", text: $input.weathering, id: "rmrWeathering", focus: focus)
@@ -274,16 +311,28 @@ private struct RMR89Form: View {
         }.font(.caption)
     }
     private func category(_ parameter: RMR89Parameter) -> some View {
-        Picker(parameter.title, selection: Binding(get: { input.basicSelections?[parameter.rawValue] ?? "" }, set: { value in
+        let title = switch parameter {
+        case .persistence: "A42 · Протяжённость"
+        case .aperture: "A43 · Раскрытие"
+        default: parameter.title
+        }
+        return Picker(title, selection: Binding(get: { input.basicSelections?[parameter.rawValue] ?? "" }, set: { value in
+            guard !value.isEmpty || input.basicSelections?[parameter.rawValue] != nil else { return }
             var selections = input.basicSelections ?? [:]
             selections[parameter.rawValue] = value.isEmpty ? nil : value
             input.basicSelections = selections
         })) {
-            Text("Выберите").tag("")
+            Text("Не указано").tag("")
             ForEach(parameter.choices(test: input.strengthTest).filter { parameter != .overallCondition || $0.rating <= 10 }) { choice in
-                Text("\(choice.title) · \(choice.rating) балл.").tag(choice.id)
+                let label = switch parameter {
+                case .persistence: "\(choice.title) м"
+                case .aperture:
+                    choice.id == "aperture-0" ? "Нет раскрытия" : choice.id == "aperture-1" ? "Ненулевое <0,1 мм" : "\(choice.title) мм"
+                default: choice.title
+                }
+                Text("\(label) · \(choice.rating) балл.").tag(choice.id)
             }
-        }.accessibilityIdentifier("rmrCategory-" + parameter.rawValue)
+        }.pickerStyle(.menu).accessibilityIdentifier("rmrCategory-" + parameter.rawValue)
     }
 
 }

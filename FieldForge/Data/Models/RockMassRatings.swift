@@ -339,13 +339,15 @@ struct MappingRatings: Codable, Equatable, Sendable {
     let bartonQ: BartonQAssessment?
     let rmr89: RMR89Assessment?
     var gsi: GSIAssessment? = nil
+    var regulatory: RegulatoryFieldCategories? = nil
     func validate() throws { try bartonQ?.validate(); try rmr89?.validate(); try gsi?.validate() }
 }
 extension MappingDraft {
     func ratings(now: Date) throws -> MappingRatings? {
-        guard bartonQ.hasChanges || rmr89.hasChanges || gsi != nil else { return nil }
+        guard bartonQ.hasChanges || rmr89.hasChanges || gsi != nil || !regulatory.isEmpty else { return nil }
         return MappingRatings(bartonQ: try bartonQ.hasChanges ? BartonQAssessment(input: bartonQ, now: now) : nil,
-                              rmr89: try rmr89.hasChanges ? RMR89Assessment(input: rmr89, now: now) : nil, gsi: gsi)
+                              rmr89: try rmr89.hasChanges ? RMR89Assessment(input: rmr89, now: now) : nil, gsi: gsi,
+                              regulatory: regulatory.isEmpty ? nil : regulatory)
     }
 }
 

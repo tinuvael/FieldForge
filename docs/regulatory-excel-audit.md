@@ -1,5 +1,7 @@
 # Regulatory Excel, RMR editions, joint sets and import audit
 
+> Stage 3a implements the [routine J1–J4 workflow and field category selections](enterprise-geotechnical.md#regulatory-field-categories-stage-3a). The decision register below records the earlier audit state.
+
 Status: Stage 1 specification, 2026-11-07. Audited application revision:
 `a559ee9d575b4da63b67ac66b3713845450bed61` (merged B2b, PR #72).
 The current [Stage 2 export contract](enterprise-geotechnical.md#regulatory-data-workbook)

@@ -32,7 +32,7 @@ final class P32GeologyTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: path) }
         try body(path)
     }
-    func testFiveSetsMultipleEvidenceReferencesAndTectonicsCommitTogether() throws {
+    func testHistoricalFiveSetsMultipleEvidenceReferencesAndTectonicsReopenTogether() throws {
         let (store, initial) = try P2MappingTests().configured(); var w = initial
         let first = try original(), second = try original(.trueNorth)
         try w.draft.addMeasurement(first); try w.draft.addMeasurement(second)
@@ -43,7 +43,7 @@ final class P32GeologyTests: XCTestCase {
         w.draft.tectonicStructures = [structure(), structure()]
         w.draft.tectonicStructures[1].type = .shearZone
         XCTAssertTrue(store.value.observations.isEmpty); XCTAssertTrue(store.value.measurements.isEmpty)
-        let point = try w.save(now: date)
+        let point = try w.seedHistoricalJointSetPoint(now: date)
         let geology = try XCTUnwrap(point.geology)
         XCTAssertEqual(geology.jointSets.map(\.identifier), JointSetIdentifier.allCases)
         XCTAssertEqual(geology.jointSets[0].measurementIDs, [first.id, second.id])
@@ -64,11 +64,47 @@ final class P32GeologyTests: XCTestCase {
         for _ in 0..<5 { try w.draft.addMeasurement(original()) }
         XCTAssertTrue(w.draft.jointSets.isEmpty)
         for _ in 0..<6 { w.draft.addJointSet() }
-        XCTAssertEqual(w.draft.jointSets.count, 5)
+        XCTAssertEqual(w.draft.jointSets.count, 4)
         XCTAssertTrue(w.draft.jointSets.allSatisfy { $0.representative.dipAngleText.isEmpty && $0.measurementIDs.isEmpty })
         w.draft.jointSets.remove(at: 1); w.draft.addJointSet()
-        XCTAssertEqual(w.draft.jointSets.map(\.identifier), JointSetIdentifier.allCases)
+        XCTAssertEqual(w.draft.jointSets.map(\.identifier), [.J1, .J2, .J3, .J4])
         w.draft.picket = "5"; XCTAssertThrowsError(try w.save()) // No invented representative.
+    }
+    func testHistoricalJ5IsReadOnlyAndSurvivesCorrectionWithRQDChange() throws {
+        let (store, initial) = try P2MappingTests().configured(); var w = initial
+        let reading = try original()
+        w.draft.picket = "5"; w.draft.bartonQ.rqd = "70"
+        try w.draft.addMeasurement(reading)
+        var historical = set(.J5)
+        historical.measurementIDs = [reading.id]
+        historical.resetSpacingEstimate(w.draft.spacingRQD)
+        let request = w.editorRequest(historical)
+        XCTAssertThrowsError(try w.acceptJointSet(historical, originals: [], request: request))
+        XCTAssertTrue(w.draft.jointSets.isEmpty)
+        w.draft.jointSets = [set(), historical]
+        XCTAssertThrowsError(try w.save(now: date))
+        XCTAssertTrue(store.value.observations.isEmpty)
+        let old = try w.seedHistoricalJointSetPoint(now: date)
+        let savedJ5 = try XCTUnwrap(old.geology?.jointSets.last)
+        XCTAssertEqual(savedJ5.spacingProvenance?.source, .estimatedFromRQD)
+        XCTAssertEqual(w.journal.measurements(for: old), [reading])
+        XCTAssertEqual(WedgeMappingSource.available(in: w).first { $0.pointID == old.id }?.joints.map(\.identifier), [.J1])
+
+        var correction = try w.correction(for: old.id)
+        XCTAssertEqual(correction.fields.jointSets.last, JointSetDraft(savedJ5))
+        correction.reason = "Field correction"; correction.fields.notes = "Corrected notes"
+        correction.fields.bartonQ.rqd = "80"
+        correction.fields.jointSets[0].notes = "Corrected J1"
+        var deletion = correction; deletion.fields.jointSets.removeLast()
+        XCTAssertThrowsError(try w.saveCorrection(deletion))
+        var modification = correction; modification.fields.jointSets[1].notes = "Cannot edit J5"
+        XCTAssertThrowsError(try w.saveCorrection(modification))
+        let saved = try w.saveCorrection(correction, now: date.addingTimeInterval(1))
+        XCTAssertEqual(saved.snapshot.geology?.jointSets.first?.revision, 2)
+        XCTAssertEqual(saved.snapshot.geology?.jointSets.last, savedJ5)
+        XCTAssertEqual(try MappingWorkflow(store: store).journal.effectiveObservation(id: old.id), saved.snapshot)
+        XCTAssertEqual(w.journal.observations.first, old)
+        XCTAssertEqual(w.journal.measurements(for: saved.snapshot), [reading])
     }
     func testInvalidNumericFieldsRejectWithoutChangingDraftOrGraph() throws {
         let (_, initial) = try P2MappingTests().configured()
@@ -250,7 +286,7 @@ final class P32GeologyTests: XCTestCase {
         w.draft.jointSets[0].measurementIDs = [reading.id, reading.id]; XCTAssertThrowsError(try w.save())
         w.draft.jointSets[0].measurementIDs = [UUID()]; XCTAssertThrowsError(try w.save())
         w.draft.jointSets = [set(), set()]; XCTAssertThrowsError(try w.save())
-        w.draft.jointSets = JointSetIdentifier.allCases.map { set($0) } + [set()]; XCTAssertThrowsError(try w.save())
+        w.draft.jointSets = JointSetIdentifier.routine.map { set($0) } + [set()]; XCTAssertThrowsError(try w.save())
         w.draft.jointSets = [set()]; let tectonic = structure()
         w.draft.tectonicStructures = [tectonic, tectonic]; XCTAssertThrowsError(try w.save())
     }
@@ -372,5 +408,19 @@ final class P32GeologyTests: XCTestCase {
             XCTAssertThrowsError(try store.load()); XCTAssertThrowsError(try store.save(MappingJournal()))
             XCTAssertEqual(try Data(contentsOf: url), bytes)
         }
+    }
+}
+
+extension MappingWorkflow {
+    /// Seed a schema-8 observation made before the routine capture limit changed.
+    mutating func seedHistoricalJointSetPoint(now: Date) throws -> MappingObservation {
+        let point = try draftRecord(now: now)
+        var next = journal
+        next.observations.append(point)
+        next.measurements.append(contentsOf: draft.measurements)
+        try next.validate()
+        try commit(next)
+        self = try MappingWorkflow(store: persistenceStore)
+        return point
     }
 }

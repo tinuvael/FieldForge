@@ -3,38 +3,18 @@ import SwiftUI
 struct MappingGeologyDetail: View {
     let geology: MappingGeology
     let measurements: [Measurement]
+    private var routineSets: [InterpretedJointSet] { geology.jointSets.filter { $0.identifier.isRoutine } }
     var body: some View {
         Section("Интервал и положение") {
             LabeledContent("Начало", value: geology.start.map { "\($0.text) · \(EngineeringDisplay.number($0.meters)) м" } ?? "Не указано")
             LabeledContent("Конец", value: geology.end.map { "\($0.text) · \(EngineeringDisplay.number($0.meters)) м" } ?? "Не указано")
             LabeledContent("Положение", value: geology.position?.title ?? "Не указано")
         }
-        Section("Системы трещин · интерпретации: \(geology.jointSets.count)") {
-            ForEach(geology.jointSets) { set in
-                DisclosureGroup("\(set.identifier.rawValue) · интерпретация") {
-                    GeologicalOrientationDetail(input: set.representative)
-                    number("SD, м", set.spacingMeters)
-                    Text((set.spacingProvenance?.source ?? .unknownLegacy).title).font(.caption).foregroundStyle(.secondary)
-                    number("Протяжённость, м", set.persistenceMeters)
-                    number("Раскрытие, мм", set.apertureMillimeters)
-                    LabeledContent("Шероховатость", value: set.roughness.isEmpty ? "Не указана" : set.roughness)
-                    LabeledContent("Заполнитель", value: set.infill.isEmpty ? "Не указан" : set.infill)
-                    LabeledContent("Полевые примечания", value: set.notes.isEmpty ? "Нет" : set.notes)
-                    LabeledContent("Автор", value: set.author ?? "Не указан")
-                    LabeledContent("Интерпретировано", value: MeasurementDateText.format(set.interpretedAt, detailed: true))
-                    Text("Ревизия \(set.revision) · \(set.method)").font(.caption)
-                    Text("Исходные замеры: \(set.measurementIDs.count)").font(.subheadline)
-                    ForEach(set.measurementIDs, id: \.self) { id in
-                        if let reading = measurements.first(where: { $0.id == id }) {
-                            NavigationLink { MeasurementDetailView(record: reading) } label: { MeasurementSummary(reading: reading) }
-                                .accessibilityIdentifier("jointSource-\(set.identifier.rawValue)-\(id.uuidString)")
-                        }
-                    }
-                    Text(set.id.uuidString).font(.caption).textSelection(.enabled)
-                }
-            }
-            if geology.jointSets.isEmpty { Text("Интерпретации не добавлены") }
+        Section("Системы трещин · интерпретации: \(routineSets.count)") {
+            ForEach(routineSets) { MappingJointSetDetail(set: $0, measurements: measurements) }
+            if routineSets.isEmpty { Text("Интерпретации не добавлены") }
         }
+        MappingHistoricalJointSets(sets: geology.jointSets.filter { !$0.identifier.isRoutine }, measurements: measurements)
         Section("Тектоника: \(geology.tectonicStructures.count)") {
             ForEach(Array(geology.tectonicStructures.enumerated()), id: \.element.id) { index, structure in
                 DisclosureGroup("№\(index + 1) · \(structure.type.title)") {
@@ -49,9 +29,52 @@ struct MappingGeologyDetail: View {
             if geology.tectonicStructures.isEmpty { Text("Структуры не добавлены") }
         }
     }
-    private func number(_ title: String, _ value: Double?) -> some View {
-        LabeledContent(title, value: value.map { EngineeringDisplay.number($0) } ?? "Не указано")
+}
+
+struct MappingHistoricalJointSets: View {
+    let sets: [InterpretedJointSet]
+    let measurements: [Measurement]
+    var body: some View {
+        if !sets.isEmpty {
+            Section {
+                DisclosureGroup("Исторические системы · только просмотр") {
+                    ForEach(sets) { MappingJointSetDetail(set: $0, measurements: measurements) }
+                }
+            }
+        }
     }
+}
+
+private struct MappingJointSetDetail: View {
+    let set: InterpretedJointSet
+    let measurements: [Measurement]
+    var body: some View {
+        DisclosureGroup("\(set.identifier.rawValue) · интерпретация") {
+            GeologicalOrientationDetail(input: set.representative)
+            number("SD, м", set.spacingMeters)
+            Text((set.spacingProvenance?.source ?? .unknownLegacy).title).font(.caption).foregroundStyle(.secondary)
+            number("Протяжённость, м", set.persistenceMeters)
+            number("Раскрытие, мм", set.apertureMillimeters)
+            LabeledContent("Шероховатость", value: set.roughness.isEmpty ? "Не указана" : set.roughness)
+            LabeledContent("Заполнитель", value: set.infill.isEmpty ? "Не указан" : set.infill)
+            LabeledContent("Полевые примечания", value: set.notes.isEmpty ? "Нет" : set.notes)
+            LabeledContent("Автор", value: set.author ?? "Не указан")
+            LabeledContent("Интерпретировано", value: MeasurementDateText.format(set.interpretedAt, detailed: true))
+            Text("Ревизия \(set.revision) · \(set.method)").font(.caption)
+            Text("Исходные замеры: \(set.measurementIDs.count)").font(.subheadline)
+            ForEach(set.measurementIDs, id: \.self) { id in
+                if let reading = measurements.first(where: { $0.id == id }) {
+                    NavigationLink { MeasurementDetailView(record: reading) } label: { MeasurementSummary(reading: reading) }
+                        .accessibilityIdentifier("jointSource-\(set.identifier.rawValue)-\(id.uuidString)")
+                }
+            }
+            Text(set.id.uuidString).font(.caption).textSelection(.enabled)
+        }
+    }
+}
+
+private func number(_ title: String, _ value: Double?) -> some View {
+    LabeledContent(title, value: value.map { EngineeringDisplay.number($0) } ?? "Не указано")
 }
 
 private struct GeologicalOrientationDetail: View {

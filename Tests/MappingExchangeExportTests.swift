@@ -47,7 +47,7 @@ import FoundationXML
         q.ja.select("C", parameter: .ja); q.jw.select("A", parameter: .jw); q.srf.select("G", parameter: .srf)
         w.draft.bartonQ = q; w.draft.rmr89.source = "Input only"
         w.draft.gsi = GSIAssessment(selection: .init(structure: .veryBlocky, surface: .fair), lower: 35, upper: 45, finalValue: nil, assessedAt: time)
-        let original = try w.save(now: time)
+        let original = try w.seedHistoricalJointSetPoint(now: time)
         var c = try w.correction(for: original.id); c.reason = "Исправление"; c.author = "Инженер"
         c.fields.notes = " =1+1\r\n+cmd\t-1 @test _x0020_ 'текст 🪨"
         c.fields.jointSets[0].representative.dipAngleText = "52,125"; c.fields.z = "-121.12345678912345"

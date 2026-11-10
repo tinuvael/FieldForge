@@ -4,10 +4,11 @@ import SwiftUI
 struct MappingJointSetsSection: View {
     @EnvironmentObject private var mapping: MappingModel
     let edit: (MappingGeologyEditorRequest) -> Void
-    private var sets: [JointSetDraft] { mapping.workflow?.draft.jointSets ?? [] }
+    private var sets: [JointSetDraft] { (mapping.workflow?.draft.jointSets ?? []).filter { $0.identifier.isRoutine } }
+    private var nextIdentifier: JointSetIdentifier? { mapping.workflow?.draft.nextJointSetIdentifier }
     var body: some View {
         Section("Трещиноватость и тектоника") {
-            Text("Системы трещин").font(.subheadline).foregroundStyle(.secondary)
+            Text("Системы трещин: \(sets.count)/\(JointSetIdentifier.routine.count)").font(.subheadline).foregroundStyle(.secondary)
             ForEach(sets) { set in
                 HStack {
                     Button { if let workflow = mapping.workflow { edit(.joint(workflow.editorRequest(set))) } } label: {
@@ -28,9 +29,9 @@ struct MappingJointSetsSection: View {
                 }.buttonStyle(.borderless)
             }
             Button("Добавить систему", systemImage: "plus") {
-                guard let identifier = JointSetIdentifier.allCases.first(where: { candidate in !sets.contains { $0.identifier == candidate } }) else { return }
+                guard let identifier = nextIdentifier else { return }
                 if let workflow = mapping.workflow { edit(.joint(workflow.editorRequest(workflow.draft.newJointSet(identifier: identifier)))) }
-            }.disabled(sets.count >= 5).accessibilityIdentifier("addJointSet")
+            }.disabled(nextIdentifier == nil).accessibilityIdentifier("addJointSet")
             Text("Тектоника").font(.subheadline).foregroundStyle(.secondary)
             ForEach(mapping.workflow?.draft.tectonicStructures ?? []) { structure in
                 HStack {

@@ -9,7 +9,7 @@ import zlib
 @MainActor final class MappingExchangePreviewTests: XCTestCase {
     private let time = Date(timeIntervalSinceReferenceDate: 721234567.1234567)
     private func id(_ n: Int) -> UUID { UUID(uuidString: String(format: "10000000-0000-4000-8000-%012d", n))! }
-    private func fixture(longOriginal: Bool = false) throws -> MappingJournal {
+    private func fixture(longOriginal: Bool = false, includeRegulatory: Bool = false) throws -> MappingJournal {
         var j = MappingJournal()
         j.projects = [.init(id: id(1), name: "Проект А"), .init(id: id(2), name: "Проект Б")]
         j.horizons = [.init(id: id(3), projectID: id(1), name: "А", elevationMeters: -120.12345678912345, elevationDatum: "mine"), .init(id: id(4), projectID: id(2), name: "Б", elevationMeters: nil, elevationDatum: "unknown")]
@@ -37,8 +37,9 @@ import zlib
         q.assessmentSource = "log"; q.jn.select("F", parameter: .jn); q.jr.select("B", parameter: .jr); q.ja.select("C", parameter: .ja); q.jw.select("A", parameter: .jw); q.srf.select("G", parameter: .srf)
         w.draft.bartonQ = q; w.draft.rmr89.source = "Input only"
         w.draft.gsi = GSIAssessment(selection: .init(structure: .veryBlocky, surface: .fair), lower: 35, upper: 45, finalValue: nil, assessedAt: time)
-        let original = try w.save(now: time)
+        let original = try w.seedHistoricalJointSetPoint(now: time)
         var correction = try w.correction(for: original.id); correction.reason = "Проверка"; correction.fields.notes = "Исправлено 🪨 _x0020_\r\n=literal"
+        if includeRegulatory { correction.fields.regulatory = .init(strength: .below1, wallAlteration: .crushed) }
         _ = try w.saveCorrection(correction, now: time.addingTimeInterval(1))
         try w.requestContext(.init(projectID: id(2), horizonID: id(4), excavationID: id(6)))
         w.draft = MappingDraft(id: id(8)); w.draft.picket = "2+0"; w.draft.observedAtOverride = time; w.draft.timeZoneID = "UTC"
@@ -90,6 +91,18 @@ import zlib
         XCTAssertEqual(p.records[0].proposed?.coordinates?.x, 123456789.1234568)
         XCTAssertTrue(p.records[0].changes.contains { $0.field == "notes" && $0.before.contains("Исправлено") && $0.after == "Новое описание" })
         XCTAssertEqual(p.records[0].proposed?.measurementIDs, j.observations[0].measurementIDs)
+    }
+    func testRegulatorySourceRecordsAndHistoricalJ5SurviveExchangePreview() throws {
+        let j = try fixture(includeRegulatory: true), e = try export(j)
+        let effective = try XCTUnwrap(j.effectiveObservation(id: id(7)))
+        XCTAssertEqual(try preview(e, journal: j).records.first?.proposed, effective)
+        let edited = edit(e, sheet: "points", values: ["notes": "Новое описание", "correction_reason": "Уточнение"])
+        let p = try preview(edited, journal: j)
+        XCTAssertEqual(p.count(.correction), 1)
+        XCTAssertEqual(p.records.first?.proposed?.ratings?.regulatory, .init(strength: .below1, wallAlteration: .crushed))
+        XCTAssertEqual(p.records.first?.proposed?.geology?.jointSets.last, effective.geology?.jointSets.last)
+        let j5 = edit(edited, sheet: "joint_sets", row: 4, values: ["notes": "Попытка изменить J5"])
+        XCTAssertEqual(try preview(j5, journal: j).count(.unsupported), 1)
     }
     func testNewPointExactDuplicateDivergentClientAndCollision() throws {
         let j = try fixture(), e = newPoint(try export(j))

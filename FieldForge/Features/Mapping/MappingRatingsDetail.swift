@@ -66,6 +66,12 @@ struct MappingRatingsDetail: View {
                     Text("Отсутствуют: \(rmr.missing.joined(separator: ", "))").font(.caption)
                 }
             } else { Text("RMR89: исходные данные не вводились.") }
+            if let regulatory = ratings?.regulatory, !regulatory.isEmpty {
+                DisclosureGroup("Регламент · отдельные полевые категории") {
+                    if let strength = regulatory.strength { value("A1 · Полевая прочность", strength.selectionLabel) }
+                    if let alteration = regulatory.wallAlteration { value("A45 · Изменение стенок", alteration.selectionLabel) }
+                }
+            }
             if let gsi = ratings?.gsi {
                 DisclosureGroup("GSI · геологическая оценка") {
                     Text(gsi.selection.structure.title + " · " + gsi.selection.surface.title)
