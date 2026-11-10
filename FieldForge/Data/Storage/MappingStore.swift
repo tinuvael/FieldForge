@@ -29,20 +29,26 @@ final class FileMappingStore: MappingStore {
     }
     /// Backup must use this owner's exact loaded generation, never reload/adopt an external edit.
     func backupBytes(for journal: MappingJournal) throws -> Data? {
-        guard loaded, !blocked, try bytes() == loadedBytes else { throw StorageError.changedFile }
+        try requireUnchanged()
         if let loadedBytes {
             guard try JSONDecoder().decode(MappingJournal.self, from: loadedBytes) == journal else { throw StorageError.changedFile }
         } else { guard journal == MappingJournal() else { throw StorageError.changedFile } }
         return loadedBytes
+    }
+    func requireUnchanged() throws {
+        guard loaded, !blocked, try bytes() == loadedBytes else { throw StorageError.changedFile }
     }
     func save(_ journal: MappingJournal) throws {
         guard !blocked else { throw StorageError.writesBlocked }
         if !loaded { _ = try load() }
         try journal.validate()
         guard try bytes() == loadedBytes else { throw StorageError.changedFile }
+        let previous = try loadedBytes.map { try JSONDecoder().decode(MappingJournal.self, from: $0) }
+        guard (journal.importLedger ?? MappingImportLedger()).preserves(previous?.importLedger ?? MappingImportLedger()) else {
+            throw StorageError.invalidRecord
+        }
         // Original observations are append-only; names/metadata can be managed separately.
-        if let loadedBytes {
-            let previous = try JSONDecoder().decode(MappingJournal.self, from: loadedBytes)
+        if let previous {
             try journal.validatePlanChanges(from: previous)
             guard previous.projects.allSatisfy({ old in
                       (old.lithologies ?? []).allSatisfy { rock in journal.projects.first { $0.id == old.id }?.lithologies?.contains(rock) == true }

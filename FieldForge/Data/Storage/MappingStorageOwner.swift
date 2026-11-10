@@ -70,6 +70,28 @@ final class MappingStorageOwner: @unchecked Sendable {
         try await run { self.committed?.generationID == generationID }
     }
 
+    func applyImport(_ operation: MappingImportOperation, source: MappingImportSource, proposal: MappingObservation?,
+                     checkpoint: @escaping @Sendable (MappingImportApply.Checkpoint) throws -> Void = { _ in }) async throws -> MappingImportOutcome {
+        try await run {
+            guard let file = self.store as? FileMappingStore, let current = self.committed else { throw StorageError.writesBlocked }
+            try file.requireUnchanged()
+            return try MappingImportApply.execute(operation, source: source, proposal: proposal, current: current, save: { journal in
+                try file.save(journal)
+                self.committed = MappingCommittedSnapshot(journal)
+            }, checkpoint: checkpoint)
+        }
+    }
+
+    /// Reopening already validates applied receipts. Pending intents are classified
+    /// against the latest baseline without writing or recreating an approved payload.
+    func importRecovery() async throws -> [MappingImportRecovery] {
+        try await run {
+            guard let file = self.store as? FileMappingStore, let current = self.committed else { throw StorageError.writesBlocked }
+            try file.requireUnchanged()
+            return try MappingImportApply.recovery(in: current)
+        }
+    }
+
     /// Queue reservation covers generation selection, source checks and all durable
     /// attachment/recovery copying. Hashing/ZIP verification subsequently use staging.
     func captureBackup(measurements: MeasurementBackupSource, photos: URL, plans: URL,

@@ -136,10 +136,12 @@ struct MappingJournal: Codable, Equatable, Sendable {
     var photoRevisions: [PhotoMetadataRevision] = []
     var selection = MappingContext()
     var measurements: [Measurement] = []
+    var importLedger: MappingImportLedger?
 
     init() {}
     private enum CodingKeys: String, CodingKey {
         case schemaVersion, projects, horizons, excavations, plans, observations, selection, measurements, revisions, photos, photoAttachments, photoRevisions
+        case importLedger
     }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -156,6 +158,9 @@ struct MappingJournal: Codable, Equatable, Sendable {
         photoRevisions = try c.decode([PhotoMetadataRevision].self, forKey: .photoRevisions)
         selection = try c.decode(MappingContext.self, forKey: .selection)
         measurements = try c.decode([Measurement].self, forKey: .measurements)
+        // Schema-8 journals created before Stage 4a omit the key. A present field
+        // must decode in full, including its format version and integrity digest.
+        if c.contains(.importLedger) { importLedger = try c.decode(MappingImportLedger.self, forKey: .importLedger) }
     }
 
     func measurements(for observation: MappingObservation) -> [Measurement] {
@@ -210,7 +215,11 @@ struct MappingJournal: Codable, Equatable, Sendable {
             try validateObservation(o, context: context)
             if includingRevisions, o.geology?.jointSets.contains(where: { $0.revision != 1 }) == true { throw StorageError.invalidRecord }
         }
-        if includingRevisions { try validateRevisions(context: context); try validatePhotos() }
+        if includingRevisions {
+            try validateRevisions(context: context)
+            try validatePhotos()
+            try importLedger?.validate(in: self)
+        }
     }
 
     /// The same complete snapshot checks apply to originals and every historical revision.

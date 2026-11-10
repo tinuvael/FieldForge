@@ -189,6 +189,10 @@ Do not use retyped numbers as a way to bypass a rejected numeric/date cell.
 
 ## Minimal B2c integration contract (design only)
 
+[Stage 4a](excel-import-stage-4a.md) supersedes the storage design gate below with
+an implemented schema-8 ledger and per-observation safe apply. The Exchange preview
+remains read-only. The historical B2c design below records the batch goals for Stage 4b.
+
 1. Input is `MappingExchangePreview` plus the original validated workbook/proposal data:
    workbook UUID, semantic `proposalDigest`, captured generation UUID, metadata, per-point
    classifications/deltas and detached validated candidate values. Persist neither this
