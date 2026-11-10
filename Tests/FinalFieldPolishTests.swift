@@ -190,6 +190,22 @@ import XCTest
         XCTAssertThrowsError(try input.basicEvaluation())
     }
 
+    func testRMR89A4ThirtyRejectsSelectedGougeWithClosedWalls() throws {
+        var input = directA4Input(0)
+        input.overallConditionContinuity = .discontinuous
+        input.basicSelections?["roughness"] = "roughness-0"; input.basicSelections?["weathering"] = "weathering-0"
+        input.apertureMillimeters = "0"
+        XCTAssertEqual(try input.basicEvaluation().value, 72)
+        input.basicSelections?["infill"] = "infill-0"
+        XCTAssertEqual(try input.basicEvaluation().value, 72)
+        for category in ["infill-1", "infill-2", "infill-3", "infill-4"] {
+            input.basicSelections?["infill"] = category
+            XCTAssertThrowsError(try input.basicEvaluation(), category) { error in
+                XCTAssertTrue(error.localizedDescription.contains("заполнитель"))
+            }
+        }
+    }
+
     func testRMR89A4TwentyFiveAndTwentyRequireMatchingWallsRoughnessAndAperture() throws {
         for (row, weathering, wrong, total) in [(1, "weathering-1", "weathering-3", 67), (2, "weathering-3", "weathering-1", 62)] {
             var input = directA4Input(row)
@@ -204,6 +220,31 @@ import XCTest
             input.basicSelections?["weathering"] = wrong; XCTAssertThrowsError(try input.basicEvaluation())
             input.basicSelections?["weathering"] = weathering; input.basicSelections?["roughness"] = "roughness-3"
             XCTAssertThrowsError(try input.basicEvaluation())
+        }
+    }
+
+    func testRMR89A4NarrowRowsRejectThickGougeWithoutBanningThinGouge() throws {
+        for (row, weathering, total) in [(1, "weathering-1", 67), (2, "weathering-3", 62)] {
+            var input = directA4Input(row)
+            input.basicSelections?["roughness"] = "roughness-2"; input.basicSelections?["weathering"] = weathering
+            input.apertureMillimeters = "0.5"
+            XCTAssertEqual(try input.basicEvaluation().value, total)
+            for category in ["infill-0", "infill-1", "infill-3"] {
+                input.basicSelections?["infill"] = category
+                XCTAssertEqual(try input.basicEvaluation().value, total, category)
+            }
+            input.apertureMillimeters = "0"
+            XCTAssertThrowsError(try input.basicEvaluation()) // Selected thin gouge still has positive thickness.
+            input.apertureMillimeters = "0.5"
+            for category in ["infill-2", "infill-4"] {
+                input.basicSelections?["infill"] = category
+                XCTAssertThrowsError(try input.basicEvaluation(), category)
+            }
+            let date = Date(timeIntervalSince1970: 100)
+            let old = try RMR89Assessment(input: input, now: date, method: RMR89Assessment.preA4VerificationVersion)
+            let decoded = try JSONDecoder().decode(RMR89Assessment.self, from: JSONEncoder().encode(old))
+            try decoded.validate()
+            XCTAssertEqual(decoded, old); XCTAssertEqual(decoded.calculation?.value, total)
         }
     }
 
@@ -228,6 +269,10 @@ import XCTest
         }
         input.basicSelections?["roughness"] = "roughness-4"
         XCTAssertEqual(try input.basicEvaluation().value, 52) // A.4 independently accepts observed slickensides.
+        input.basicSelections?["infill"] = "infill-4"
+        XCTAssertEqual(try input.basicEvaluation().value, 52) // The table gives no precedence between supported rows.
+        input.basicSelections?["roughness"] = "roughness-3"
+        XCTAssertThrowsError(try input.basicEvaluation()) // Thick soft gouge cannot satisfy the <5 mm alternative.
     }
 
     func testRMR89A4ZeroRequiresContinuityAndOneOfTwoAlternatives() throws {
@@ -239,6 +284,9 @@ import XCTest
         let wide = try input.basicEvaluation()
         XCTAssertEqual(wide.components["condition"], 0); XCTAssertEqual(wide.value, 42)
         input.apertureMillimeters = "5"; XCTAssertThrowsError(try input.basicEvaluation())
+        input.basicSelections?["infill"] = "infill-3"; XCTAssertThrowsError(try input.basicEvaluation())
+        input.apertureMillimeters = "5.001"; XCTAssertEqual(try input.basicEvaluation().value, 42)
+        input.apertureMillimeters = "5"
         input.basicSelections?["infill"] = nil; XCTAssertNil(try input.basicEvaluation().value)
         input.apertureMillimeters = ""; input.basicSelections?["infill"] = "infill-4"
         XCTAssertEqual(try input.basicEvaluation().value, 42)

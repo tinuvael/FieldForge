@@ -191,17 +191,24 @@ extension RMR89Input {
         let roughness = selected[.roughness]?.id
         let weathering = selected[.weathering]?.id
         let infill = selected[.infill]?.id
+        let hasInfill = infill != nil && infill != "infill-0"
+        // Section 2.4 defines separation as the distance between the walls. Gouge
+        // of known positive thickness conflicts with closure, and >5 mm cannot
+        // fit the mandatory <1 mm separation. The 10/0 rows use alternatives.
         let checks: [(String, Bool?)]
         switch overall.rating {
         case 30:
             checks = [("прерывистость", continuity.map { $0 == .discontinuous }),
                       ("очень шероховатые поверхности", roughness.map { $0 == "roughness-0" }),
                       ("отсутствие раскрытия", matchesAperture(0...0)),
+                      ("заполнитель при отсутствии раскрытия", !hasInfill),
                       ("невыветрелые стенки", weathering.map { $0 == "weathering-0" })]
         case 25, 20:
             let slightlyWeathered = overall.rating == 25
             checks = [("слегка шероховатые поверхности", roughness.map { $0 == "roughness-2" }),
                       ("раскрытие <1 мм", matchesAperture(0...1.nextDown)),
+                      ("заполнитель при отсутствии раскрытия", !hasInfill || aperture?.upperBound != 0),
+                      ("заполнитель >5 мм при раскрытии <1 мм", infill != "infill-2" && infill != "infill-4"),
                       (slightlyWeathered ? "слабо выветрелые стенки" : "сильно выветрелые стенки",
                        weathering.map { $0 == (slightlyWeathered ? "weathering-1" : "weathering-3") })]
         case 10:
