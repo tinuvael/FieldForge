@@ -9,7 +9,7 @@ import zlib
 @MainActor final class MappingExchangePreviewTests: XCTestCase {
     private let time = Date(timeIntervalSinceReferenceDate: 721234567.1234567)
     private func id(_ n: Int) -> UUID { UUID(uuidString: String(format: "10000000-0000-4000-8000-%012d", n))! }
-    private func fixture(longOriginal: Bool = false, includeRegulatory: Bool = false) throws -> MappingJournal {
+    private func fixture(longOriginal: Bool = false, includeRegulatory: Bool = false, rmr89: RMR89Input? = nil) throws -> MappingJournal {
         var j = MappingJournal()
         j.projects = [.init(id: id(1), name: "Проект А"), .init(id: id(2), name: "Проект Б")]
         j.horizons = [.init(id: id(3), projectID: id(1), name: "А", elevationMeters: -120.12345678912345, elevationDatum: "mine"), .init(id: id(4), projectID: id(2), name: "Б", elevationMeters: nil, elevationDatum: "unknown")]
@@ -35,7 +35,8 @@ import zlib
         w.draft.tectonicStructures = [fault]
         var q = BartonQInput(); q.rqd = "80"; q.rqdSource = .coreMeasured; q.location = .ordinary; q.contact = .wall
         q.assessmentSource = "log"; q.jn.select("F", parameter: .jn); q.jr.select("B", parameter: .jr); q.ja.select("C", parameter: .ja); q.jw.select("A", parameter: .jw); q.srf.select("G", parameter: .srf)
-        w.draft.bartonQ = q; w.draft.rmr89.source = "Input only"
+        w.draft.bartonQ = q
+        if let rmr89 { w.draft.rmr89 = rmr89 } else { w.draft.rmr89.source = "Input only" }
         w.draft.gsi = GSIAssessment(selection: .init(structure: .veryBlocky, surface: .fair), lower: 35, upper: 45, finalValue: nil, assessedAt: time)
         let original = try w.seedHistoricalJointSetPoint(now: time)
         var correction = try w.correction(for: original.id); correction.reason = "Проверка"; correction.fields.notes = "Исправлено 🪨 _x0020_\r\n=literal"
@@ -103,6 +104,20 @@ import zlib
         XCTAssertEqual(p.records.first?.proposed?.geology?.jointSets.last, effective.geology?.jointSets.last)
         let j5 = edit(edited, sheet: "joint_sets", row: 4, values: ["notes": "Попытка изменить J5"])
         XCTAssertEqual(try preview(j5, journal: j).count(.unsupported), 1)
+    }
+    func testRMR89ExchangePreservesStoredCorrectionAndProtectsResult() throws {
+        var input = FinalFieldPolishTests.referenceInput()
+        input.application = .foundations; input.orientationFavorability = .fair
+        input.orientationDescription = "Documented foundation-specific interpretation"
+        let j = try fixture(includeRegulatory: true, rmr89: input), e = try export(j)
+        let snapshot = try XCTUnwrap(j.observations.first?.ratings?.rmr89)
+        XCTAssertEqual(snapshot.calculation?.adjustedValue, 57)
+        let p = try preview(e, journal: j)
+        XCTAssertEqual(p.count(.unchanged), 1); XCTAssertEqual(p.records.first?.proposed?.ratings?.rmr89, snapshot)
+        let assessments = try XCTUnwrap(e.tables.first { $0.name == "assessments" })
+        let rmrRow = try XCTUnwrap(assessments.rows.firstIndex { if case .text("RMR89-basic") = $0[1] { return true }; return false })
+        let modified = edit(e, sheet: "assessments", row: rmrRow, values: ["stored_rmr_calculation_json": "{}"])
+        XCTAssertTrue(try preview(modified, journal: j).hasBlockingRecords)
     }
     func testNewPointExactDuplicateDivergentClientAndCollision() throws {
         let j = try fixture(), e = newPoint(try export(j))

@@ -69,7 +69,7 @@ struct MappingCorrectionEditor: View {
                     measurements: draft.initial.measurements, historicalSets: (draft.baseline.geology?.jointSets ?? []).filter { !$0.identifier.isRoutine },
                     addSet: { draft.fields.addJointSet() }, spacingRQD: draft.fields.spacingRQD)
                 MappingRatingsForm(q: $draft.fields.bartonQ, rmr: $draft.fields.rmr89, gsi: $draft.fields.gsi,
-                                   regulatory: $draft.fields.regulatory, focus: $focused)
+                                   regulatory: $draft.fields.regulatory, focus: $focused, savedRMR: draft.baseline.ratings?.rmr89)
                 Section("Примечания") {
                     TextField("Примечания", text: $draft.fields.notes, axis: .vertical).focused($focused).accessibilityIdentifier("correctionNotes")
                 }

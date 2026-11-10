@@ -26,7 +26,8 @@ enum MappingFieldWorkbook {
         var observation = Table(name: "Наблюдения", columns: contextColumns + ["Дата", "X", "Y", "Z, м", "Единицы XY"] + JointSetIdentifier.allCases.flatMap { ["\($0.rawValue) азимут, °", "\($0.rawValue) падение, °", "\($0.rawValue) север"] } + ["Q", "Категория по Q · FieldForge", "RMR89 базовый", "Класс RMR89 базовый", "Примечания", "GSI · оценка", "GSI · нижний контур / граница", "GSI · верхний контур / граница", "Метод GSI", "Дата GSI", "GSI X", "GSI Y", "Источник Z", "План Z · ревизия", "Метод Z", "Z · привязка, м", "Z · коэффициент в м", "Z · высотная система"])
         var joints = Table(name: "Системы трещин", columns: contextColumns + ["Система", "Азимут, °", "Падение, °", "Север", "Расстояние, м", "Протяжённость, м", "Раскрытие, мм", "Шероховатость", "Заполнитель", "Примечания"])
         var tectonics = Table(name: "Тектоника", columns: contextColumns + ["Структура", "Тип", "Азимут, °", "Падение, °", "Север", "Мощность, м", "Описание"])
-        var ratings = Table(name: "Рейтинги массива", columns: contextColumns + ["Метод", "Дата оценки", "Q", "Класс Q · NGI", "Категория по Q · FieldForge", "RMR89 базовый", "Класс RMR89 базовый", "RQD, %", "Jn", "Jr", "Ja", "Jw", "SRF", "UCS / Is(50) / R0–R6", "Прочность, МПа", "Расстояние, м", "RMR балл прочности", "RMR балл RQD", "RMR балл расстояния", "RMR балл состояния", "RMR балл воды", "Категории RMR", "Пропуски", "RMR с ориентацией"])
+        let orientationColumns = ["Поправка на ориентацию", "Класс RMR89 с поправкой", "Применение RMR89", "Категория ориентации", "Статус поправки"]
+        var ratings = Table(name: "Рейтинги массива", columns: contextColumns + ["Метод", "Дата оценки", "Q", "Класс Q · NGI", "Категория по Q · FieldForge", "RMR89 базовый", "Класс RMR89 базовый", "RQD, %", "Jn", "Jr", "Ja", "Jw", "SRF", "UCS / Is(50) / R0–R6", "Прочность, МПа", "Расстояние, м", "RMR балл прочности", "RMR балл RQD", "RMR балл расстояния", "RMR балл состояния", "RMR балл воды", "Категории RMR", "Пропуски", "RMR с ориентацией"] + orientationColumns)
         var photoTable = Table(name: "Фотографии", columns: contextColumns + ["Фото", "Название", "Номер", "Имя исходного файла", "Дата съёмки", "Дата импорта", "Описание", "Место съёмки", "Изображение в книге"])
         var links = Table(name: "field_links", columns: ["field_reference", "kind", "record_id", "point_id", "revision_id", "version"])
         for point in points {
@@ -61,18 +62,20 @@ enum MappingFieldWorkbook {
             func number(_ raw: String) -> Cell { .number(try? RatingNumber.optional(raw, name: "")) }
             if let q {
                 let result = q.evaluation.result
-                ratings.rows.append(c + [text("Barton Q · " + q.method), .timestamp(q.assessedAt), .number(result?.value), text(result?.rockClass?.title), text(result.flatMap { FieldQCategory(q: $0.value)?.title }), .empty, .empty, number(q.input.rqd), number(q.input.jn.value), number(q.input.jr.value), number(q.input.ja.value), number(q.input.jw.value), number(q.input.srf.value)] + Array(repeating: .empty, count: 9) + [text(q.evaluation.missing.joined(separator: ", ")), .empty])
+                ratings.rows.append(c + [text("Barton Q · " + q.method), .timestamp(q.assessedAt), .number(result?.value), text(result?.rockClass?.title), text(result.flatMap { FieldQCategory(q: $0.value)?.title }), .empty, .empty, number(q.input.rqd), number(q.input.jn.value), number(q.input.jr.value), number(q.input.ja.value), number(q.input.jw.value), number(q.input.srf.value)] + Array(repeating: .empty, count: 9) + [text(q.evaluation.missing.joined(separator: ", "))] + Array(repeating: .empty, count: 1 + orientationColumns.count))
             }
             if let rmr {
                 let calculation = rmr.calculation
                 let categories = RMR89Parameter.allCases.compactMap { parameter -> String? in
-                    guard let id = rmr.input.basicSelections?[parameter.rawValue], let choice = parameter.choices(test: rmr.input.strengthTest).first(where: { $0.id == id }) else { return nil }
+                    guard let id = rmr.input.basicSelections?[parameter.rawValue], let choice = parameter.choices(test: rmr.input.strengthTest, historical: rmr.usesHistoricalMethod).first(where: { $0.id == id }) else { return nil }
                     return "\(parameter.title): \(choice.title) (\(choice.rating))"
                 }.joined(separator: "; ")
                 var row = c + [text(rmr.method), .timestamp(rmr.assessedAt), .empty, .empty, .empty, .integer(calculation?.value), text(calculation?.rockClass), number(rmr.input.rqd)] + Array(repeating: Cell.empty, count: 5)
                 row += [text(rmr.input.strengthTest == .ucs ? "UCS" : rmr.input.strengthTest == .pointLoadIs50 ? "Is(50)" : rmr.input.fieldStrength.map { $0.grade.rawValue + " · полевая оценка" }), number(rmr.input.strengthMPa), number(rmr.input.spacingMeters)]
                 row += ["strength", "rqd", "spacing", "condition", "groundwater"].map { .integer(calculation?.components[$0]) }
-                row += [text(categories), text(rmr.missing.joined(separator: ", ")), text("Не рассчитан")]
+                row += [text(categories), text(rmr.missing.joined(separator: ", ")), .integer(calculation?.adjustedValue),
+                        .integer(calculation?.orientationAdjustment), text(calculation?.adjustedRockClass),
+                        text(rmr.input.application?.rawValue), text(rmr.input.orientationFavorability?.rawValue), text(rmr.orientationStatus)]
                 ratings.rows.append(row)
             }
         }

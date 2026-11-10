@@ -6,13 +6,14 @@ struct MappingRatingsForm: View {
     @Binding var gsi: GSIAssessment?
     @Binding var regulatory: RegulatoryFieldCategories
     let focus: FocusState<Bool>.Binding
+    var savedRMR: RMR89Assessment? = nil
     var body: some View {
         Section("Рейтинги массива") {
             DisclosureGroup("Barton Q") {
                 BartonQForm(input: $q, focus: focus)
             }
-            DisclosureGroup("RMR89 · базовый рейтинг") {
-                RMR89Form(input: $rmr, focus: focus)
+            DisclosureGroup("RMR89 · классификация массива") {
+                RMR89Form(input: $rmr, focus: focus, saved: savedRMR)
             }
             DisclosureGroup("Регламент · прочность и стенки") {
                 Picker("A1 · Полевая прочность", selection: $regulatory.strength) {
@@ -229,12 +230,14 @@ struct QCalculationText: View {
 private struct RMR89Form: View {
     @Binding var input: RMR89Input
     let focus: FocusState<Bool>.Binding
+    let saved: RMR89Assessment?
+    private var unchanged: RMR89Assessment? { saved?.input == input ? saved : nil }
     var body: some View {
         Picker("Метод прочности", selection: Binding(get: { input.strengthTest }, set: {
             guard input.strengthTest != $0 else { return }
             input.strengthTest = $0
             input.fieldStrength = nil
-            if $0 == .fieldEstimate { input.strengthMPa = "" }
+            input.strengthMPa = ""
             if input.basicSelections != nil { input.basicSelections?["strength"] = nil }
         })) {
             Text("Не указано").tag(nil as RMRStrengthTest?)
@@ -253,22 +256,35 @@ private struct RMR89Form: View {
                 }.pickerStyle(.menu).accessibilityIdentifier("rmrFieldStrength")
             } else { category(parameter) }
         }
-        if let infill = input.basicSelections?["infill"], infill != "infill-0" {
-            Text("Заполнитель влияет на шероховатость: выберите общее состояние по A.4.").font(.caption)
-            category(.overallCondition)
-        }
+        category(.overallCondition)
+        Text("A.4 заменяет сумму компонентов диаграммы E. При наличии заполнителя выберите строку A.4, если подходит её полное описание.").font(.caption)
         if input.strengthTest == .pointLoadIs50 {
             Text("Is(50) <1 МПа: требуется UCS. Пересчёт Is(50) в UCS не выполняется.").font(.caption)
         }
-        switch Result(catching: { try input.basicEvaluation() }) {
-        case .success(let result):
-            if let value = result.value {
-                Text("RMR89 (базовый): \(value)").font(.headline).accessibilityIdentifier("rmrBasicResult")
-                Text("Класс массива: \(result.rockClass ?? "—")")
-            } else { Text("Для расчёта: \(result.missing.joined(separator: ", "))").font(.caption) }
-        case .failure(let error): Text(error.localizedDescription).font(.caption).foregroundStyle(.orange)
+        DisclosureGroup("Поправка на ориентацию · таблица 4.1 B") {
+            Picker("Инженерное применение", selection: Binding(get: { input.application }, set: {
+                guard $0 != input.application else { return }
+                input.application = $0
+                input.orientationFavorability = nil
+            })) {
+                Text("Не указано").tag(nil as RMREngineeringApplication?)
+                ForEach(RMREngineeringApplication.allCases, id: \.self) { Text($0.title).tag(Optional($0)) }
+            }
+            Picker("Категория ориентации", selection: $input.orientationFavorability) {
+                Text("Не указана").tag(nil as RMR89OrientationFavorability?)
+                ForEach(RMR89OrientationFavorability.allCases, id: \.self) { Text($0.title).tag(Optional($0)) }
+            }.disabled(input.application == nil)
+            RatingField("Ориентация и обоснование категории", text: $input.orientationDescription, id: "rmrOrientation", focus: focus)
+            Text("Для тоннелей используйте таблицу 4.2: простирание относительно оси, падение и направление проходки. Для оснований и склонов укажите источник инженерной оценки.").font(.caption)
         }
-        Text("RMR с поправкой на ориентацию: не рассчитан.").font(.caption)
+        if let unchanged {
+            RMR89CalculationText(result: unchanged.calculation, missing: unchanged.missing, orientationStatus: unchanged.orientationStatus)
+        } else {
+            switch Result(catching: { try input.basicEvaluation() }) {
+            case .success(let result): RMR89CalculationText(result: result, missing: result.missing, orientationStatus: result.orientationStatus)
+            case .failure(let error): Text(error.localizedDescription).font(.caption).foregroundStyle(.orange)
+            }
+        }
         Picker("JCond76 · отдельно от RMR89", selection: Binding(get: { input.jcond76?.category }, set: { input.jcond76 = $0.map(JCond76Assessment.init) })) {
             Text("Не выбран").tag(nil as JCond76Category?)
             ForEach(JCond76Category.allCases, id: \.self) { category in Text("\(category.title) · \(category.rating)").tag(Optional(category)) }
@@ -292,11 +308,6 @@ private struct RMR89Form: View {
             RatingField("Подземные воды — описание условий", text: $input.groundwater, id: "rmrWater", focus: focus)
             RatingField("Приток, л/мин на 10 м тоннеля", text: $input.inflowLitersPerMinutePer10m, id: "rmrInflow", focus: focus)
             RatingField("Давление воды / главное напряжение σ1", text: $input.waterPressureRatio, id: "rmrWaterRatio", focus: focus)
-            Picker("Инженерное применение", selection: $input.application) {
-                Text("Не указано").tag(nil as RMREngineeringApplication?)
-                ForEach(RMREngineeringApplication.allCases, id: \.self) { Text($0.title).tag(Optional($0)) }
-            }
-            RatingField("Ориентация: простирание, падение, ось и направление проходки, вид севера", text: $input.orientationDescription, id: "rmrOrientation", focus: focus)
             RatingField("Источник оценки RMR", text: $input.source, id: "rmrSource", focus: focus)
             RatingField("Автор оценки RMR", text: $input.assessor, id: "rmrAssessor", focus: focus)
             RatingField("Причина отсутствия данных RMR", text: $input.missingReason, id: "rmrMissingReason", focus: focus)
@@ -306,8 +317,8 @@ private struct RMR89Form: View {
             Text(RMR89Assessment.reference)
             Text("R0–R6 — полевая оценка интервала прочности по таблице 6 регламента, без подстановки точного UCS. JCond76 — Bieniawski (1976), таблица 2 в Hoek, Carter & Diederichs (2013); в базовый RMR89 не добавляется.")
             Link("Источник JCond76 · таблица 2", destination: URL(string: "https://www.rocscience.com/assets/resources/learning/hoek/Quantification-of-the-GSI-Chart-2013.pdf")!)
-            Text("Таблицы A, C, E. Предварительный базовый рейтинг: прочность + RQD + расстояние + состояние + вода. Категории выбираются явно; общая граница диапазонов требует выбора инженера. При заполнителе используется A.4 вместо суммы E. Для ровно 5 мм проверьте общее состояние по A.4.")
-            Text("Оценка состояния относится к определяющей системе трещин. Шероховатость породы и свойства заполнителя не взаимозаменяемы. Поправки для тоннелей, оснований и склонов не применяются. Рекомендации по крепи и механической устойчивости не рассчитываются.")
+            Text("Базовый рейтинг: прочность + RQD + расстояние + состояние + вода. Категории выбираются явно. При общей границе диапазонов категорию выбирает инженер. Приток на 10 м тоннеля и отношение давления к σ1 проверяются по той же строке A.5.")
+            Text("Оценка состояния относится к определяющей системе трещин. Поправка берётся по выбранной категории и типу применения. Рекомендации по крепи и механической устойчивости не рассчитываются.")
         }.font(.caption)
     }
     private func category(_ parameter: RMR89Parameter) -> some View {
@@ -323,7 +334,7 @@ private struct RMR89Form: View {
             input.basicSelections = selections
         })) {
             Text("Не указано").tag("")
-            ForEach(parameter.choices(test: input.strengthTest).filter { parameter != .overallCondition || $0.rating <= 10 }) { choice in
+            ForEach(parameter.choices(test: input.strengthTest, historical: unchanged?.usesHistoricalMethod == true)) { choice in
                 let label = switch parameter {
                 case .persistence: "\(choice.title) м"
                 case .aperture:
@@ -336,6 +347,41 @@ private struct RMR89Form: View {
     }
 
 }
+
+struct RMR89CalculationText: View {
+    let result: RMR89BasicEvaluation?
+    let missing: [String]
+    let orientationStatus: String
+
+    var body: some View {
+        if let value = result?.value {
+            Text("RMR89 (базовый): \(value)").font(.headline).accessibilityIdentifier("rmrBasicResult")
+            if let rockClass = result?.rockClass { Text("Класс массива: \(rockClass)") }
+        } else {
+            Text("Базовый RMR: не рассчитан.").accessibilityIdentifier("savedRMRUnavailable")
+            if !missing.isEmpty { Text("Для расчёта: \(missing.joined(separator: ", "))").font(.caption) }
+        }
+        if let correction = result?.orientationAdjustment { LabeledContent("Поправка на ориентацию", value: String(correction)) }
+        if let adjusted = result?.adjustedValue {
+            LabeledContent("RMR89 с поправкой", value: String(adjusted))
+            if let rockClass = result?.adjustedRockClass { Text("Класс с поправкой: \(rockClass)") }
+        }
+        Text(orientationStatus).font(.caption)
+    }
+}
+
+extension RMR89OrientationFavorability {
+    var title: String {
+        switch self {
+        case .veryFavorable: return "Очень благоприятная"
+        case .favorable: return "Благоприятная"
+        case .fair: return "Средняя"
+        case .unfavorable: return "Неблагоприятная"
+        case .veryUnfavorable: return "Очень неблагоприятная"
+        }
+    }
+}
+
 private struct RatingField: View {
     let title: String
     @Binding var text: String

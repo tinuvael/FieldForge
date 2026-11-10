@@ -231,8 +231,11 @@ enum ExchangeObservationProposal {
                 try q?.validate()
             } else if family == "RMR89" {
                 let input = try object(RMR89Input.self, json), old = rmr
-                let revised = try RMR89Assessment(input: input, now: old?.assessedAt ?? baseline.exportedAt)
-                guard revised.method == row["method"], old == nil || revised.method == old?.method,
+                let method = row["method", default: ""]
+                let revised: RMR89Assessment
+                if let old, old.input == input { revised = old }
+                else { revised = try RMR89Assessment(input: input, now: old?.assessedAt ?? baseline.exportedAt, method: old?.method) }
+                guard revised.method == method, old == nil || revised.method == old?.method,
                       kind == (revised.calculation == nil ? "RMR89-input-only" : "RMR89-basic") else { throw unsupported("Метод/kind RMR нельзя переопределить.") }
                 rmr = revised; try rmr?.validate()
             } else {

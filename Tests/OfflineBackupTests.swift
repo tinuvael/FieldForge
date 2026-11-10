@@ -42,12 +42,13 @@ import UniformTypeIdentifiers
             DispatchQueue.global().async { semaphore.wait(); continuation.resume() }
         }
     }
-    private func seed() throws -> Fixture {
+    private func seed(rmr89: RMR89Input? = nil) throws -> Fixture {
         let root = try directory()
         let (_, initial, first) = try P33RevisionTests().seed(includeHistoricalJ5: true); var w = initial
         for i in 1...2 {
             var edit = try w.correction(for: first.id); edit.reason = "Correction \(i)"; edit.fields.notes = "Revision \(i)"
             if i == 1 {
+                if let rmr89 { edit.fields.rmr89 = rmr89 }
                 for id in [JointSetIdentifier.J3, .J4] {
                     var set = JointSetDraft(identifier: id)
                     set.representative = ManualOrientationInput(dipAngleText: "32.123456789", dipDirectionText: "150", reference: .gridNorth)
@@ -412,7 +413,10 @@ extension OfflineBackupTests {
     private enum RestoreInterruption: Error { case crash }
 
     func testRestoreRoundTripExactEvidenceTwoProjectsAndRetainedProtection() async throws {
-        let f = try seed(), backup = try await package(f); defer { backup.files.cleanup() }
+        var rmr = FinalFieldPolishTests.referenceInput()
+        rmr.application = .tunnelsAndMines; rmr.orientationFavorability = .fair
+        rmr.orientationDescription = "Strike perpendicular, 60° against drive"
+        let f = try seed(rmr89: rmr), backup = try await package(f); defer { backup.files.cleanup() }
         let live = try await restoreLive(parent: f.root)
         let source = try live.measurements.backupSource()
         let preview = try await Task.detached { try OfflineRestore.prepare(backup.files.urls[0]) }.value
@@ -425,6 +429,8 @@ extension OfflineBackupTests {
         let recovery = pending.protection
         let reopened = try MappingWorkflow(store: FileMappingStore(url: live.url.appendingPathComponent(OfflineRestore.mappingName)))
         XCTAssertEqual(reopened.journal, f.journal)
+        XCTAssertEqual(reopened.journal.revisions.last?.snapshot.ratings?.rmr89?.input, rmr)
+        XCTAssertEqual(reopened.journal.revisions.last?.snapshot.ratings?.rmr89?.calculation?.adjustedValue, 59)
         XCTAssertEqual(reopened.journal.revisions.last?.snapshot.geology?.jointSets.count, 5)
         let originalJ5 = try XCTUnwrap(reopened.journal.observations.first?.geology?.jointSets.first { $0.identifier == .J5 })
         XCTAssertEqual(originalJ5.measurementIDs.count, 2)

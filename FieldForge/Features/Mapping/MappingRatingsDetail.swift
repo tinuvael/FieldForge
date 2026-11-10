@@ -36,18 +36,15 @@ struct MappingRatingsDetail: View {
                 }
             } else { Text("Barton Q: исходные данные не вводились. Недостаточно данных для расчёта.") }
             if let rmr = ratings?.rmr89 {
-                DisclosureGroup("RMR89 · базовый рейтинг") {
+                DisclosureGroup("RMR89 · классификация массива") {
                     Text(rmr.method).font(.caption)
                     Text(RMR89Assessment.reference).font(.caption)
                     Text("Оценено: \(MeasurementDateText.format(rmr.assessedAt, detailed: true)) · ревизия \(rmr.revision)").font(.caption)
-                    if let calculation = rmr.calculation, let rating = calculation.value {
-                        Text("RMR89 (базовый): \(rating)").font(.headline)
-                        Text("Класс массива: \(calculation.rockClass ?? "—")")
-                    } else { Text("Базовый RMR: не рассчитан.").accessibilityIdentifier("savedRMRUnavailable") }
+                    RMR89CalculationText(result: rmr.calculation, missing: rmr.missing, orientationStatus: rmr.orientationStatus)
                     ForEach(RMR89Parameter.allCases, id: \.self) { parameter in
                         if let selected = rmr.input.basicSelections?[parameter.rawValue],
-                           let choice = parameter.choices(test: rmr.input.strengthTest).first(where: { $0.id == selected }) {
-                            value(parameter.title, "\(choice.title) · \(choice.rating) балл.")
+                           let choice = parameter.choices(test: rmr.input.strengthTest, historical: rmr.usesHistoricalMethod).first(where: { $0.id == selected }) {
+                            value("Категория · \(parameter.title)", "\(choice.title) · \(choice.rating) балл.")
                         }
                     }
                     if let field = rmr.input.fieldStrength { value("Полевая прочность", "\(field.grade.rawValue) · \(field.grade.interval) МПа · \(field.rating) балл.") }
@@ -61,9 +58,8 @@ struct MappingRatingsDetail: View {
                     value("Подземные воды", rmr.input.groundwater); value("Приток, л/мин на 10 м", rmr.input.inflowLitersPerMinutePer10m)
                     value("Давление воды / σ1", rmr.input.waterPressureRatio)
                     value("Инженерное применение", rmr.input.application?.title ?? ""); value("Ориентация", rmr.input.orientationDescription)
+                    value("Категория ориентации", rmr.input.orientationFavorability?.title ?? "")
                     value("Источник оценки", rmr.input.source); value("Автор", rmr.input.assessor); value("Причина отсутствия данных", rmr.input.missingReason)
-                    Text("RMR с поправкой на ориентацию: не рассчитан.")
-                    Text("Отсутствуют: \(rmr.missing.joined(separator: ", "))").font(.caption)
                 }
             } else { Text("RMR89: исходные данные не вводились.") }
             if let regulatory = ratings?.regulatory, !regulatory.isEmpty {
