@@ -8,7 +8,7 @@ import zlib
 
 @MainActor final class MappingExchangePreviewTests: XCTestCase {
     private let time = Date(timeIntervalSinceReferenceDate: 721234567.1234567)
-    private func id(_ n: Int) -> UUID { UUID(uuidString: String(format: "10000000-0000-4000-8000-%012d", n))! }
+    private func id(_ n: Int) -> UUID { UUID(uuidString: String(format: "1A000000-0000-4000-8000-%012d", n))! }
     private func fixture(longOriginal: Bool = false, includeRegulatory: Bool = false, rmr89: RMR89Input? = nil) throws -> MappingJournal {
         var j = MappingJournal()
         j.projects = [.init(id: id(1), name: "Проект А"), .init(id: id(2), name: "Проект Б")]
@@ -71,6 +71,424 @@ import zlib
         table.rows.append(table.columns.map { values[$0]! }); tables[tables.firstIndex { $0.name == "points" }!] = table
         return .init(id: export.id, snapshotAt: export.snapshotAt, tables: tables)
     }
+    private func patched<T: Codable>(_ original: T, fields: [String: String]) throws -> T {
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(MappingExchangeExport.json(original).utf8)) as? [String: Any])
+        for (key, value) in fields { object[key] = try JSONSerialization.jsonObject(with: Data(value.utf8), options: .fragmentsAllowed) }
+        return try JSONDecoder().decode(T.self, from: JSONSerialization.data(withJSONObject: object))
+    }
+
+    private func bytes(_ export: MappingExchangeExport) throws -> Data {
+        let files = try export.write()
+        defer { files.cleanup() }
+        return try Data(contentsOf: files.urls[0])
+    }
+
+    private func makeOwner(_ journal: MappingJournal) async throws -> (URL, MappingStorageOwner, MappingCommittedSnapshot) {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("mapping.json")
+        try FileMappingStore(url: file).save(journal)
+        let owner = MappingStorageOwner()
+        let snapshot = try await owner.open { FileMappingStore(url: file) }
+        return (root, owner, snapshot.committed)
+    }
+
+    private func correction(_ workbook: MappingExchangeExport, row: Int = 0, note: String) -> MappingExchangeExport {
+        edit(workbook, sheet: "points", row: row, values: ["notes": note, "correction_reason": "Проверено инженером"])
+    }
+
+    private func row(_ workbook: MappingExchangeExport, sheet: String, column: String, value: String) throws -> Int {
+        let table = try XCTUnwrap(workbook.tables.first { $0.name == sheet })
+        let index = try XCTUnwrap(table.columns.firstIndex(of: column))
+        return try XCTUnwrap(table.rows.firstIndex { if case .text(value) = $0[index] { return true }; return false })
+    }
+
+    private func threePoints(_ journal: MappingJournal) throws -> MappingJournal {
+        let store = MappingTests.MemoryStore()
+        store.value = journal
+        var workflow = try MappingWorkflow(store: store)
+        try workflow.requestContext(.init(projectID: id(1), horizonID: id(3), excavationID: id(5)))
+        for (n, picket) in [(60, "2+2"), (61, "2+3")] {
+            workflow.draft = MappingDraft(id: id(n))
+            workflow.draft.picket = picket
+            workflow.draft.notes = "Исходное примечание \(n)"
+            workflow.draft.observedAtOverride = time
+            workflow.draft.timeZoneID = "UTC"
+            try workflow.save(now: time)
+        }
+        return workflow.journal
+    }
+
+    private enum Interrupted: Error { case simulated }
+
+    func testWorkbookBytesRoundTripPreservesPhotosDXFMeasurementsAndAssessmentHistory() async throws {
+        var rmrInput = FinalFieldPolishTests.referenceInput()
+        rmrInput.source = "Original RMR log"
+        var journal = try threePoints(fixture(includeRegulatory: true, rmr89: rmrInput))
+        let dxf = DXFFixtures.drawing("0\nLINE\n5\nAB\n10\n0\n20\n0\n30\n-20\n11\n10\n21\n0\n31\n20\n")
+        let document = try DXFDocument.parse(dxf)
+        let plan = MappingPlanReference(id: id(40), horizonID: id(3), attachmentID: id(41), version: "A",
+            file: .init(originalFilename: "fixture.dxf", sha256: ManagedPlanStore.digest(dxf), byteCount: dxf.count,
+                importedAt: time, units: .meters, crs: "mine grid", axes: "WCS XYZ", unitDeclaration: "userConfirmedAtImport",
+                insertionUnits: document.insertionUnits))
+        journal.plans = [plan]
+        let memory = MappingTests.MemoryStore(); memory.value = journal
+        var workflow = try MappingWorkflow(store: memory)
+        let xy = PlanPoint(x: 2.5, y: 1)
+        var location = try workflow.correction(for: id(7))
+        location.reason = "Положение на плане"
+        try location.fields.selectPlanPoint(xy, plan: plan, elevation: XCTUnwrap(PlanElevationSnap.resolve(xy, document: document, plan: plan).automatic))
+        try workflow.saveCorrection(location, now: time.addingTimeInterval(2))
+        let photoBytes = try P41PhotoTests().image()
+        let attachment = PhotoAttachment(id: id(50), originalFilename: "field.jpg", sha256: ManagedPhotoStore.digest(photoBytes),
+            byteCount: photoBytes.count, format: "public.jpeg", mimeType: "image/jpeg", pixelWidth: 2, pixelHeight: 1,
+            orientation: 1, representation: "Exact original")
+        let photo = PhotoObservation(id: id(51), attachmentID: attachment.id, context: try workflow.journal.photoContext(for: id(7)),
+            source: .files, importedAt: time, capturedAt: nil, captureTimeText: nil, captureTimeProvenance: "unknown", metadata: .init(name: "Original"))
+        let photoOp = PhotoImportOperation(version: 2, photo: photo, attachment: attachment)
+        try workflow.registerPhoto(photoOp)
+        try workflow.correctPhoto(photo.id, baselineRevisionID: nil, metadata: .init(name: "Field caption"), reason: "Photo history")
+        journal = workflow.journal
+
+        let (root, owner, snapshot) = try await makeOwner(journal)
+        let files = ManagedPhotoStore(root: root.appendingPathComponent("photos"))
+        try files.stage(photoBytes, for: photoOp)
+        try files.promote(photoOp)
+        try files.complete(photoOp)
+
+        let original = try XCTUnwrap(snapshot.observation(id: id(7)))
+        var edited = try newPoint(export(journal), token: id(80))
+        let first = try row(edited, sheet: "points", column: "point_id", value: id(7).uuidString)
+        let second = try row(edited, sheet: "points", column: "point_id", value: id(60).uuidString)
+        let third = try row(edited, sheet: "points", column: "point_id", value: id(61).uuidString)
+        edited = correction(edited, row: first, note: "Уточнение по журналу 🪨")
+        edited = edit(edited, sheet: "points", row: first, values: [
+            "position": "face", "interval_start_text": "1+1", "interval_start_m": "11",
+            "interval_end_text": "#CLEAR", "interval_end_m": "#CLEAR", "rock_json": #"{"code":"004","name":"Туф"}"#,
+            "correction_author": "Инженер"])
+        // An added row must not claim plan-derived coordinates from the copied point.
+        let newRow = try row(edited, sheet: "points", column: "client_record_id", value: id(80).uuidString)
+        edited = edit(edited, sheet: "points", row: newRow, values: Dictionary(uniqueKeysWithValues:
+            ["x", "y", "z_m", "xy_units", "crs", "axes", "coordinate_source", "coordinate_provenance", "z_origin", "z_horizon_id",
+             "z_horizon_elevation_m", "z_datum", "plan_id", "z_plan_geometry_json"].map { ($0, "") } +
+             [("has_coordinates", "false"), ("notes", "Новая точка"), ("picket", "3+0"), ("chainage_m", "30")]))
+        edited = correction(edited, row: second, note: "#CLEAR")
+        edited = correction(edited, row: third, note: "Выборочно пропущено")
+
+        edited = edit(edited, sheet: "joint_sets", row: try row(edited, sheet: "joint_sets", column: "joint_set_id", value: id(20).uuidString),
+            values: ["spacing_m": "0.25", "persistence_m": "2.5", "aperture_mm": "0.8", "roughness": "Волнистая", "infill": "Кальцит", "notes": "Проверено"])
+        edited = edit(edited, sheet: "tectonic_structures", values: ["type": "shearZone", "thickness_m": "0.375", "position": "Кровля", "description": "Зона сдвига"])
+
+        let oldRatings = try XCTUnwrap(original.ratings)
+        var q = try XCTUnwrap(oldRatings.bartonQ?.input)
+        q.rqd = "85"
+        for (parameter, category) in [(QParameter.jn, "G"), (.jr, "C"), (.ja, "D"), (.jw, "B"), (.srf, "F")] {
+            var coefficient = q[parameter]
+            coefficient.select(category, parameter: parameter)
+            q[parameter] = coefficient
+        }
+        edited = edit(edited, sheet: "assessments", row: try row(edited, sheet: "assessments", column: "kind", value: "Q"), values:
+            Dictionary(uniqueKeysWithValues: QParameter.allCases.map { ("\($0.rawValue)_text", q[$0].value) } +
+                [("rqd_text", q.rqd), ("input_json", try MappingExchangeExport.json(q))]))
+        var rmr = try XCTUnwrap(oldRatings.rmr89?.input)
+        rmr.rqd = "93"; rmr.spacingMeters = "0.9"
+        rmr.basicSelections?["rqd"] = "rqd-0"; rmr.basicSelections?["spacing"] = "spacing-1"
+        edited = edit(edited, sheet: "assessments", row: try row(edited, sheet: "assessments", column: "kind", value: "RMR89-basic"),
+            values: ["rqd_text": rmr.rqd, "rmr_spacing_m_text": rmr.spacingMeters, "input_json": try MappingExchangeExport.json(rmr)])
+        let previousGSI = try XCTUnwrap(oldRatings.gsi)
+        let gsi = GSIAssessment(selection: previousGSI.selection, lower: 37, upper: 48, finalValue: previousGSI.finalValue, assessedAt: previousGSI.assessedAt)
+        edited = edit(edited, sheet: "assessments", row: try row(edited, sheet: "assessments", column: "kind", value: "GSI"),
+            values: ["input_json": try MappingExchangeExport.json(gsi)])
+
+        // Parse actual ZIP/worksheet bytes with an Excel-style DEFLATE rewrite.
+        let workbookBytes = try zip(parts(edited).sorted { $0.key < $1.key }, deflated: true)
+        let preview = try MappingExchangePreview.prepare(data: workbookBytes, committed: snapshot)
+        XCTAssertEqual(preview.rowsProcessed, 4)
+        XCTAssertEqual(preview.count(.new), 1)
+        XCTAssertEqual(preview.count(.correction), 3, preview.records.map(\.reason).joined(separator: "\n"))
+        XCTAssertFalse(preview.hasBlockingRecords)
+        let chosen: MappingExchangeImport.Selection = .init(accepted: [id(7).uuidString, id(60).uuidString, "new/\(id(80).uuidString)"])
+        let date = time.addingTimeInterval(60)
+        let batch = try MappingExchangeImport.Batch(preview: preview, bytes: workbookBytes, selection: chosen, now: date)
+        let (updated, report) = try await owner.applyExchange(batch)
+        XCTAssertFalse(report.interrupted)
+        XCTAssertEqual(report.count(.applied), 3)
+        XCTAssertEqual(report.count(.skipped), 1)
+        XCTAssertEqual(updated.journal.observations.dropLast(), journal.observations[...])
+        XCTAssertEqual(Array(updated.journal.revisions.prefix(journal.revisions.count)), journal.revisions)
+        XCTAssertEqual(updated.journal.measurements, journal.measurements)
+        XCTAssertEqual(updated.journal.photos, journal.photos)
+        XCTAssertEqual(updated.journal.photoAttachments, journal.photoAttachments)
+        XCTAssertEqual(updated.journal.photoRevisions, journal.photoRevisions)
+        XCTAssertEqual(updated.journal.plans, [plan])
+        XCTAssertEqual(try files.read(attachment), photoBytes)
+        XCTAssertEqual(updated.observation(id: id(80))?.createdAt, date)
+        XCTAssertEqual(updated.observation(id: id(60))?.notes, "")
+        XCTAssertEqual(updated.observation(id: id(61))?.notes, journal.effectiveObservation(id: id(61))?.notes)
+
+        let revised = try XCTUnwrap(updated.observation(id: id(7)))
+        XCTAssertEqual(revised.createdAt, original.createdAt)
+        XCTAssertEqual(revised.coordinates, original.coordinates)
+        XCTAssertEqual(revised.geology?.jointSets.last, original.geology?.jointSets.last)
+        XCTAssertEqual(revised.geology?.jointSets.first?.measurementIDs, original.geology?.jointSets.first?.measurementIDs)
+        XCTAssertEqual(revised.geology?.jointSets.first?.revision, (original.geology?.jointSets.first?.revision ?? 0) + 1)
+        XCTAssertEqual(revised.geology?.jointSets.first?.interpretedAt, date)
+        XCTAssertEqual(revised.geology?.tectonicStructures.first?.orientation, original.geology?.tectonicStructures.first?.orientation)
+        XCTAssertEqual(revised.ratings?.bartonQ?.input, q)
+        XCTAssertEqual(revised.ratings?.bartonQ?.evaluation, try q.fieldEvaluation())
+        XCTAssertEqual(revised.ratings?.bartonQ?.method, oldRatings.bartonQ?.method)
+        XCTAssertEqual(revised.ratings?.rmr89?.method, RMR89Assessment.verifiedVersion)
+        XCTAssertEqual(revised.ratings?.rmr89?.calculation?.value, 76)
+        XCTAssertEqual(revised.ratings?.rmr89?.input.source, "Original RMR log")
+        XCTAssertEqual(revised.ratings?.gsi, gsi)
+        XCTAssertEqual(revised.ratings?.regulatory, oldRatings.regulatory)
+        XCTAssertEqual(updated.latestRevisions[id(7)]?.correctedAt, date)
+        XCTAssertEqual(updated.latestRevisions[id(7)]?.author, "Инженер")
+
+        let reexport = try bytes(export(updated.journal))
+        let reexported = try workbook(ExchangeArchive(data: reexport, limits: .init()).parts)
+        let rows = try XCTUnwrap(reexported.sheets["points"]?.rows)
+        let exported = try XCTUnwrap(rows.first { $0["point_id"] == id(7).uuidString })
+        XCTAssertEqual(exported["notes"], "Уточнение по журналу 🪨")
+        XCTAssertEqual(exported["position"], "face")
+        XCTAssertEqual(exported["interval_start_m"], "11.0")
+        XCTAssertEqual(exported["interval_end_m"], "")
+        XCTAssertEqual(exported["rock_json"], #"{"code":"004","name":"Туф"}"#)
+        XCTAssertEqual(reexported.sheets["joint_sets"]?.rows.first?["persistence_m"], "2.5")
+        XCTAssertEqual(reexported.sheets["joint_sets"]?.rows.first?["aperture_mm"], "0.8")
+        XCTAssertEqual(reexported.sheets["joint_sets"]?.rows.first?["roughness"], "Волнистая")
+        XCTAssertEqual(reexported.sheets["joint_sets"]?.rows.first?["infill"], "Кальцит")
+        XCTAssertEqual(reexported.sheets["joint_sets"]?.rows.first?["notes"], "Проверено")
+        XCTAssertEqual(reexported.sheets["joint_sets"]?.rows.first?["spacing_m"], "0.25")
+        XCTAssertEqual(reexported.sheets["tectonic_structures"]?.rows.first?["type"], "shearZone")
+        XCTAssertEqual(reexported.sheets["tectonic_structures"]?.rows.first?["thickness_m"], "0.375")
+        XCTAssertEqual(reexported.sheets["tectonic_structures"]?.rows.first?["position"], "Кровля")
+        XCTAssertEqual(reexported.sheets["tectonic_structures"]?.rows.first?["description"], "Зона сдвига")
+        let assessments = try XCTUnwrap(reexported.sheets["assessments"]?.rows)
+        XCTAssertEqual(assessments.first { $0["kind"] == "Q" }?["input_json"], try MappingExchangeExport.json(q))
+        XCTAssertEqual(assessments.first { $0["kind"] == "RMR89-basic" }?["input_json"], try MappingExchangeExport.json(rmr))
+        XCTAssertEqual(assessments.first { $0["kind"] == "GSI" }?["input_json"], try MappingExchangeExport.json(gsi))
+        XCTAssertEqual(try MappingExchangePreview.prepare(data: reexport, committed: updated).count(.unchanged), 4)
+
+        let restoredOwner = MappingStorageOwner()
+        let mappingURL = root.appendingPathComponent("mapping.json")
+        let reopened = try await restoredOwner.open { FileMappingStore(url: mappingURL) }
+        let again = try MappingExchangePreview.prepare(data: workbookBytes, committed: reopened.committed)
+        let retry = try MappingExchangeImport.Batch(preview: again, bytes: workbookBytes, selection: chosen, now: date.addingTimeInterval(5))
+        let (stable, repeated) = try await restoredOwner.applyExchange(retry)
+        XCTAssertEqual(repeated.count(.alreadyApplied), 3)
+        XCTAssertEqual(stable.journal, updated.journal)
+    }
+
+    func testBatchInterruptionAndReopenFinishOnlyUncommittedRows() async throws {
+        let journal = try threePoints(fixture())
+        let (root, owner, before) = try await makeOwner(journal)
+        var workbook = try export(journal)
+        let ids = [id(7), id(60), id(61)]
+        for pointID in ids {
+            workbook = correction(workbook, row: try row(workbook, sheet: "points", column: "point_id", value: pointID.uuidString),
+                                  note: "Проверено \(pointID)")
+        }
+        let bytes = try bytes(workbook)
+        let preview = try MappingExchangePreview.prepare(data: bytes, committed: before)
+        let selection = MappingExchangeImport.Selection(accepted: Set(ids.map(\.uuidString)))
+        let date = time.addingTimeInterval(30)
+        let batch = try MappingExchangeImport.Batch(preview: preview, bytes: bytes, selection: selection, now: date)
+        let interruptedID = id(60)
+        let (partial, report) = try await owner.applyExchange(batch) { operation, checkpoint in
+            if operation.target.observationID == interruptedID, case .afterIntent = checkpoint { throw Interrupted.simulated }
+        }
+        XCTAssertTrue(report.interrupted)
+        XCTAssertEqual(report.count(.applied), 1)
+        XCTAssertEqual(report.count(.pending), 1)
+        XCTAssertEqual(report.count(.notProcessed), 1)
+        XCTAssertEqual(partial.journal.revisions.count, journal.revisions.count + 1)
+        let recovered = MappingStorageOwner()
+        let mappingURL = root.appendingPathComponent("mapping.json")
+        let reopened = try await recovered.open { FileMappingStore(url: mappingURL) }
+        let rechecked = try MappingExchangePreview.prepare(data: bytes, committed: reopened.committed)
+        let retry = try MappingExchangeImport.Batch(preview: rechecked, bytes: bytes, selection: selection, now: date.addingTimeInterval(30))
+        let (completed, result) = try await recovered.applyExchange(retry)
+        XCTAssertFalse(result.interrupted)
+        XCTAssertEqual(result.count(.alreadyApplied), 1)
+        XCTAssertEqual(result.count(.applied), 2)
+        XCTAssertEqual(completed.latestRevisions[id(60)]?.correctedAt, date)
+        XCTAssertEqual(completed.latestRevisions[id(61)]?.correctedAt, date.addingTimeInterval(30))
+        XCTAssertEqual(completed.journal.revisions.count, journal.revisions.count + 3)
+        let overlapping = try MappingExchangeImport.Batch(preview: preview, bytes: bytes, selection: selection, now: date.addingTimeInterval(40))
+        let (stable, overlappingReport) = try await recovered.applyExchange(overlapping)
+        XCTAssertFalse(overlappingReport.interrupted)
+        XCTAssertEqual(overlappingReport.count(.alreadyApplied), 3)
+        XCTAssertEqual(stable.journal, completed.journal)
+    }
+
+    func testRejectPendingWorkbookConflictLeavesLocalRevisionIntact() async throws {
+        let journal = try fixture()
+        let (_, owner, before) = try await makeOwner(journal)
+        let file = try bytes(correction(export(journal), note: "Excel"))
+        let preview = try MappingExchangePreview.prepare(data: file, committed: before)
+        let pointID = id(7), date = time.addingTimeInterval(30)
+        let batch = try MappingExchangeImport.Batch(preview: preview, bytes: file,
+            selection: .init(accepted: [pointID.uuidString]), now: date)
+        let (partial, result) = try await owner.applyExchange(batch) { _, checkpoint in
+            if case .afterIntent = checkpoint { throw Interrupted.simulated }
+        }
+        XCTAssertEqual(result.count(.pending), 1)
+        let (changed, _) = try await owner.transaction(snapshot: MappingWorkflow.Snapshot(committed: partial, draft: .init(),
+            pendingContext: nil, suspendedDrafts: [])) { workflow in
+            var local = try workflow.correction(for: pointID)
+            local.reason = "Полевое исправление"
+            local.fields.notes = "Локально"
+            try workflow.saveCorrection(local, now: date)
+        }
+        let stale = try MappingExchangePreview.prepare(data: file, committed: changed.committed)
+        XCTAssertEqual(stale.count(.conflict), 1)
+        XCTAssertEqual(stale.records.first?.receipt?.outcome, .pending)
+        let decision = try MappingExchangeImport.Batch(preview: stale, bytes: file,
+            selection: .init(rejectedPending: [pointID.uuidString]), now: date)
+        let (retained, report) = try await owner.applyExchange(decision)
+        XCTAssertEqual(report.count(.rejected), 1)
+        XCTAssertEqual(retained.journal.revisions, changed.journal.revisions)
+        let pending = try await owner.importRecovery()
+        XCTAssertTrue(pending.isEmpty)
+    }
+
+    func testQHistoricalMethodRoundTripsWithoutChangingMethodOrSource() async throws {
+        var journal = try fixture(includeRegulatory: true)
+        let point = try XCTUnwrap(journal.effectiveObservation(id: id(7)))
+        var ratings = try XCTUnwrap(point.ratings)
+        let old = try XCTUnwrap(ratings.bartonQ)
+        let documented = try BartonQAssessment(input: old.input, now: old.assessedAt, method: QMethod.version)
+        ratings = MappingRatings(bartonQ: documented, rmr89: ratings.rmr89, gsi: ratings.gsi, regulatory: ratings.regulatory)
+        let updated = try patched(point, fields: ["ratings": MappingExchangeExport.json(ratings)])
+        journal.revisions[0] = try patched(journal.revisions[0], fields: ["snapshot": MappingExchangeExport.json(updated)])
+        let (_, owner, before) = try await makeOwner(journal)
+        let original = try export(journal)
+        let row = try row(original, sheet: "assessments", column: "kind", value: "Q")
+        let workbook = edit(correction(original, note: "Документировано"), sheet: "assessments", row: row, values: ["rqd_text": "87"])
+        let data = try bytes(workbook)
+        let preview = try MappingExchangePreview.prepare(data: data, committed: before)
+        let batch = try MappingExchangeImport.Batch(preview: preview, bytes: data,
+            selection: .init(accepted: [id(7).uuidString]), now: time.addingTimeInterval(30))
+        let (after, report) = try await owner.applyExchange(batch)
+        XCTAssertEqual(report.count(.applied), 1)
+        let reexported = try self.workbook(ExchangeArchive(data: bytes(export(after.journal)), limits: .init()).parts)
+        let q = try XCTUnwrap(reexported.sheets["assessments"]?.rows.first { $0["kind"] == "Q" })
+        XCTAssertEqual(q["method"], QMethod.version)
+        XCTAssertEqual(q["rqd_text"], "87")
+        let latest = try XCTUnwrap(after.observation(id: id(7))?.ratings?.bartonQ)
+        XCTAssertEqual(latest.input.assessmentSource, documented.input.assessmentSource)
+        XCTAssertEqual(latest.evaluation, try latest.input.evaluate())
+    }
+
+    func testConfirmRechecksFileObservationAndParentContext() async throws {
+        let journal = try threePoints(fixture())
+        let (_, owner, original) = try await makeOwner(journal)
+        var workbook = try export(journal)
+        for pointID in [id(7), id(60)] {
+            workbook = correction(workbook, row: try row(workbook, sheet: "points", column: "point_id", value: pointID.uuidString), note: "Excel")
+        }
+        let edited = try bytes(workbook)
+        let preview = try MappingExchangePreview.prepare(data: edited, committed: original)
+        let selection = MappingExchangeImport.Selection(accepted: [id(7).uuidString, id(60).uuidString])
+        XCTAssertThrowsError(try MappingExchangeImport.Batch(preview: preview, bytes: edited + Data([0]), selection: selection, now: time))
+        let batch = try MappingExchangeImport.Batch(preview: preview, bytes: edited, selection: selection, now: time)
+
+        let pointID = id(7), date = time
+        let (changed, _) = try await owner.transaction(snapshot: MappingWorkflow.Snapshot(committed: original, draft: .init(),
+            pendingContext: nil, suspendedDrafts: [])) { workflow in
+            var local = try workflow.correction(for: pointID)
+            local.reason = "Изменено локально"
+            local.fields.notes = "Локальное значение"
+            try workflow.saveCorrection(local, now: date)
+        }
+        let conflict = try MappingExchangePreview.prepare(data: edited, committed: changed.committed)
+        let conflictingRow = try XCTUnwrap(conflict.records.first { $0.classification == .conflict })
+        XCTAssertEqual(conflictingRow.changes.first { $0.field == "notes" }?.after, "Excel")
+        let (updated, report) = try await owner.applyExchange(batch)
+        XCTAssertEqual(report.count(.rejected), 1)
+        XCTAssertEqual(report.count(.applied), 1)
+        XCTAssertEqual(updated.observation(id: pointID)?.notes, "Локальное значение")
+        XCTAssertEqual(updated.observation(id: id(60))?.notes, "Excel")
+
+        let nextWorkbook = try correction(export(updated.journal), note: "После смены контекста")
+        let nextBytes = try bytes(nextWorkbook)
+        let nextPreview = try MappingExchangePreview.prepare(data: nextBytes, committed: updated)
+        let nextBatch = try MappingExchangeImport.Batch(preview: nextPreview, bytes: nextBytes,
+            selection: .init(accepted: [pointID.uuidString]), now: date)
+        let horizonID = id(3)
+        _ = try await owner.transaction(snapshot: changed) { workflow in
+            var next = workflow.journal
+            let index = try XCTUnwrap(next.horizons.firstIndex { $0.id == horizonID })
+            let horizon = next.horizons[index]
+            next.horizons[index] = .init(id: horizon.id, projectID: horizon.projectID, name: "Новый горизонт",
+                elevationMeters: horizon.elevationMeters, elevationDatum: horizon.elevationDatum)
+            try workflow.commit(next)
+        }
+        let (retained, rejected) = try await owner.applyExchange(nextBatch)
+        XCTAssertEqual(rejected.count(.rejected), 1)
+        XCTAssertEqual(retained.observation(id: pointID)?.notes, "Локальное значение")
+        XCTAssertTrue(rejected.rows.contains { $0.status == .rejected && $0.detail.contains("контекст") })
+    }
+
+    func testWorkbookMetadataSheetsAndFieldSpecificValidation() throws {
+        let journal = try fixture(rmr89: FinalFieldPolishTests.referenceInput())
+        let base = try export(journal)
+        let qRow = try row(base, sheet: "assessments", column: "kind", value: "Q")
+        let rmrRow = try row(base, sheet: "assessments", column: "kind", value: "RMR89-basic")
+        let editable = correction(base, note: "Уточнение")
+        let gsiRow = try row(base, sheet: "assessments", column: "kind", value: "GSI")
+        let gsi = try XCTUnwrap(journal.effectiveObservation(id: id(7))?.ratings?.gsi)
+        let outOfRangeGSI = GSIAssessment(selection: gsi.selection, lower: 101, upper: 102, finalValue: nil, assessedAt: gsi.assessedAt)
+        var wrongBand = FinalFieldPolishTests.referenceInput()
+        wrongBand.basicSelections?["rqd"] = "unrecognized"
+        let invalid = [
+            edit(editable, sheet: "assessments", row: gsiRow, values: ["input_json": try MappingExchangeExport.json(outOfRangeGSI)]),
+            edit(editable, sheet: "assessments", row: rmrRow, values: ["input_json": try MappingExchangeExport.json(wrongBand)]),
+            edit(editable, sheet: "assessments", row: qRow, values: ["rqd_text": "101"]),
+            edit(editable, sheet: "assessments", row: rmrRow, values: ["rmr_spacing_m_text": "0.05"]),
+            edit(editable, sheet: "tectonic_structures", values: ["type": "unknown"]),
+            edit(editable, sheet: "joint_sets", values: ["aperture_mm": "-0.1"])
+        ]
+        for version in invalid {
+            let result = try preview(version, journal: journal)
+            XCTAssertEqual(result.count(.invalid), 1, result.records.map(\.reason).joined(separator: ", "))
+            XCTAssertFalse(result.records.contains(where: \.canApply))
+            XCTAssertTrue(result.records[0].location.contains("строка 2"))
+        }
+        let knownKey = try row(base, sheet: "Формат", column: "key", value: "workbook_id")
+        XCTAssertThrowsError(try preview(edit(base, sheet: "Формат", row: knownKey, values: ["value": id(88).uuidString]), journal: journal))
+        XCTAssertThrowsError(try preview(edit(base, sheet: "Колонки", values: ["policy": "Другой текст"]), journal: journal))
+        for sheet in ["Формат", "assessments"] {
+            let missing = MappingExchangeExport(id: base.id, snapshotAt: base.snapshotAt, tables: base.tables.filter { $0.name != sheet })
+            XCTAssertThrowsError(try preview(missing, journal: journal))
+        }
+        var tables = base.tables
+        let points = try XCTUnwrap(tables.firstIndex { $0.name == "points" })
+        tables[points].rows.append(tables[points].rows[0])
+        let duplicate = edit(.init(id: base.id, snapshotAt: base.snapshotAt, tables: tables), sheet: "points", row: 1,
+            values: ["point_id": id(7).uuidString.lowercased(), "notes": "Конфликтующий дубликат"])
+        let ambiguous = try preview(duplicate, journal: journal)
+        XCTAssertEqual(ambiguous.count(.invalid), 1)
+        XCTAssertEqual(ambiguous.records.first?.location, "points · строки 2, 3")
+        XCTAssertFalse(ambiguous.records.contains(where: \.canApply))
+    }
+
+    func testBlankAndClearRemainDistinctAndLegacyWorkbookIsReadable() throws {
+        let journal = try fixture()
+        let base = try export(journal)
+        let blank = edit(base, sheet: "points", values: ["notes": ""])
+        XCTAssertEqual(try preview(blank, journal: journal).count(.unchanged), 1)
+        XCTAssertEqual(try preview(correction(base, note: "#CLEAR"), journal: journal).records[0].proposed?.notes, "")
+        var tables = base.tables
+        let format = try XCTUnwrap(tables.firstIndex { $0.name == "Формат" })
+        tables[format].rows = Array(tables[format].rows.prefix(7)) + MappingExchangeExport.legacyInstructions.map { [.text($0.0), .text($0.1)] }
+        let guide = try XCTUnwrap(tables.firstIndex { $0.name == "Колонки" })
+        tables[guide] = MappingExchangeExport.legacyGuide
+        XCTAssertEqual(try preview(.init(id: base.id, snapshotAt: base.snapshotAt, tables: tables), journal: journal).count(.unchanged), 1)
+    }
+
     private func workbook(_ parts: [String: Data], limits: ExchangeLimits = .init()) throws -> ExchangeWorkbook { try .init(parts: parts, limits: limits) }
 
     func testUnmodifiedTwoProjectsExactEvidenceCoordinatesAndRevisionHistory() throws {
@@ -84,12 +502,12 @@ import zlib
             if project == 1 { XCTAssertEqual(base.snapshot.journal.revisions, j.revisions); XCTAssertEqual(base.snapshot.journal.measurements, j.measurements); XCTAssertEqual(base.snapshot.effectiveObservations[0].geology?.jointSets.count, 5) }
         }
     }
-    func testNotesAndManualCoordinatesCorrectionWithoutRounding() throws {
+    func testNotesCorrectionPreservesExactCoordinates() throws {
         let j = try fixture(), e = try export(j)
-        let edited = edit(e, sheet: "points", values: ["notes": "Новое описание", "x": "123456789.1234568", "correction_reason": "Уточнение"])
+        let edited = edit(e, sheet: "points", values: ["notes": "Новое описание", "correction_reason": "Уточнение"])
         let p = try preview(edited, journal: j)
         XCTAssertEqual(p.count(.correction), 1); XCTAssertFalse(p.hasBlockingRecords)
-        XCTAssertEqual(p.records[0].proposed?.coordinates?.x, 123456789.1234568)
+        XCTAssertEqual(p.records[0].proposed?.coordinates, j.effectiveObservation(id: id(7))?.coordinates)
         XCTAssertTrue(p.records[0].changes.contains { $0.field == "notes" && $0.before.contains("Исправлено") && $0.after == "Новое описание" })
         XCTAssertEqual(p.records[0].proposed?.measurementIDs, j.observations[0].measurementIDs)
     }
@@ -175,7 +593,7 @@ import zlib
         edited = edit(edited, sheet: "points", values: ["correction_reason": "Интерпретация"])
         XCTAssertEqual(try preview(edited, journal: j).count(.correction), 1)
         let disagreement = edit(edited, sheet: "joint_sets", values: ["original_dip_text": "35"])
-        XCTAssertEqual(try preview(disagreement, journal: j).count(.invalid), 1)
+        XCTAssertEqual(try preview(disagreement, journal: j).count(.unsupported), 1)
         let assessment = e.tables.first { $0.name == "assessments" }!
         let qRow = assessment.rows.firstIndex { row in if case .text("Q") = row[1] { return true }; return false }!
         var q = j.effectiveObservations[0].ratings!.bartonQ!.input; q.rqd = "85"
@@ -215,6 +633,32 @@ import zlib
         let old = try MappingExchangePreview.prepare(workbook: workbook(original), committed: .init(j))
         XCTAssertEqual(p.count(.unchanged), 1); XCTAssertFalse(p.hasBlockingRecords); XCTAssertEqual(p.proposalDigest, old.proposalDigest)
     }
+    func testExcelAutoFilterAndSaveMetadataAllowOnlySafeWorkbookStructures() throws {
+        let journal = try fixture(), exported = try export(journal)
+        var package = try parts(exported)
+        let path = "xl/workbook.xml"
+        let original = String(decoding: package[path]!, as: UTF8.self)
+        let metadata = """
+        <mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice Requires="x15"><x15ac:absPath xmlns:x15ac="http://schemas.microsoft.com/office/spreadsheetml/2010/11/ac" url="/unused/location/"/></mc:Choice></mc:AlternateContent>
+        <xr:revisionPtr xmlns:xr="http://schemas.microsoft.com/office/spreadsheetml/2014/revision" revIDLastSave="0"/>
+        """
+        let filter = "<definedNames><definedName name=\"_xlnm._FilterDatabase\" localSheetId=\"0\" hidden=\"1\">'Формат'!$A$1:$B$15</definedName></definedNames>"
+        let features = """
+        <extLst><ext uri="{B58B0392-4F1F-4190-BB64-5DF3571DCE5F}" xmlns:xcalcf="http://schemas.microsoft.com/office/spreadsheetml/2018/calcfeatures"><xcalcf:calcFeatures><xcalcf:feature name="microsoft.com:RD"/></xcalcf:calcFeatures></ext></extLst>
+        """
+        let saved = original.replacingOccurrences(of: "<sheets>", with: metadata + "<sheets>")
+            .replacingOccurrences(of: "</workbook>", with: filter + features + "</workbook>")
+        package[path] = Data(saved.utf8)
+        let savedBytes = try zip(package.sorted { $0.key < $1.key }, deflated: true)
+        XCTAssertEqual(try MappingExchangePreview.prepare(data: savedBytes, committed: .init(journal)).count(.unchanged), 1)
+        for invalid in [saved.replacingOccurrences(of: "'Формат'!$A$1:$B$15", with: "[Other.xlsx]Sheet!$A$1"),
+                        saved.replacingOccurrences(of: "_xlnm._FilterDatabase", with: "UnrecognizedName"),
+                        saved.replacingOccurrences(of: "B58B0392-4F1F-4190-BB64-5DF3571DCE5F", with: "not-supported")] {
+            package[path] = Data(invalid.utf8)
+            XCTAssertThrowsError(try workbook(package))
+        }
+    }
+
     func testFormulaCachedResultNumericDateUnsupportedCellsAndExternalLinksRejected() throws {
         let e = try export(fixture()), original = try parts(e), path = "xl/worksheets/sheet7.xml"
         for value in ["<c r=\"A2\"><f>1+1</f><v>2</v></c>", "<c r=\"A2\" t=\"n\"><v>123456789123456</v></c>", "<c r=\"A2\" t=\"d\"><v>2023-11-09</v></c>", "<c r=\"A2\" t=\"b\"><v>1</v></c>"] {
@@ -243,7 +687,7 @@ import zlib
     func testDuplicateJSONKeysRetypedExcelPrecisionLossAndMissingSourceChunk() throws {
         let j = try fixture(), e = try export(j)
         let truncated = edit(e, sheet: "points", values: ["x": "123456789.123457", "correction_reason": "Excel"])
-        XCTAssertEqual(try preview(truncated, journal: j).count(.invalid), 1)
+        XCTAssertEqual(try preview(truncated, journal: j).count(.unsupported), 1)
         XCTAssertThrowsError(try ExchangeBaseline.decode([String: Int].self, #"{"x":1,"\u0078":2}"#))
         XCTAssertThrowsError(try ExchangeObservationProposal.object(ManualOrientationInput.self, #"{"dipAngleText":"45","dipAngleText":"30","dipDirectionText":"120","reference":"gridNorth","usesConventionalDipSide":false}"#))
         let longJournal = try fixture(longOriginal: true), long = try export(longJournal)
@@ -261,10 +705,10 @@ import zlib
         func legacy(_ p: MappingObservation) throws -> MappingObservation {
             let g = p.geology!
             let geology = MappingGeology(start: .init(text: "10", meters: 10, convention: nil), end: .init(text: "20", meters: 20, convention: nil), position: g.position, jointSets: g.jointSets, tectonicStructures: g.tectonicStructures)
-            return try ExchangeObservationProposal.patched(p, fields: ["geology": MappingExchangeExport.json(geology)])
+            return try patched(p, fields: ["geology": MappingExchangeExport.json(geology)])
         }
         j.observations[0] = try legacy(j.observations[0])
-        j.revisions[0] = try ExchangeObservationProposal.patched(j.revisions[0], fields: ["snapshot": MappingExchangeExport.json(legacy(j.revisions[0].snapshot))])
+        j.revisions[0] = try patched(j.revisions[0], fields: ["snapshot": MappingExchangeExport.json(legacy(j.revisions[0].snapshot))])
         try j.validate()
         let edited = edit(try export(j), sheet: "points", values: ["interval_start_text": "11", "interval_start_m": "11", "correction_reason": "Граница"])
         let p = try preview(edited, journal: j)

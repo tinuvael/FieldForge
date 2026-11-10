@@ -17,12 +17,27 @@ struct ExchangeBaseline: Sendable {
     }
     init(_ workbook: ExchangeWorkbook) throws {
         func bad(_ s: String) -> ExchangeImportError { ExchangeImportError(s) }
-        guard let format = workbook.sheets["Формат"], Set(format.columns) == Set(["key", "value"]), let records = workbook.sheets["source_records"],
-              Set(records.columns) == Set(["kind", "record_id", "point_id", "version", "chunk_index", "chunk_count", "sha256", "json_chunk"]) else { throw bad("Отсутствует формат или исходные записи.") }
+        guard let format = workbook.sheets["Формат"], Set(format.columns) == Set(["key", "value"]) else {
+            throw bad("Формат: лист отсутствует или изменены колонки key/value.")
+        }
+        guard let records = workbook.sheets["source_records"],
+              Set(records.columns) == Set(["kind", "record_id", "point_id", "version", "chunk_index", "chunk_count", "sha256", "json_chunk"]) else {
+            throw bad("source_records: лист отсутствует или изменены заголовки.")
+        }
         var meta: [String: String] = [:]
         for row in format.rows {
             let key = row["key"] ?? ""
             guard !key.isEmpty, meta[key] == nil else { throw bad("Повтор метаданных книги.") }; meta[key] = row["value"] ?? ""
+        }
+        let identityKeys: Set<String> = ["format", "mapping_schema", "workbook_id", "exported_at_utc",
+            "exported_at_reference_seconds", "fingerprint_algorithm", "selection_json"]
+        var unsigned = meta
+        let checksum = unsigned.removeValue(forKey: "metadata_sha256")
+        let instructions = checksum == nil ? MappingExchangeExport.legacyInstructions : MappingExchangeExport.instructions
+        guard Set(unsigned.keys) == identityKeys.union(instructions.map(\.0)),
+              instructions.allSatisfy({ unsigned[$0.0] == $0.1 }),
+              try checksum.map({ try MappingImportLedger.fingerprint(unsigned) == $0 }) ?? true else {
+            throw bad("Формат: метаданные книги удалены или изменены. Используйте исходную выгрузку.")
         }
         guard meta["format"] == MappingExchangeExport.version, meta["mapping_schema"] == "8",
               meta["fingerprint_algorithm"] == MappingExchangeExport.fingerprintVersion,
@@ -89,13 +104,26 @@ struct ExchangeBaseline: Sendable {
         let snapshot = MappingCommittedSnapshot(journal), date = Date(timeIntervalSinceReferenceDate: seconds)
         let projected = try MappingExchangeExport.prepare(committed: snapshot, selection: selection, now: date, id: id)
         let tables = Dictionary(uniqueKeysWithValues: projected.tables.map { ($0.name, ExchangeWorkbook.Sheet(columns: $0.columns, rows: Self.rows($0))) })
-        guard Set(workbook.sheets.keys) == Set(tables.keys) else { throw bad("Отсутствуют обязательные листы или добавлены неизвестные листы.") }
+        let missing = Set(tables.keys).subtracting(workbook.sheets.keys).sorted()
+        let unexpected = Set(workbook.sheets.keys).subtracting(tables.keys).sorted()
+        guard missing.isEmpty, unexpected.isEmpty else {
+            throw bad("Набор листов изменён. Отсутствуют: \(missing.joined(separator: ", ")). Неизвестные: \(unexpected.joined(separator: ", ")).")
+        }
         for (name, sheet) in tables {
-            guard Set(workbook.sheets[name]!.columns) == Set(sheet.columns) else { throw bad("\(name): неверные обязательные колонки.") }
+            let columns = Set(workbook.sheets[name]!.columns), expected = Set(sheet.columns)
+            guard columns == expected else {
+                let changed = columns.symmetricDifference(expected).sorted().joined(separator: ", ")
+                throw bad("\(name), строка 1: изменены колонки \(changed).")
+            }
         }
         // Reprojection verifies kind/point/version metadata, canonical raw JSON, full graph
         // closure, complete chunks and hashes. Codable cannot silently discard unknown keys.
         func tokens(_ rows: [Row]) throws -> Set<String> { Set(try rows.map { try MappingExchangeExport.json($0) }) }
+        let guide = checksum == nil ? Self.rows(MappingExchangeExport.legacyGuide) : tables["Колонки"]!.rows
+        let incomingGuide = workbook.sheets["Колонки"]!.rows
+        guard incomingGuide.count == guide.count, try tokens(incomingGuide) == tokens(guide) else {
+            throw bad("Колонки: справочник полей удалён или изменён.")
+        }
         guard try tokens(records.rows) == tokens(tables["source_records"]!.rows) else { throw bad("Исходный граф неполон или его JSON/метаданные не соответствуют контракту v1.") }
         self.workbookID = id; exportedAt = date; self.selection = selection; self.snapshot = snapshot; self.tables = tables; metadata = meta
     }

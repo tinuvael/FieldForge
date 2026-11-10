@@ -48,6 +48,30 @@ import Combine
             throw error
         }
     }
+    func applyExchange(_ preview: MappingExchangePreview, url: URL,
+                       selection: MappingExchangeImport.Selection) async throws -> MappingExchangeImport.Report {
+        guard !isSaving, workflow?.draft.photoSessions.isEmpty == true else {
+            throw MappingError.invalid("Дождитесь завершения сохранения или получения фотографий.")
+        }
+        let operationID = UUID()
+        savingState = .saving(operationID)
+        workflow!.draft.saving = true
+        defer { workflow?.draft.saving = false }
+        do {
+            let batch = try await Task.detached(priority: .userInitiated) {
+                let bytes = try await MappingExchangeFileRead.data(url: url)
+                return try MappingExchangeImport.Batch(preview: preview, bytes: bytes, selection: selection, now: Date())
+            }.value
+            let (committed, report) = try await storage.applyExchange(batch)
+            workflow?.prepareTransaction(committed: committed, store: PresentationMappingStore())
+            savingState = report.interrupted ? .failed(operationID, "Импорт прерван.") : .committed(operationID)
+            return report
+        } catch {
+            savingState = .failed(operationID, error.localizedDescription)
+            throw error
+        }
+    }
+
     func beginCoordinateSelection() throws -> MappingPlanSelectionRequest? {
         guard let workflow, let horizonID = workflow.context.horizonID else { throw StorageError.invalidRecord }
         guard let plan = activePlan(for: horizonID) else { selectedTab = 1; return nil }

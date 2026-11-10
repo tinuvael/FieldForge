@@ -252,8 +252,10 @@ struct BartonQAssessment: Codable, Equatable, Sendable {
     let assessedAt: Date
     let input: BartonQInput
     let evaluation: QEvaluation
-    init(input: BartonQInput, now: Date) throws {
-        method = QMethod.fieldVersion; revision = 1; assessedAt = now; self.input = input; evaluation = try input.fieldEvaluation()
+    init(input: BartonQInput, now: Date, method: String = QMethod.fieldVersion) throws {
+        guard [QMethod.version, QMethod.fieldVersion].contains(method) else { throw StorageError.invalidRecord }
+        self.method = method; revision = 1; assessedAt = now; self.input = input
+        evaluation = try method == QMethod.version ? input.evaluate() : input.fieldEvaluation()
     }
     func validate() throws {
         guard [QMethod.version, QMethod.fieldVersion].contains(method), revision == 1, assessedAt.timeIntervalSinceReferenceDate.isFinite,

@@ -43,21 +43,12 @@ enum ExchangeObservationProposal {
         guard ["true", "false"].contains(row[key] ?? "") else { throw bad("\(key): требуется true/false.") }; return row[key] == "true"
     }
     static func protected(_ row: Row, base: Row, allowed: Set<String>, sheet: String) throws {
-        for key in row.keys where row[key, default: ""] != base[key, default: ""] && !allowed.contains(key) {
+        for key in row.keys.sorted() where row[key, default: ""] != base[key, default: ""] && !allowed.contains(key) {
             throw unsupported("\(sheet).\(key): поле неизменяемое/расчётное или модификация не поддерживается.")
         }
     }
     static func make(row: Row, old: MappingObservation?, baseRow: Row, child: [String: [Row]], baseline: ExchangeBaseline, current: MappingCommittedSnapshot) throws -> MappingObservation {
         let isNew = old == nil
-        if !isNew {
-            for field in ["x", "y", "z_m", "chainage_m", "interval_start_m", "interval_end_m", "observed_at_reference_seconds"] {
-                let before = baseRow[field, default: ""], after = row[field, default: ""]
-                if before != after, let original = Double(before), let edited = Double(after), original != edited {
-                    let excel = String(format: "%.15g", locale: Locale(identifier: "en_US_POSIX"), original)
-                    if Double(excel) == edited { throw bad("\(field): значение совпадает с потерей точности Excel до 15 значащих цифр. Восстановите исходный текст или выполните исправление в приложении.") }
-                }
-            }
-        }
         let id = try uuid(row, isNew ? "client_record_id" : "point_id")
         let project = try uuid(row, "project_id"), horizon = try uuid(row, "horizon_id"), excavation = try uuid(row, "excavation_id")
         guard project == baseline.selection.projectID,
@@ -113,8 +104,8 @@ enum ExchangeObservationProposal {
         }
         let setRows = ordered(child["joint_sets"] ?? [], key: "joint_set_id", originalIDs: oldGeology?.jointSets.map(\.id) ?? [])
         let structureRows = ordered(child["tectonic_structures"] ?? [], key: "structure_id", originalIDs: oldGeology?.tectonicStructures.map(\.id) ?? [])
-        let sets = try setRows.map { try joint($0, baseline: baseline, point: old, pointID: id) }
-        let structures = try structureRows.map { try tectonic($0, baseline: baseline, point: old, pointID: id, convention: convention) }
+        let sets = try setRows.map { try joint($0, baseline: baseline, point: old) }
+        let structures = try structureRows.map { try tectonic($0, baseline: baseline, point: old) }
         let geology: MappingGeology?
         if try bool(row, "has_geology") {
             let position: ObservationPosition?
@@ -128,7 +119,7 @@ enum ExchangeObservationProposal {
         if !isNew && row["rock_json"] == baseRow["rock_json"] { rock = old?.rock }
         else if row["rock_json", default: ""].isEmpty { rock = nil }
         else { rock = try object(RockLithology.self, row["rock_json"]!) }
-        let ratings = try assessments(child["assessments"] ?? [], baseline: baseline, point: old, pointID: id)
+        let ratings = try assessments(child["assessments"] ?? [], baseline: baseline, point: old)
         let candidate = MappingObservation(id: id, projectID: project, horizonID: horizon, excavationID: excavation,
             picket: picket, chainageMeters: chainage, chainageOriginAndDirection: row["chainage_origin_direction", default: ""], observedAt: date,
             observedTimeZoneID: row["observed_zone"]!, observedUTCOffsetSeconds: offset,
@@ -140,120 +131,244 @@ enum ExchangeObservationProposal {
     static func baseRow(_ row: Row, sheet: String, baseline: ExchangeBaseline, key: String) -> Row {
         baseline.tables[sheet]!.rows.first { $0[key] == row[key] && $0["point_id"] == row["point_id"] } ?? [:]
     }
-    static func joint(_ row: Row, baseline: ExchangeBaseline, point: MappingObservation?, pointID: UUID) throws -> InterpretedJointSet {
-        let id = try uuid(row, "joint_set_id"), old = point?.geology?.jointSets.first { $0.id == id }
+    static let pointFields: Set<String> = [
+        "notes", "rock_json", "has_geology", "position", "interval_start_text", "interval_start_m",
+        "interval_end_text", "interval_end_m", "correction_reason", "correction_author"
+    ]
+    static let jointFields: Set<String> = ["spacing_m", "persistence_m", "aperture_mm", "roughness", "infill", "notes"]
+    static let tectonicFields: Set<String> = ["type", "thickness_m", "position", "description"]
+    static let clear = "#CLEAR"
+
+    static func joint(_ row: Row, baseline: ExchangeBaseline, point: MappingObservation?) throws -> InterpretedJointSet {
+        let id = try uuid(row, "joint_set_id")
         let base = baseRow(row, sheet: "joint_sets", baseline: baseline, key: "joint_set_id")
-        if !base.isEmpty {
-            try protected(row, base: base, allowed: ["author", "original_direction_text", "original_dip_text", "north", "representative_json", "spacing_m", "persistence_m", "aperture_mm", "roughness", "infill", "notes", "spacing_provenance_json", "dip_direction_deg", "dip_angle_deg", "direction_meaning"], sheet: "joint_sets")
-            if row == base, let old { return old }
-        } else {
-            guard ["", "1"].contains(row["revision", default: ""]), row["interpreted_at_utc", default: ""].isEmpty, row["interpreted_at_reference_seconds", default: ""].isEmpty else { throw bad("Новая система: версия 1, время интерпретации назначается при принятии.") }
+        guard let old = point?.geology?.jointSets.first(where: { $0.id == id }) else {
+            throw unsupported("joint_sets: добавление систем через Excel не поддерживается.")
         }
-        guard let identifier = row["identifier"].flatMap(JointSetIdentifier.init(rawValue:)), row["method"] == "user-interpretation-v1" else { throw bad("Неверная система J1–J5 или метод интерпретации.") }
-        guard identifier.isRoutine else { throw unsupported("Историческая система J5 доступна только для просмотра.") }
-        let representative = try object(ManualOrientationInput.self, row["representative_json", default: ""])
-        let validated = try representative.validated()
-        guard row["original_direction_text"] == representative.dipDirectionText, row["original_dip_text"] == representative.dipAngleText, row["north"] == representative.reference.rawValue,
-              row["direction_meaning"] == validated.meaning.rawValue,
-              try number(row["dip_direction_deg", default: ""], field: "joint dip direction") == validated.orientation.dipDirection,
-              try number(row["dip_angle_deg", default: ""], field: "joint dip") == validated.orientation.dipAngle else { throw bad("Система: исходные строки, JSON и производные ориентации не согласованы.") }
-        let provenance: JointSpacingProvenance? = row["spacing_provenance_json", default: ""].isEmpty ? nil : try object(JointSpacingProvenance.self, row["spacing_provenance_json"]!)
-        if row["spacing_m"] != base["spacing_m"], provenance?.source != .manual { throw unsupported("Изменение SD требует явного ручного spacing_provenance_json; оценка по RQD не подменяется.") }
-        let spacing = try number(row["spacing_m", default: ""], field: "spacing_m")
-        if provenance?.source == .manual, let spacing, spacing <= 0 { throw bad("Ручное SD должно быть больше нуля.") }
-        let set = InterpretedJointSet(id: id, identifier: identifier, revision: old?.revision ?? 1, interpretedAt: old?.interpretedAt ?? baseline.exportedAt,
-            author: row["author", default: ""].isEmpty ? nil : row["author"], method: "user-interpretation-v1", representative: representative,
-            measurementIDs: old?.measurementIDs ?? [], spacingMeters: spacing,
-            persistenceMeters: try number(row["persistence_m", default: ""], field: "persistence_m"), apertureMillimeters: try number(row["aperture_mm", default: ""], field: "aperture_mm"),
-            roughness: row["roughness", default: ""], infill: row["infill", default: ""], notes: row["notes", default: ""], spacingProvenance: provenance)
-        try set.validate(pointMeasurementIDs: point?.measurementIDs ?? []); return set
+        if row == base { return old }
+        guard old.identifier.isRoutine else { throw unsupported("joint_sets: историческая система J5 доступна только для просмотра.") }
+        try protected(row, base: base, allowed: jointFields, sheet: "joint_sets")
+        let spacing = try number(row["spacing_m", default: ""], field: "joint_sets.spacing_m")
+        if row["spacing_m"] != base["spacing_m"] {
+            guard old.spacingProvenance?.source == .manual else {
+                throw unsupported("joint_sets.spacing_m: можно изменить только ранее введённое вручную расстояние.")
+            }
+            guard let spacing, spacing > 0 else { throw bad("joint_sets.spacing_m: требуется число больше нуля.") }
+        }
+        return InterpretedJointSet(id: old.id, identifier: old.identifier, revision: old.revision,
+            interpretedAt: old.interpretedAt, author: old.author, method: old.method, representative: old.representative,
+            measurementIDs: old.measurementIDs, spacingMeters: spacing,
+            persistenceMeters: try nonnegative(row, "persistence_m", sheet: "joint_sets"),
+            apertureMillimeters: try nonnegative(row, "aperture_mm", sheet: "joint_sets"),
+            roughness: row["roughness", default: ""], infill: row["infill", default: ""],
+            notes: row["notes", default: ""], spacingProvenance: old.spacingProvenance)
     }
-    static func tectonic(_ row: Row, baseline: ExchangeBaseline, point: MappingObservation?, pointID: UUID, convention: PicketConvention?) throws -> TectonicStructure {
-        let id = try uuid(row, "structure_id"), base = baseRow(row, sheet: "tectonic_structures", baseline: baseline, key: "structure_id")
-        let old = point?.geology?.tectonicStructures.first { $0.id == id }
-        if !base.isEmpty {
-            try protected(row, base: base, allowed: Set(row.keys).subtracting(["structure_id", "point_id"]), sheet: "tectonic_structures")
-            if row == base, let old { return old }
+
+    static func tectonic(_ row: Row, baseline: ExchangeBaseline, point: MappingObservation?) throws -> TectonicStructure {
+        let id = try uuid(row, "structure_id")
+        let base = baseRow(row, sheet: "tectonic_structures", baseline: baseline, key: "structure_id")
+        guard let old = point?.geology?.tectonicStructures.first(where: { $0.id == id }) else {
+            throw unsupported("tectonic_structures: добавление структур через Excel не поддерживается.")
         }
-        guard let type = row["type"].flatMap(TectonicStructureType.init(rawValue:)), let north = row["north"].flatMap(GeographicReference.init(rawValue:)), ["true", "false"].contains(row["conventional_dip_side"] ?? "") else { throw bad("Неверные тип/север/условная сторона структуры.") }
-        let input = ManualOrientationInput(dipAngleText: row["original_dip_text", default: ""], dipDirectionText: row["original_direction_text", default: ""], reference: north, usesConventionalDipSide: row["conventional_dip_side"] == "true")
-        let orientation = try input.validatedTectonic()
-        guard try number(row["dip_direction_deg", default: ""], field: "tectonic direction") == orientation.dipDirection,
-              try number(row["dip_angle_deg", default: ""], field: "tectonic dip") == orientation.dipAngle else { throw bad("Структура: исходная и нормализованная ориентации не согласованы.") }
-        let picket: MappingPicket?
-        if row["picket_text"] == base["picket_text"], row["chainage_m"] == base["chainage_m"], let old { picket = old.picket }
-        else if row["picket_text", default: ""].isEmpty, row["chainage_m", default: ""].isEmpty { picket = nil }
-        else {
-            let policy: PicketConvention?
-            if let previous = old?.picket { policy = previous.convention } else { policy = convention }
-            picket = MappingPicket(text: row["picket_text", default: ""], meters: try number(row["chainage_m", default: ""], field: "tectonic chainage", required: true)!, convention: policy)
+        if row == base { return old }
+        try protected(row, base: base, allowed: tectonicFields, sheet: "tectonic_structures")
+        guard let type = row["type"].flatMap(TectonicStructureType.init(rawValue:)) else {
+            throw bad("tectonic_structures.type: неизвестный тип структуры.")
         }
-        let value = TectonicStructure(id: id, type: type, orientation: input, thicknessMeters: try number(row["thickness_m", default: ""], field: "thickness_m"), picket: picket, position: row["position", default: ""], description: row["description", default: ""])
-        try value.validate(); return value
+        return TectonicStructure(id: old.id, type: type, orientation: old.orientation,
+            thicknessMeters: try nonnegative(row, "thickness_m", sheet: "tectonic_structures"),
+            picket: old.picket, position: row["position", default: ""], description: row["description", default: ""])
     }
-    static func assessments(_ rows: [Row], baseline: ExchangeBaseline, point: MappingObservation?, pointID: UUID) throws -> MappingRatings? {
-        var q = point?.ratings?.bartonQ, rmr = point?.ratings?.rmr89, gsi = point?.ratings?.gsi
-        var seen = Set<String>()
+
+    private static func nonnegative(_ row: Row, _ column: String, sheet: String) throws -> Double? {
+        let value = try number(row[column, default: ""], field: "\(sheet).\(column)")
+        guard value.map({ $0 >= 0 }) ?? true else { throw bad("\(sheet).\(column): требуется число не меньше нуля.") }
+        return value
+    }
+
+    /// An omitted Excel cell is an untouched existing value. A literal #CLEAR
+    /// explicitly clears a supported value, including one of the duplicate input columns.
+    static func editing(_ row: Row, base: Row, fields: Set<String>, clearable: Set<String>) -> Row {
+        guard !base.isEmpty else { return row }
+        var result = row
+        for field in fields.sorted() {
+            guard row[field] != base[field] else { continue }
+            let clearsLiteral = base[field] == clear && row[field] == clear + "!"
+            if clearable.contains(field), row[field] == clear || clearsLiteral { result[field] = "" }
+            else if row[field] == "" { result[field] = base[field] }
+        }
+        return result
+    }
+
+    static let qColumns = ["rqd_text": "rqd", "jn_text": "jn", "jr_text": "jr", "ja_text": "ja", "jw_text": "jw", "srf_text": "srf"]
+    static let rmrColumns = ["rqd_text": "rqd", "rmr_spacing_m_text": "spacingMeters"]
+    static let rmrSelections: Set<String> = ["rqd", "spacing"]
+    static func assessmentFields(_ kind: String) -> Set<String> {
+        if kind == "Q" { return Set(qColumns.keys).union(["input_json"]) }
+        if kind == "RMR89-basic" { return Set(rmrColumns.keys).union(["input_json"]) }
+        return ["input_json"]
+    }
+
+    private static func assessmentInput(_ row: Row, base: Row, columns: [String: String], coefficients: Bool) throws -> String {
+        let json = row["input_json", default: ""]
+        try ExchangeJSON.validate(json)
+        guard var input = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] else {
+            throw bad("assessments.input_json: требуется объект с входными данными.")
+        }
+        for (column, property) in columns.sorted(by: { $0.key < $1.key }) {
+            let value = row[column, default: ""], before = base[column, default: ""]
+            let nested = coefficients && property != "rqd"
+            var coefficient = input[property] as? [String: Any] ?? [:]
+            let projected = (nested ? coefficient["value"] : input[property]) as? String
+            guard projected == before || projected == value else {
+                throw bad("assessments.\(column) не совпадает с input_json.")
+            }
+            if value != before {
+                if nested { coefficient["value"] = value; input[property] = coefficient }
+                else { input[property] = value }
+            }
+        }
+        return String(decoding: try JSONSerialization.data(withJSONObject: input, options: [.sortedKeys]), as: UTF8.self)
+    }
+
+    static func assessments(_ rows: [Row], baseline: ExchangeBaseline, point: MappingObservation?) throws -> MappingRatings? {
+        guard !rows.isEmpty else { return point?.ratings }
+        var ratings = point?.ratings
         for row in rows {
-            let kind = row["kind", default: ""], family = kind.hasPrefix("RMR89") ? "RMR89" : kind
-            guard ["Q", "RMR89", "GSI"].contains(family), seen.insert(family).inserted else { throw bad("Неизвестная или повторная система оценки.") }
+            let kind = row["kind", default: ""]
             let base = baseline.tables["assessments"]!.rows.first { $0["point_id"] == row["point_id"] && $0["kind"] == kind } ?? [:]
             if row == base { continue }
-            let convenience: [String: String]
-            switch family {
-            case "Q": convenience = ["rqd_text": "rqd", "jn_text": "jn", "jr_text": "jr", "ja_text": "ja", "jw_text": "jw", "srf_text": "srf"]
-            case "RMR89": convenience = ["rqd_text": "rqd", "rmr_strength_test": "strengthTest", "rmr_strength_mpa_text": "strengthMPa", "rmr_strength_evidence": "strengthEvidence", "rmr_rqd_evidence": "rqdEvidence", "rmr_spacing_m_text": "spacingMeters", "rmr_persistence_m_text": "persistenceMeters", "rmr_aperture_mm_text": "apertureMillimeters", "rmr_roughness": "roughness", "rmr_infill": "infill", "rmr_weathering": "weathering", "rmr_groundwater": "groundwater", "rmr_inflow_l_min_per_10m_text": "inflowLitersPerMinutePer10m", "rmr_water_pressure_ratio_text": "waterPressureRatio", "rmr_application": "application", "rmr_orientation_description": "orientationDescription", "rmr_source": "source", "rmr_assessor": "assessor", "rmr_missing_reason": "missingReason"]
-            default: convenience = [:]
-            }
-            if !base.isEmpty {
-                try protected(row, base: base, allowed: Set(convenience.keys).union(["input_json"]), sheet: "assessments")
-            } else {
-                let allowed = Set(convenience.keys).union(["point_id", "kind", "method", "input_json"])
-                try protected(row, base: [:], allowed: allowed, sheet: "new assessment")
-                if family == "RMR89", point?.ratings?.rmr89 != nil { throw unsupported("Нельзя менять kind или метод существующей оценки RMR.") }
-            }
-            let json = row["input_json", default: ""]
-            try ExchangeJSON.validate(json)
-            let inputObject = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] ?? [:]
-            for (column, property) in convenience {
-                let value: String
-                if family == "Q", property != "rqd" { value = (inputObject[property] as? [String: Any])?["value"] as? String ?? "" }
-                else { value = inputObject[property] as? String ?? "" }
-                guard row[column, default: ""] == value else { throw bad("assessments.\(column) не совпадает с input_json.") }
-            }
-            if family == "Q" {
-                let input = try object(BartonQInput.self, json)
-                if let old = q {
-                    let evaluation = try old.method == QMethod.version ? input.evaluate() : input.fieldEvaluation()
-                    q = try patched(old, fields: ["input": MappingExchangeExport.json(input), "evaluation": MappingExchangeExport.json(evaluation)])
-                } else { q = try BartonQAssessment(input: input, now: baseline.exportedAt) }
-                guard q?.method == row["method"] else { throw unsupported("Метод Q не поддерживается или изменён.") }
-                try q?.validate()
-            } else if family == "RMR89" {
-                let input = try object(RMR89Input.self, json), old = rmr
-                let method = row["method", default: ""]
-                let revised: RMR89Assessment
-                if let old, old.input == input { revised = old }
-                else { revised = try RMR89Assessment(input: input, now: old?.assessedAt ?? baseline.exportedAt, method: old?.method) }
-                guard revised.method == method, old == nil || revised.method == old?.method,
-                      kind == (revised.calculation == nil ? "RMR89-input-only" : "RMR89-basic") else { throw unsupported("Метод/kind RMR нельзя переопределить.") }
-                rmr = revised; try rmr?.validate()
-            } else {
-                let input = try object(GSIAssessment.self, json)
-                guard input.method == row["method"] else { throw unsupported("Метод GSI изменён.") }
-                if let old = gsi {
-                    guard input.method == old.method, input.assessedAt == old.assessedAt, input.finalValue == old.finalValue else { throw unsupported("Метод, время и сохранённый результат GSI неизменяемы.") }
+            guard !base.isEmpty, let old = ratings else { throw unsupported("assessments: добавление или замена методики не поддерживается.") }
+            try protected(row, base: base, allowed: assessmentFields(kind), sheet: "assessments")
+            do {
+                switch kind {
+                case "Q":
+                    guard let q = old.bartonQ else { throw StorageError.invalidRecord }
+                    let json = try assessmentInput(row, base: base, columns: qColumns, coefficients: true)
+                    let input = try object(BartonQInput.self, json)
+                    guard qInputAllowed(input, from: q.input) else {
+                        throw unsupported("assessments.input_json: источники, обоснования, поправки и контекст Q доступны только для просмотра.")
+                    }
+                    try validateQSelections(input, from: q.input)
+                    let revised = input == q.input ? q : try BartonQAssessment(input: input, now: q.assessedAt, method: q.method)
+                    ratings = MappingRatings(bartonQ: revised, rmr89: old.rmr89, gsi: old.gsi, regulatory: old.regulatory)
+                case "RMR89-basic":
+                    guard let rmr = old.rmr89, rmr.method == RMR89Assessment.verifiedVersion else {
+                        throw unsupported("assessments.input_json: историческая методика RMR89 доступна только для просмотра.")
+                    }
+                    let json = try assessmentInput(row, base: base, columns: rmrColumns, coefficients: false)
+                    let input = try object(RMR89Input.self, json)
+                    guard rmrInputAllowed(input, from: rmr.input) else {
+                        throw unsupported("assessments.input_json: у RMR89 можно изменить только RQD, расстояние и соответствующие категории.")
+                    }
+                    let revised = input == rmr.input ? rmr : try RMR89Assessment(input: input, now: rmr.assessedAt, method: rmr.method)
+                    ratings = MappingRatings(bartonQ: old.bartonQ, rmr89: revised, gsi: old.gsi, regulatory: old.regulatory)
+                case "GSI":
+                    guard let gsi = old.gsi, gsi.method == GSIAssessment.version else {
+                        throw unsupported("assessments.input_json: графическая оценка GSI доступна только для просмотра.")
+                    }
+                    let input = try object(GSIAssessment.self, row["input_json", default: ""])
+                    guard gsiInputAllowed(input, from: gsi) else {
+                        throw unsupported("assessments.input_json: у GSI можно изменить только границы явно заданного интервала.")
+                    }
+                    try input.validate()
+                    ratings = MappingRatings(bartonQ: old.bartonQ, rmr89: old.rmr89, gsi: input, regulatory: old.regulatory)
+                default:
+                    throw unsupported("assessments.input_json: оценка доступна только для просмотра.")
                 }
-                try input.validate(); gsi = input
+            } catch let failure as ExchangeProposalFailure { throw failure }
+            catch { throw bad("assessments.input_json (\(kind)): \(error.localizedDescription)") }
+        }
+        return ratings
+    }
+
+    private static func validateQSelections(_ input: BartonQInput, from old: BartonQInput) throws {
+        for parameter in QParameter.allCases where input[parameter] != old[parameter] {
+            let coefficient = input[parameter]
+            _ = try coefficient.validated(parameter)
+            if coefficient.origin == .tableSelection {
+                var selected = QCoefficientInput()
+                selected.select(coefficient.category, parameter: parameter)
+                guard selected.origin == .tableSelection,
+                      try RatingNumber.optional(selected.value, name: parameter.rawValue) ==
+                          RatingNumber.optional(coefficient.value, name: parameter.rawValue) else {
+                    throw bad("assessments.input_json.\(parameter.rawValue): значение не соответствует выбранной строке NGI.")
+                }
             }
         }
-        let regulatory = point?.ratings?.regulatory
-        guard q != nil || rmr != nil || gsi != nil || regulatory != nil else { return nil }
-        return MappingRatings(bartonQ: q, rmr89: rmr, gsi: gsi, regulatory: regulatory)
     }
-    static func patched<T: Codable>(_ old: T, fields: [String: String]) throws -> T {
-        var obj = try JSONSerialization.jsonObject(with: Data(MappingExchangeExport.json(old).utf8)) as! [String: Any]
-        for (key, value) in fields { obj[key] = try JSONSerialization.jsonObject(with: Data(value.utf8), options: [.fragmentsAllowed]) }
-        return try JSONDecoder().decode(T.self, from: JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys, .fragmentsAllowed]))
+
+    static func qInputAllowed(_ input: BartonQInput, from old: BartonQInput) -> Bool {
+        var allowed = old
+        allowed.rqd = input.rqd
+        for parameter in QParameter.allCases {
+            guard input[parameter].evidence == old[parameter].evidence,
+                  input[parameter].category == old[parameter].category || old[parameter].evidence.isEmpty else { return false }
+            allowed[parameter] = input[parameter]
+        }
+        return allowed == input
     }
+
+    static func rmrInputAllowed(_ input: RMR89Input, from old: RMR89Input) -> Bool {
+        var allowed = old
+        allowed.rqd = input.rqd
+        allowed.spacingMeters = input.spacingMeters
+        allowed.basicSelections = input.basicSelections
+        if old.basicSelections != input.basicSelections, (old.basicSelections ?? [:]) == (input.basicSelections ?? [:]) {
+            return false
+        }
+        return allowed == input &&
+            (old.basicSelections ?? [:]).filter { !rmrSelections.contains($0.key) } ==
+            (input.basicSelections ?? [:]).filter { !rmrSelections.contains($0.key) }
+    }
+
+    static func gsiInputAllowed(_ input: GSIAssessment, from old: GSIAssessment) -> Bool {
+        input == GSIAssessment(selection: old.selection, lower: input.lower, upper: input.upper,
+                               finalValue: old.finalValue, assessedAt: old.assessedAt)
+    }
+
+    static func ratingsAllowed(_ proposal: MappingRatings?, from old: MappingRatings?) -> Bool {
+        if proposal == old { return true }
+        guard let proposal, let old, proposal.regulatory == old.regulatory else { return false }
+        if proposal.bartonQ != old.bartonQ {
+            guard let revised = proposal.bartonQ, let previous = old.bartonQ,
+                  revised.method == previous.method, revised.revision == previous.revision,
+                  revised.assessedAt == previous.assessedAt,
+                  qInputAllowed(revised.input, from: previous.input),
+                  (try? validateQSelections(revised.input, from: previous.input)) != nil else { return false }
+        }
+        if proposal.rmr89 != old.rmr89 {
+            guard let revised = proposal.rmr89, let previous = old.rmr89,
+                  revised.method == RMR89Assessment.verifiedVersion, revised.method == previous.method,
+                  revised.revision == previous.revision, revised.assessedAt == previous.assessedAt,
+                  rmrInputAllowed(revised.input, from: previous.input) else { return false }
+        }
+        if proposal.gsi != old.gsi {
+            guard let revised = proposal.gsi, let previous = old.gsi, previous.method == GSIAssessment.version,
+                  gsiInputAllowed(revised, from: previous) else { return false }
+        }
+        return true
+    }
+
+    static func preservesEvidence(_ proposal: MappingObservation, from old: MappingObservation) -> Bool {
+        guard proposal.coordinates == old.coordinates, proposal.picketConvention == old.picketConvention,
+              proposal.picket == old.picket, proposal.chainageMeters == old.chainageMeters,
+              proposal.chainageOriginAndDirection == old.chainageOriginAndDirection,
+              proposal.observedAt == old.observedAt, proposal.observedTimeZoneID == old.observedTimeZoneID,
+              proposal.observedUTCOffsetSeconds == old.observedUTCOffsetSeconds,
+              old.geology == nil || proposal.geology != nil else { return false }
+        let originalSets = old.geology?.jointSets ?? [], revisedSets = proposal.geology?.jointSets ?? []
+        let originalFaults = old.geology?.tectonicStructures ?? [], revisedFaults = proposal.geology?.tectonicStructures ?? []
+        guard originalSets.map(\.id) == revisedSets.map(\.id), originalFaults.map(\.id) == revisedFaults.map(\.id) else { return false }
+        return zip(originalSets, revisedSets).allSatisfy { before, after in
+            before.identifier == after.identifier && before.measurementIDs == after.measurementIDs &&
+                before.author == after.author && before.method == after.method && before.representative == after.representative &&
+                before.spacingProvenance == after.spacingProvenance &&
+                (before.spacingMeters == after.spacingMeters ||
+                    (before.spacingProvenance?.source == .manual && (after.spacingMeters ?? 0) > 0))
+        } && zip(originalFaults, revisedFaults).allSatisfy { before, after in
+            before.orientation == after.orientation && before.picket == after.picket
+        }
+    }
+
 }

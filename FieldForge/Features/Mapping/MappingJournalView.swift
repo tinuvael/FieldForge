@@ -63,7 +63,7 @@ struct MappingJournalView: View {
             .navigationTitle("Журнал проекта")
             .toolbar {
                 NavigationLink { MappingExchangeImportView() } label: {
-                    Label("Проверка Excel", systemImage: "square.and.arrow.down")
+                    Label("Импорт Excel", systemImage: "square.and.arrow.down")
                 }.accessibilityIdentifier("mappingExchangeImportAction")
                 if let committed = mapping.workflow?.committed {
                     NavigationLink { MappingExportView(committed: committed, projectID: projectID) } label: {
