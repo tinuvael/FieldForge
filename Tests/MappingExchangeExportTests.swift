@@ -201,7 +201,11 @@ import FoundationXML
                 let workbook = try parse(XCTUnwrap(parts["xl/workbook.xml"]))
                 XCTAssertFalse(workbook.sheetNames.contains("source_records"))
                 let styles = String(decoding: try XCTUnwrap(parts["xl/styles.xml"]), as: UTF8.self)
-                XCTAssertTrue(styles.contains("cellXfs count=\"6\""))
+                if format == .enterpriseGeotechnical {
+                    XCTAssertEqual(workbook.sheetNames, ["Data"])
+                } else {
+                    XCTAssertTrue(styles.contains("cellXfs count=\"6\""))
+                }
             }
         }
         var invalid = j; invalid.horizons.removeFirst()

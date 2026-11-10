@@ -9,7 +9,7 @@ struct PlanFrameConfirmation: Codable, Equatable, Sendable {
 /// No transforms: equality of qualified metadata, or a validated explicit declaration.
 /// A horizon UUID implies one project; names are never used as frame identifiers.
 enum PlanCoordinateCompatibility {
-    private static func known(_ text: String) -> String? {
+    static func known(_ text: String) -> String? {
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return ["", "unknown", "неизвестно", "неизвестна", "не указано", "?", "local", "локальная", "местная"].contains(value) ? nil : value
     }

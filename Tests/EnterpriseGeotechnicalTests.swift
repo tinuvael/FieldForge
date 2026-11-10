@@ -273,35 +273,172 @@ import XCTest
         let project = try JSONDecoder().decode(MappingProject.self, from: Data("{\"id\":\"11111111-1111-1111-1111-111111111111\",\"name\":\"Проект\"}".utf8))
         XCTAssertNil(project.lithologies)
     }
-    func testThreeSheetReportSavedMeanProvenanceHistoryAndLegacyExports() throws {
+    func testRegulatoryEffectiveRowsAndLegacyReports() throws {
         var w = try configured(MappingTests.MemoryStore())
-        w.draft.jointSets[0].spacing = "0.20"; w.draft.jointSets[1].spacing = "0.40"
-        w.draft.gsi = gsi(); w.draft.rmr89 = FinalFieldPolishTests.referenceInput()
+        func draftID(_ value: Int) -> UUID { UUID(uuidString: "00000000-0000-4000-8000-00000000000\(value)")! }
+        let rock = RockLithology(code: "0001.20", name: nil)
+        try w.addLithology(rock, projectID: XCTUnwrap(w.context.projectID))
+        w.draft = MappingDraft(id: draftID(1))
+        w.draft.picket = "1+5"; w.draft.observedAtOverride = now
+        w.draft.rock = rock
+        w.draft.x = "99"; w.draft.y = "0"; w.draft.z = "-14.125"
+        w.draft.crs = "synthetic"; w.draft.axes = "X north, Y east"; w.draft.coordinateProvenance = "synthetic manual input"
+        w.draft.bartonQ.rqd = "5"
+        w.draft.bartonQ.jw.select("C", parameter: .jw)
+        w.draft.bartonQ.jn.select("F", parameter: .jn)
+        w.draft.bartonQ.jr.select("B", parameter: .jr)
+        w.draft.bartonQ.ja.select("C", parameter: .ja)
+        w.draft.rmr89.rqd = "5.0"; w.draft.rmr89.strengthTest = .ucs; w.draft.rmr89.strengthMPa = "140"
+        w.draft.rmr89.basicSelections = ["persistence": "persistence-1", "aperture": "aperture-3", "weathering": "weathering-2"]
         w.draft.rmr89.jcond76 = JCond76Assessment(.roughClosedHard)
-        let original = try w.save(now: now)
-        var correction = try w.correction(for: original.id); correction.reason = "Примечание"; correction.fields.notes = "Кириллица =1+2"
-        _ = try w.saveCorrection(correction, now: now.addingTimeInterval(1))
-        let selection = MappingExportSelection(projectID: original.projectID, firstDay: now, lastDay: now, timeZoneID: "Asia/Almaty")
-        let export = try MappingCSVExport.prepare(journal: w.journal, selection: selection, includeEnterprise: true)
-        let tables = export.enterpriseTables
-        XCTAssertEqual(tables.map(\.name), ["Геотех картирование", "Справочники", "Исходные данные"])
-        for table in tables { XCTAssertTrue(table.rows.allSatisfy { $0.count == table.columns.count }, table.name) }
-        let report = tables[0]; XCTAssertEqual(report.rows.count, 1)
-        func cell(_ name: String) throws -> MappingCSVExport.Cell { report.rows[0][try XCTUnwrap(report.columns.firstIndex(of: name))] }
-        if case .number(let mean) = try cell("SD среднее, м") { XCTAssertEqual(try XCTUnwrap(mean), (0.2 + 0.4 + PriestHudsonSpacing.estimate(rqd: 70)!) / 3, accuracy: 1e-15) } else { XCTFail() }
-        if case .integer(let count) = try cell("Систем в среднем SD") { XCTAssertEqual(count, 3) } else { XCTFail() }
-        let source = tables[2].rows.flatMap { row -> [String] in row.compactMap { if case .text(let text) = $0 { return text }; return nil } }
-        XCTAssertTrue(source.contains("manual")); XCTAssertTrue(source.contains("estimatedFromRQD")); XCTAssertTrue(source.contains("Исправление")); XCTAssertTrue(source.contains("/ratings/gsi/selection/x")); XCTAssertTrue(source.contains("/snapshot/ratings/gsi/selection/x"))
-        for format in [MappingExportFormat.xlsx, .csv, .enterpriseGeotechnical] {
-            let files = try MappingExportFiles.write(export, format: format)
-            XCTAssertTrue(files.urls.allSatisfy { FileManager.default.fileExists(atPath: $0.path) }); files.cleanup()
+        w.draft.gsi = gsi(final: 41.25)
+        for (identifier, dip, azimuth, spacing) in [
+            (JointSetIdentifier.J1, "11", "101", "0.25"), (.J2, "22", "0", "0"),
+            (.J3, "33", "303", "0.50"), (.J4, "0", "", ""), (.J5, "55", "155", "100")
+        ] {
+            var set = JointSetDraft(identifier: identifier)
+            set.representative = .init(dipAngleText: dip, dipDirectionText: azimuth, reference: .magneticNorth)
+            set.spacing = spacing
+            if identifier == .J2 { set.spacingProvenance = nil } // legacy stored zero
+            w.draft.jointSets.append(set)
         }
+        var first = TectonicStructureDraft()
+        first.orientation = .init(dipAngleText: "32.125", dipDirectionText: "0", reference: .trueNorth)
+        first.thickness = "0"
+        var second = TectonicStructureDraft()
+        second.orientation = .init(dipDirectionText: "270", reference: .gridNorth)
+        second.thickness = "0.875"
+        w.draft.tectonicStructures = [first]
+        let original = try w.save(now: now)
+
+        var correction = try w.correction(for: original.id)
+        correction.reason = "Уточнение координат и тектоники"
+        correction.fields.x = "1234567.123456789"
+        correction.fields.rmr89.strengthMPa = "152.125"
+        correction.fields.tectonicStructures.append(second)
+        let revision = try w.saveCorrection(correction, now: now.addingTimeInterval(1))
+
+        w.draft = MappingDraft(id: draftID(2))
+        w.draft.picket = "2+5"; w.draft.observedAtOverride = now
+        w.draft.rmr89.strengthTest = .pointLoadIs50; w.draft.rmr89.strengthMPa = "8"
+        w.draft.rmr89.rqd = "80"; w.draft.bartonQ.rqd = "90"
+        w.draft.rmr89.basicSelections = ["weathering": "weathering-4"]
+        w.draft.gsi = gsi()
+        var single = TectonicStructureDraft(); single.orientation.dipAngleText = "48"
+        w.draft.tectonicStructures = [single]
+        let oneFault = try w.save(now: now)
+
+        w.draft = MappingDraft(id: draftID(3))
+        w.draft.picket = "3+5"; w.draft.observedAtOverride = now
+        w.draft.rmr89.strengthTest = .fieldEstimate
+        w.draft.rmr89.fieldStrength = FieldStrengthAssessment(.R0)
+        w.draft.rmr89.rqd = "0"
+        var historicalJ5 = JointSetDraft(identifier: .J5)
+        historicalJ5.representative = .init(dipAngleText: "55", dipDirectionText: "155")
+        historicalJ5.spacing = "100"
+        w.draft.jointSets = [historicalJ5]
+        let noFault = try w.save(now: now)
+
+        let journal = w.journal
+        let selection = MappingExportSelection(projectID: original.projectID, firstDay: now, lastDay: now, timeZoneID: "UTC")
+        let exportID = draftID(9)
+        let export = try MappingCSVExport.prepare(journal: journal, selection: selection, now: now, id: exportID, includeEnterprise: true)
+        let plain = try MappingCSVExport.prepare(journal: journal, selection: selection, now: now, id: exportID)
+        let regulatory = try XCTUnwrap(export.enterpriseReport)
+        let report = regulatory.table
+        XCTAssertTrue(regulatory.requiresReview)
+        XCTAssertEqual(regulatory.rqdConflicts.map(\.id), [oneFault.id])
+        XCTAssertEqual(regulatory.rqdConflicts.first?.picket, oneFault.displayPicket)
+        XCTAssertEqual(regulatory.rqdConflicts.first?.q, "90")
+        XCTAssertEqual(regulatory.rqdConflicts.first?.rmr, "80")
+        XCTAssertEqual(regulatory.spatialWarnings, [
+            "Высотная система Z: есть неизвестные значения.",
+            "В азимутах используются разные типы севера: магнитный, истинный, сеточный."
+        ])
+        // J5 and a dip without an azimuth do not contribute a north reference.
+        XCTAssertFalse(try EnterpriseGeotechnicalWorkbook.prepare(points: [noFault], journal: journal).requiresReview)
+        XCTAssertEqual(report.name, "Data")
+        XCTAssertEqual(report.columns.joined(separator: " "), "ID PK X Y Z ROCK A45 JW A1 UCS RQD JN JR JA SD A43 JCON76 A42 F_DIP F_AZI F_THI J_DIP_1 J_AZI_1 J_DIP_2 J_AZI_2 J_DIP_3 J_AZI_3 J_DIP_4 J_AZI_4 GSI")
+        XCTAssertEqual(report.rows.count, 4)
+        typealias Cell = MappingCSVExport.Cell
+        let leading: [Cell] = [.text("Штрек"), .text(revision.snapshot.displayPicket), .number(1234567.123456789), .number(0),
+            .number(-14.125), .text("0001.20"), .integer(3), .number(0.5), .empty, .number(152.125), .number(5),
+            .number(9), .number(3), .number(2), .number(0.375), .integer(1), .integer(25), .integer(4)]
+        let trailing: [Cell] = [.number(11), .number(101), .number(22), .number(0), .number(33), .number(303), .number(0), .empty, .number(41.25)]
+        var singleRow = [Cell](repeating: .empty, count: 30)
+        singleRow[0] = .text("Штрек"); singleRow[1] = .text(oneFault.displayPicket); singleRow[18] = .number(48)
+        var noFaultRow = [Cell](repeating: .empty, count: 30)
+        noFaultRow[0] = .text("Штрек"); noFaultRow[1] = .text(noFault.displayPicket)
+        noFaultRow[8] = .integer(0); noFaultRow[10] = .number(0)
+        let expected = [
+            leading + [.number(32.125), .number(0), .number(0)] + trailing,
+            leading + [.empty, .number(270), .number(0.875)] + trailing,
+            singleRow, noFaultRow
+        ]
+        XCTAssertEqual(report.rows.map { $0.map(\.csv) }, expected.map { $0.map(\.csv) })
+        XCTAssertEqual(export.pointCount, 3)
+        XCTAssertEqual(export.tables.map(\.data), plain.tables.map(\.data))
+        XCTAssertEqual(export.fieldTables.map(\.data), plain.fieldTables.map(\.data))
+        XCTAssertEqual(export.manifest, plain.manifest)
+        let jointTable = try XCTUnwrap(export.tables.first { $0.name == "joint_sets" })
+        XCTAssertEqual(jointTable.rows.filter { $0.contains { $0.csv == Cell.text("J5").csv } }.count, 2)
+        XCTAssertEqual(w.journal.observations, [original, oneFault, noFault])
+        XCTAssertEqual(w.journal.history(for: original.id), [revision])
+        XCTAssertEqual(revision.snapshot.geology?.jointSets.last, original.geology?.jointSets.last)
+
+        let files = try MappingExportFiles.write(export, format: .enterpriseGeotechnical)
+        defer { files.cleanup() }
+        let workbook = try XCTUnwrap(files.urls.first)
         if let fixture = ProcessInfo.processInfo.environment["FF_ENTERPRISE_FIXTURE_DIR"] {
-            let path = URL(fileURLWithPath: fixture); try FileManager.default.createDirectory(at: path, withIntermediateDirectories: true)
-            let workbook = path.appendingPathComponent("FieldForge-Geotechnical.xlsx")
-            if FileManager.default.fileExists(atPath: workbook.path) { try FileManager.default.removeItem(at: workbook) }
-            try MappingXLSXExport.write(export, to: workbook, enterprise: true)
-            try JSONSerialization.data(withJSONObject: ["mean": JointSpacingMean(w.observations[0].geology!.jointSets).value!, "rows": 1, "estimated_sd": String(w.observations[0].geology!.jointSets[2].spacingMeters!)]).write(to: path.appendingPathComponent("expected.json"))
+            let path = URL(fileURLWithPath: fixture)
+            try FileManager.default.createDirectory(at: path, withIntermediateDirectories: true)
+            try Data(contentsOf: workbook).write(to: path.appendingPathComponent(workbook.lastPathComponent))
+        }
+    }
+    func testRegulatorySpatialWarningsPreserveCoordinatesAndAzimuths() throws {
+        try directory { root in
+            var w = try configured(MappingTests.MemoryStore())
+            let plans = ManagedPlanStore(root: root)
+            let dxf = DXFFixtures.drawing("0\nLINE\n10\n0\n20\n0\n11\n10\n21\n0\n")
+            let horizonID = try XCTUnwrap(w.context.horizonID)
+            w.draft = MappingDraft()
+            w.draft.picket = "1"; w.draft.observedAtOverride = now
+            w.draft.x = "0"; w.draft.y = "21"; w.draft.crs = "Grid A"; w.draft.axes = "X north"
+            let manual = try w.save(now: now)
+
+            let millimeters = try plans.stage(data: dxf, filename: "mm.dxf", horizonID: horizonID,
+                version: "mm", units: .millimeters, crs: "Grid B", axes: "X east")
+            try w.registerPlan(millimeters)
+            try w.selectPlanPoint(.init(x: 1000, y: 2000), planID: millimeters.id)
+            w.draft.picket = "2"; w.draft.observedAtOverride = now
+            let metricPlan = try w.save(now: now)
+
+            let drawing = try plans.stage(data: dxf, filename: "drawing.dxf", horizonID: horizonID,
+                version: "drawing", units: .unknown, crs: "local", axes: "не указано")
+            try w.registerPlan(drawing)
+            try w.selectPlanPoint(.init(x: 15, y: 25), planID: drawing.id)
+            w.draft.picket = "3"; w.draft.observedAtOverride = now
+            var fault = TectonicStructureDraft()
+            fault.orientation = .init(dipDirectionText: "33", reference: .unknown)
+            w.draft.tectonicStructures = [fault]
+            let unknownPlan = try w.save(now: now)
+
+            let regulatory = try EnterpriseGeotechnicalWorkbook.prepare(points: w.observations, journal: w.journal)
+            XCTAssertTrue(regulatory.requiresReview)
+            XCTAssertEqual(regulatory.spatialWarnings, [
+                "Единицы XY: есть неизвестные значения.", "Единицы XY: разные значения (m, mm).",
+                "СК XY: есть неизвестные значения.", "СК XY: разные значения (grid a, grid b).",
+                "Оси XY: есть неизвестные значения.", "Оси XY: разные значения (x east, x north).",
+                "Есть азимуты с неизвестным типом севера."
+            ])
+            let rows = Dictionary(uniqueKeysWithValues: regulatory.table.rows.map { ($0[1].csv, $0) })
+            for (point, x, y) in [(manual, 0.0, 21.0), (metricPlan, 1000, 2000), (unknownPlan, 15, 25)] {
+                let row = try XCTUnwrap(rows[MappingCSVExport.Cell.text(point.displayPicket).csv])
+                XCTAssertEqual(row[2].csv, MappingCSVExport.Cell.number(x).csv)
+                XCTAssertEqual(row[3].csv, MappingCSVExport.Cell.number(y).csv)
+            }
+            let unknownRow = try XCTUnwrap(rows[MappingCSVExport.Cell.text(unknownPlan.displayPicket).csv])
+            XCTAssertEqual(unknownRow[19].csv, MappingCSVExport.Cell.number(33).csv)
         }
     }
     func testStagedSystemAcceptanceUsesCurrentRQDButKeepsManualOverride() throws {
@@ -337,8 +474,6 @@ import XCTest
             XCTAssertEqual(result.snapshot.geology?.jointSets, original.geology?.jointSets)
             XCTAssertNil(result.snapshot.geology?.jointSets[0].spacingProvenance)
             XCTAssertEqual(result.snapshot.geology?.jointSets[0].spacingMeters, 0.37)
-            let tables = try EnterpriseGeotechnicalWorkbook.tables(points: w.observations, journal: w.journal)
-            XCTAssertTrue(tables[2].rows.contains { row in row.contains { if case .text("unknownLegacy") = $0 { return true }; return false } })
             XCTAssertEqual(try Data(contentsOf: file.appendingPathExtension("previous")), bytes)
         }
     }
@@ -365,9 +500,8 @@ import XCTest
     func testEmptyLegacyObservationsRemainExportableAndNoMissingValueBecomesZero() throws {
         var w = try configured(MappingTests.MemoryStore()); w.draft = MappingDraft(); w.draft.picket = "0"
         let point = try w.save(now: now)
-        let tables = try EnterpriseGeotechnicalWorkbook.tables(points: [point], journal: w.journal)
-        let report = tables[0]
-        if case .number(let mean) = report.rows[0][try XCTUnwrap(report.columns.firstIndex(of: "SD среднее, м"))] { XCTAssertNil(mean) } else { XCTFail() }
+        let report = try EnterpriseGeotechnicalWorkbook.prepare(points: [point], journal: w.journal).table
+        if case .number(let mean) = report.rows[0][14] { XCTAssertNil(mean) } else { XCTFail("Missing SD") }
         let files = try MappingExportFiles.write(MappingCSVExport.prepare(journal: w.journal, selection: MappingExportSelection(projectID: point.projectID, firstDay: now, lastDay: now, timeZoneID: "UTC"), includeEnterprise: true), format: .enterpriseGeotechnical)
         XCTAssertEqual(files.urls.count, 1); files.cleanup()
     }

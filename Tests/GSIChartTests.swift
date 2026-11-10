@@ -101,12 +101,13 @@ final class GSIChartTests: XCTestCase {
         let value = try XCTUnwrap(ordinary.columns.firstIndex(of: "GSI · оценка"))
         guard case .number(let n) = ordinary.rows[0][value] else { return XCTFail("GSI must be a numeric Excel cell") }
         XCTAssertEqual(n, gsi.finalValue)
-        XCTAssertEqual(export.enterpriseTables.count, 3)
-        let enterprise = export.enterpriseTables[0]
-        XCTAssertTrue(enterprise.columns.contains("GSI X")); XCTAssertTrue(enterprise.columns.contains("GSI Y"))
+        let enterprise = try XCTUnwrap(export.enterpriseReport?.table)
+        XCTAssertEqual(enterprise.columns.last, "GSI")
+        guard case .number(let final)? = enterprise.rows[0].last else { return XCTFail("AD must be numeric") }
+        XCTAssertEqual(final, gsi.finalValue)
         let raw = try XCTUnwrap(export.tables.first { $0.name == "assessments" })
         XCTAssertTrue(String(decoding: raw.data, as: UTF8.self).contains(GSIChart.version))
-        for table in export.tables + export.fieldTables + export.enterpriseTables {
+        for table in export.tables + export.fieldTables + [enterprise] {
             XCTAssertTrue(table.rows.allSatisfy { $0.count == table.columns.count }, table.name)
         }
     }

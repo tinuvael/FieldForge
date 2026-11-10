@@ -71,14 +71,19 @@ struct MappingExportView: View {
                     Picker("Формат файла", selection: $format) {
                         ForEach(MappingExportFormat.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                     }.accessibilityIdentifier("mappingExportFormat")
-                    Toggle("Показывать технические листы Excel", isOn: $showTechnicalSheets)
+                    if format != .enterpriseGeotechnical {
+                        Toggle("Показывать технические листы Excel", isOn: $showTechnicalSheets)
+                    }
                     Text("Отбор по дате наблюдения актуальной версии точки в поясе \(timeZoneID), включая весь последний день.").font(.caption)
                 }
             }.disabled(busy || sharing)
             Section {
                 Text(format == .exchange ? "Обмен: подтверждённый снимок после ранее принятых сохранений. Импорт пока недоступен." : "Подтверждённый снимок журнала при открытии выгрузки. Незавершённые сохранения не включены.").font(.caption).foregroundStyle(.secondary)
                 Text("Наблюдений: \(selectedCount)").accessibilityIdentifier("mappingExportPointCount")
-                Button(format == .exchange ? "Экспортировать Excel Exchange" : format == .enterpriseGeotechnical ? "Экспортировать по регламенту" : format == .xlsx ? "Экспортировать Excel" : format == .csv ? "Экспортировать CSV" : "Экспортировать фотографии ZIP") {
+                if format == .enterpriseGeotechnical, let report = preview?.enterpriseReport, report.requiresReview {
+                    regulatoryWarnings(report)
+                }
+                Button(exportButtonTitle) {
                     if format == .exchange { shareExchange() }
                     else if let preview { shareOrConfirm(preview) } else { prepare(shareWhenReady: true) }
                 }.disabled(busy || sharing || selection == nil).accessibilityIdentifier("mappingExportShare")
@@ -114,7 +119,8 @@ struct MappingExportView: View {
                         Text("FieldForge Exchange.xlsx: связанные таблицы точек, J1–J5, тектоники и оценок; UUID, базовые версии и отпечатки, полные исходные записи и история. Числа и даты сохранены текстом без округления. Пусто означает отсутствие значения.")
                         Text("B2a: только экспорт. Можно подготовить предложения на компьютере, но загрузить их обратно в этой версии нельзя. Не меняйте базовые UUID, версии, отпечатки и source_records. Оригиналы фото и DXF не включены; сохраняйте отдельную резервную копию ZIP.")
                     } else if format == .enterpriseGeotechnical {
-                        Text("Ровно три листа: «Геотех картирование», «Справочники», «Исходные данные». Одна строка на актуальное наблюдение; SD — среднее сохранённых значений J1–J5. Исходный лист содержит записи и историю исправлений. Оригиналы фото не включены.")
+                        Text("Лист Data (A–AD). Для актуального наблюдения формируется строка на каждую тектоническую структуру. Если структур нет, формируется одна строка с пустыми полями разлома. SD — среднее положительных сохранённых расстояний J1–J4.")
+                        Text("При расхождении RQD в Q и RMR поле RQD остаётся пустым. Координаты и азимуты выгружаются в исходных единицах и системах отсчёта. История, сведения о системе координат и типе севера доступны в журнале и Excel Exchange.")
                     } else if format == .photoPackage {
                         Text("ZIP: оригиналы, FieldForge-Mapping.xlsx с реестром photo_register и manifest.json. Файлы проверяются по размеру и SHA-256. Путь и статус каждого оригинала указаны в реестре.")
                         Text("Оригиналы сохраняют все исходные байты, включая личные EXIF/GPS и сведения об авторе. Передавайте архив только доверенным получателям. Неизвестное место и время съёмки остаются неизвестными.")
@@ -122,7 +128,9 @@ struct MappingExportView: View {
                     Text(format == .csv ? "Связанные CSV и manifest.json передаются вместе через меню iOS, в том числе «Сохранить в Файлы»." : "Одна книга Excel: пять полевых листов, сводка и скрытые технические листы. Закреплённые заголовки и фильтры. Передача через меню iOS, в том числе «Сохранить в Файлы».")
                     Text("Только метаданные фотографий. Оригиналы изображений не включены; их наличие и целостность не проверяются. Неизвестное место съёмки остаётся неизвестным.")
                     }
-                    if format != .exchange {
+                    if format == .enterpriseGeotechnical {
+                        Text("Числа выгружаются без предварительного округления. Excel использует до 15 значащих цифр. Отсутствующие значения — пустые ячейки.")
+                    } else if format != .exchange {
                     Text("Выгрузка для анализа, не полная резервная копия. Оценки сохранены без пересчёта; базовый RMR — при наличии рассчитанной оценки.")
                     Text(format == .csv ? "UTF-8 с BOM, запятая, CRLF. Excel может ограничивать числа 15 значащими цифрами. Исходный десятичный текст сохранён там, где он есть. Текст, похожий на формулу, защищён апострофом." : "Полевые листы содержат числа; Excel использует до 15 значащих цифр. На технических листах более точные значения сохраняются точным текстом. Отсутствующие значения — пустые ячейки. Пользовательские строки — текст, формулы не создаются.")
                     }
@@ -155,6 +163,37 @@ struct MappingExportView: View {
         .onDisappear { if !sharing { operation?.cancel() } }
         .sheet(isPresented: $sharing, onDismiss: { files = nil }) {
             if let files { MappingExportShareSheet(files: files) }
+        }
+    }
+    private var exportButtonTitle: String {
+        switch format {
+        case .enterpriseGeotechnical:
+            return preview?.enterpriseReport?.requiresReview == true
+                ? "Экспортировать с предупреждениями" : "Экспортировать по регламенту"
+        case .exchange: return "Экспортировать Excel Exchange"
+        case .xlsx: return "Экспортировать Excel"
+        case .csv: return "Экспортировать CSV"
+        case .photoPackage: return "Экспортировать фотографии ZIP"
+        }
+    }
+    @ViewBuilder private func regulatoryWarnings(_ report: EnterpriseGeotechnicalWorkbook) -> some View {
+        if !report.rqdConflicts.isEmpty {
+            Text("Расхождение RQD в Q и RMR89. Наблюдений: \(report.rqdConflicts.count). В их строках RQD будет пустым.")
+                .foregroundStyle(.orange)
+                .accessibilityIdentifier("mappingRegulatoryRQDWarning")
+            DisclosureGroup("Наблюдения с расхождением RQD") {
+                ForEach(report.rqdConflicts) { conflict in
+                    Text(verbatim: "\(conflict.excavation), \(conflict.picket) · Q: \(conflict.q) %, RMR89: \(conflict.rmr) %\nUUID: \(conflict.id.uuidString)")
+                }
+            }
+            Text("Сверьте значения с источником. Исправьте наблюдения в журнале и заново откройте выгрузку.")
+        }
+        if !report.spatialWarnings.isEmpty {
+            Text("Проверьте пространственную привязку")
+                .foregroundStyle(.orange)
+                .accessibilityIdentifier("mappingRegulatorySpatialWarning")
+            ForEach(report.spatialWarnings, id: \.self) { Text(verbatim: $0) }
+            Text("Лист Data не содержит единиц XY, СК, осей, высотной системы или типа севера. Сузьте отбор до совместимых записей или используйте полную книгу Excel для проверки привязки. При продолжении значения останутся в исходных системах.")
         }
     }
     private var selectedCount: Int {
@@ -209,7 +248,7 @@ struct MappingExportView: View {
                 let result = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
                 busy = false
                 try Task.checkCancellation(); preview = result.0; photoPreview = result.1
-                if shareWhenReady { shareOrConfirm(result.0) }
+                if shareWhenReady, result.0.enterpriseReport?.requiresReview != true { shareOrConfirm(result.0) }
             } catch is CancellationError { busy = false }
             catch { busy = false; errorMessage = "Ошибка выгрузки: \(error.localizedDescription)" }
         }

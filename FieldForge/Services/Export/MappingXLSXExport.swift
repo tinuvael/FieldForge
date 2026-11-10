@@ -19,33 +19,37 @@ enum MappingXLSXExport {
                       showTechnicalSheets: Bool = false, enterprise: Bool = false,
                       append: @escaping (Data, FileHandle) throws -> Void = { try $1.write(contentsOf: $0) }) throws {
         try Task.checkCancellation()
+        if enterprise {
+            guard let table = snapshot.enterpriseReport?.table else { throw StorageError.invalidRecord }
+            try writeWorkbook([table], to: url, exportID: snapshot.id, snapshotAt: snapshot.snapshotAt,
+                timeZoneID: snapshot.selection.timeZoneID, summaryIndex: -1,
+                numericSheetCount: 1, technicalVisible: true, regulatory: true, textOnly: false,
+                width: { _, column in RegulatoryLayout.width(column) }, append: append)
+            return
+        }
         let summary = try summary(snapshot, photoPackageStatus: photoPackageStatus)
         let fieldSheets = snapshot.fieldTables.filter { $0.name != "field_links" }
-        let sheets = enterprise ? snapshot.enterpriseTables : fieldSheets + [summary] + snapshot.tables + snapshot.fieldTables.filter { $0.name == "field_links" }
-        if enterprise { guard sheets.map(\.name) == ["Геотех картирование", "Справочники", "Исходные данные"] else { throw StorageError.invalidRecord } }
-        let summaryIndex = enterprise ? -1 : fieldSheets.count
-        let numericSheetCount = enterprise ? 1 : fieldSheets.count
-        let technicalVisible = enterprise || showTechnicalSheets || photoPackageStatus != nil
+        let sheets = fieldSheets + [summary] + snapshot.tables + snapshot.fieldTables.filter { $0.name == "field_links" }
+        let summaryIndex = fieldSheets.count
+        let technicalVisible = showTechnicalSheets || photoPackageStatus != nil
         func width(_ sheet: Int, _ columnIndex: Int) -> Int {
-            if enterprise && sheet == 1 { return [26, 40, 100, 14, 90][columnIndex] }
-            if enterprise && sheet == 2 { return [32, 39, 39, 39, 12, 30, 22, 28, 18, 27, 60, 18, 24, 100][columnIndex] }
             return sheet == summaryIndex ? (columnIndex == 0 ? 37 : 105) : columnWidth(sheets[sheet].columns[columnIndex])
         }
         try writeWorkbook(sheets, to: url, exportID: snapshot.id, snapshotAt: snapshot.snapshotAt,
             timeZoneID: snapshot.selection.timeZoneID, summaryIndex: summaryIndex,
-            numericSheetCount: numericSheetCount, technicalVisible: technicalVisible,
-            enterprise: enterprise, textOnly: false, width: width, append: append)
+            numericSheetCount: fieldSheets.count, technicalVisible: technicalVisible,
+            textOnly: false, width: { Double(width($0, $1)) }, append: append)
     }
 
     /// Shared OOXML writer; exchange supplies text cells and exposes every sheet.
     static func writeExchange(_ tables: [MappingCSVExport.Table], to url: URL, id: UUID, at: Date) throws {
         try writeWorkbook(tables, to: url, exportID: id, snapshotAt: at, timeZoneID: "GMT",
             summaryIndex: -1, numericSheetCount: 0, technicalVisible: true,
-            enterprise: false, textOnly: true, width: { sheet, column in
+            textOnly: true, width: { sheet, column in
                 switch tables[sheet].name {
                 case "Формат": return column == 0 ? 38 : 110
                 case "Колонки": return [28, 60, 90, 55][column]
-                default: return columnWidth(tables[sheet].columns[column])
+                default: return Double(columnWidth(tables[sheet].columns[column]))
                 }
             },
             append: { try $1.write(contentsOf: $0) })
@@ -53,8 +57,8 @@ enum MappingXLSXExport {
 
     private static func writeWorkbook(_ sheets: [MappingCSVExport.Table], to url: URL,
         exportID: UUID, snapshotAt: Date, timeZoneID: String, summaryIndex: Int,
-        numericSheetCount: Int, technicalVisible: Bool, enterprise: Bool, textOnly: Bool,
-        width: (Int, Int) -> Int, append: @escaping (Data, FileHandle) throws -> Void) throws {
+        numericSheetCount: Int, technicalVisible: Bool, regulatory: Bool = false, textOnly: Bool,
+        width: (Int, Int) -> Double, append: @escaping (Data, FileHandle) throws -> Void) throws {
         let archive = try XLSXArchive(url: url, append: append)
         defer { archive.close() }
         func part(_ name: String, _ xml: String) throws { try archive.part(name) { try $0(declaration + xml) } }
@@ -96,46 +100,61 @@ enum MappingXLSXExport {
         \(sheets.indices.map { "<Relationship Id=\"rId\($0 + 1)\" Type=\"\(relationships)/worksheet\" Target=\"worksheets/sheet\($0 + 1).xml\"/>" }.joined())
         <Relationship Id="rIdStyles" Type="\(relationships)/styles" Target="styles.xml"/></Relationships>
         """)
-        try part("xl/styles.xml", textOnly ? styles.replacingOccurrences(of: "<cellXfs count=\"6\">", with: "<cellXfs count=\"8\">")
+        try part("xl/styles.xml", regulatory ? RegulatoryLayout.styles : textOnly ? styles.replacingOccurrences(of: "<cellXfs count=\"6\">", with: "<cellXfs count=\"8\">")
             .replacingOccurrences(of: "</cellXfs>", with: "<xf numFmtId=\"49\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\" applyAlignment=\"1\"><alignment vertical=\"top\" wrapText=\"1\"/></xf><xf numFmtId=\"49\" fontId=\"0\" fillId=\"3\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\" applyAlignment=\"1\"><alignment vertical=\"top\" wrapText=\"1\"/></xf></cellXfs>") : styles)
         for (index, table) in sheets.enumerated() {
             try Task.checkCancellation()
-            guard !table.columns.isEmpty, table.columns.count <= 16_384, table.rows.count < 1_048_576 else {
+            let headers = regulatory ? EnterpriseGeotechnicalWorkbook.headerRows : [table.columns]
+            let firstDataRow = headers.count + 1
+            guard !table.columns.isEmpty, table.columns.count <= 16_384,
+                  table.rows.count <= 1_048_576 - headers.count else {
                 throw MappingError.invalid("Таблица превышает ограничения листа Excel.")
             }
             try archive.part("xl/worksheets/sheet\(index + 1).xml") { emit in
-                let last = column(table.columns.count) + String(table.rows.count + 1)
+                let last = column(table.columns.count) + String(table.rows.count + headers.count)
                 try emit(declaration + """
                 <worksheet xmlns="\(main)"><dimension ref="A1:\(last)"/>
-                <sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/><selection pane="bottomLeft" activeCell="A2" sqref="A2"/></sheetView></sheetViews>
-                <sheetFormatPr defaultRowHeight="30"/><cols>
+                <sheetViews><sheetView workbookViewId="0"><pane ySplit="\(headers.count)" topLeftCell="A\(firstDataRow)" activePane="bottomLeft" state="frozen"/><selection pane="bottomLeft" activeCell="A\(firstDataRow)" sqref="A\(firstDataRow)"/></sheetView></sheetViews>
+                <sheetFormatPr defaultRowHeight="\(regulatory ? "15" : "30")"/><cols>
                 """)
                 for i in table.columns.indices {
-                    let width = width(index, i)
-                    try emit("<col min=\"\(i + 1)\" max=\"\(i + 1)\" width=\"\(width)\" customWidth=\"1\"\(textOnly ? " style=\"6\"" : "")/>")
+                    let value = width(index, i)
+                    let columnWidth = Int(exactly: value).map(String.init) ?? String(value)
+                    try emit("<col min=\"\(i + 1)\" max=\"\(i + 1)\" width=\"\(columnWidth)\" customWidth=\"1\"\(textOnly ? " style=\"6\"" : "")/>")
                 }
-                try emit("</cols><sheetData><row r=\"1\" ht=\"36\" customHeight=\"1\">")
-                for (i, name) in table.columns.enumerated() {
-                    try emit(cell(.text(name), reference: column(i + 1) + "1", style: 1))
+                try emit("</cols><sheetData>")
+                for (i, header) in headers.enumerated() {
+                    let row = i + 1
+                    let height = regulatory ? RegulatoryLayout.headerHeights[i] : "36"
+                    try emit("<row r=\"\(row)\" ht=\"\(height)\" customHeight=\"1\">")
+                    for (j, name) in header.enumerated() {
+                        let style = regulatory ? RegulatoryLayout.headerStyle(row: i, column: j) : 1
+                        let value: MappingCSVExport.Cell = regulatory && name.isEmpty ? .empty : .text(name)
+                        try emit(cell(value, reference: column(j + 1) + String(row), style: style))
+                    }
+                    try emit("</row>")
                 }
-                try emit("</row>")
                 for (i, row) in table.rows.enumerated() {
                     try Task.checkCancellation()
                     guard row.count == table.columns.count else { throw StorageError.invalidRecord }
-                    let r = i + 2
-                    let height: Int
-                    if enterprise || index < numericSheetCount || (textOnly && ["Формат", "Колонки"].contains(table.name)) {
+                    let r = i + firstDataRow
+                    let height: String
+                    if regulatory {
+                        height = "14.1"
+                    } else if index < numericSheetCount || (textOnly && ["Формат", "Колонки"].contains(table.name)) {
                         let lines = row.enumerated().map { column, value -> Int in
                             guard case .text(let text) = value else { return 1 }
-                            let width = max(1, width(index, column) - 3)
+                            let width = max(1, Int(width(index, column)) - 3)
                             return text.split(separator: "\n", omittingEmptySubsequences: false).map { max(1, Int(ceil(Double($0.count) / Double(width)))) }.reduce(0, +)
                         }.max() ?? 1
-                        height = min(300, max(30, lines * 15 + 6))
-                    } else { height = index == summaryIndex ? 60 : 30 }
+                        height = String(min(300, max(30, lines * 15 + 6)))
+                    } else { height = index == summaryIndex ? "60" : "30" }
                     try emit("<row r=\"\(r)\" ht=\"\(height)\" customHeight=\"1\">")
                     for (j, value) in row.enumerated() {
                         let reference = column(j + 1) + String(r)
-                        if index < numericSheetCount {
+                        if regulatory {
+                            try emit(cell(value, reference: reference, style: RegulatoryLayout.dataStyle(column: j), fieldNumeric: true))
+                        } else if index < numericSheetCount {
                             // Civil dates in the selected zone; exact UTC remains on raw sheets.
                             if case .timestamp(let date) = value {
                                 let zone = TimeZone(identifier: timeZoneID) ?? .gmt
@@ -152,7 +171,14 @@ enum MappingXLSXExport {
                     }
                     try emit("</row>")
                 }
-                try emit("</sheetData>" + (index == summaryIndex ? "" : "<autoFilter ref=\"A1:\(last)\"/>") + "</worksheet>")
+                try emit("</sheetData>")
+                if index != summaryIndex { try emit("<autoFilter ref=\"A\(headers.count):\(last)\"/>") }
+                if regulatory {
+                    let merges = EnterpriseGeotechnicalWorkbook.merges
+                    try emit("<mergeCells count=\"\(merges.count)\">" + merges.map { "<mergeCell ref=\"\($0)\"/>" }.joined() + "</mergeCells>")
+                    try emit(RegulatoryLayout.printSetup)
+                }
+                try emit("</worksheet>")
             }
         }
         try archive.finish()
@@ -299,4 +325,116 @@ enum MappingXLSXExport {
     <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
     </styleSheet>
     """
+}
+
+/// Formatting of the reference Data sheet, cropped to the reporting columns.
+private enum RegulatoryLayout {
+    private enum Style: Int {
+        case general, coordinates, spacing, gsi, title, group, lastGroup
+        case location, locationCoordinates, rock, strength, rqd, jointCount, condition, conditionSpacing
+        case tectonics, joints, rating, key, keyCoordinates, keySpacing, compactKey
+    }
+
+    static let headerHeights = ["15", "15", "193.5", "14.1"]
+    // Portable page settings from the reference. Its printer-driver relationship is not copied.
+    static let printSetup = """
+    <pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>
+    <pageSetup paperSize="9" scale="100" orientation="portrait" pageOrder="downThenOver"/>
+    """
+
+    static func width(_ column: Int) -> Double {
+        switch column {
+        case 0: return 25.7109375
+        case 1, 2, 4: return 10.7109375
+        case 3: return 13.28515625
+        default: return 7.7109375
+        }
+    }
+
+    static func headerStyle(row: Int, column: Int) -> Int {
+        let style: Style
+        switch row {
+        case 0: style = .title
+        case 1: style = column == 29 ? .lastGroup : .group
+        case 2:
+            switch column {
+            case 0...1: style = .location
+            case 2...4: style = .locationCoordinates
+            case 5...7: style = .rock
+            case 8...9: style = .strength
+            case 10: style = .rqd
+            case 11: style = .jointCount
+            case 14: style = .conditionSpacing
+            case 12...17: style = .condition
+            case 18...20: style = .tectonics
+            case 21...28: style = .joints
+            default: style = .rating
+            }
+        default:
+            switch column {
+            case 2...4: style = .keyCoordinates
+            case 14: style = .keySpacing
+            case 5, 16, 18...28: style = .compactKey
+            default: style = .key
+            }
+        }
+        return style.rawValue
+    }
+
+    static func dataStyle(column: Int) -> Int {
+        let style: Style
+        switch column {
+        case 2...4: style = .coordinates
+        case 14: style = .spacing
+        case 29: style = .gsi
+        default: style = .general
+        }
+        return style.rawValue
+    }
+
+    static let styles: String = {
+        // Built-in formats 1 and 2 are 0 and 0.00. Coordinates use a custom 0.000.
+        let center = "horizontal=\"center\" vertical=\"center\""
+        let shrink = center + " shrinkToFit=\"1\""
+        let rotated = shrink + " textRotation=\"90\""
+        func xf(number: Int = 0, font: Int = 0, fill: Int = 0, border: Int = 0, alignment: String) -> String {
+            """
+            <xf numFmtId="\(number)" fontId="\(font)" fillId="\(fill)" borderId="\(border)" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment \(alignment)/></xf>
+            """
+        }
+        let colors = ["E600E6", "9BC2E6", "F4B084", "FFFF00", "00B050", "C6E0B4", "FFE699", "B4C6E7", "00B0F0"]
+        let fills = colors.map { """
+            <fill><patternFill patternType="solid"><fgColor rgb="FF\($0)"/><bgColor indexed="64"/></patternFill></fill>
+            """ }.joined()
+        // XFs follow Style's raw values.
+        let formats = [
+            xf(alignment: center), xf(number: 164, alignment: shrink), xf(number: 2, alignment: center),
+            xf(number: 1, alignment: center), xf(border: 1, alignment: center),
+            xf(border: 1, alignment: center + " wrapText=\"1\""), xf(border: 1, alignment: shrink),
+            xf(fill: 2, border: 1, alignment: rotated), xf(number: 164, fill: 2, border: 1, alignment: rotated),
+            xf(fill: 3, border: 1, alignment: rotated), xf(fill: 4, border: 1, alignment: rotated),
+            xf(fill: 5, border: 1, alignment: rotated), xf(fill: 6, border: 1, alignment: rotated),
+            xf(fill: 7, border: 1, alignment: rotated), xf(number: 2, fill: 7, border: 1, alignment: rotated),
+            xf(fill: 8, border: 1, alignment: rotated), xf(fill: 9, border: 1, alignment: rotated),
+            xf(fill: 10, border: 1, alignment: rotated), xf(border: 2, alignment: shrink),
+            xf(number: 164, border: 2, alignment: shrink), xf(number: 2, border: 2, alignment: shrink),
+            // Leave room for the filter button at the original column width.
+            xf(font: 1, border: 2, alignment: "horizontal=\"left\" vertical=\"center\" shrinkToFit=\"1\"")
+        ]
+        return """
+        <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+        <numFmts count="1"><numFmt numFmtId="164" formatCode="0.000"/></numFmts>
+        <fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><sz val="8"/><name val="Calibri"/></font></fonts>
+        <fills count="\(colors.count + 2)"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>\(fills)</fills>
+        <borders count="3">
+        <border><left/><right/><top/><bottom/><diagonal/></border>
+        <border><left style="thin"/><right style="thin"/><top style="thin"/><bottom style="thin"/><diagonal/></border>
+        <border><left style="thin"/><right style="thin"/><top style="thin"><color rgb="FF000000"/></top><bottom/><diagonal/></border>
+        </borders>
+        <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+        <cellXfs count="\(formats.count)">\(formats.joined())</cellXfs>
+        <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+        </styleSheet>
+        """
+    }()
 }
