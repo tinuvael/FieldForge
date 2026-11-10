@@ -63,6 +63,17 @@ assert [report.row_dimensions[row].height for row in range(1, 9)] == [15, 15, 19
 assert report["V3"].alignment.text_rotation == 90
 assert report["V3"].fill.fgColor.rgb == "FFB4C6E7"
 assert report["AD2"].alignment.shrink_to_fit
+assert report["A1"].border.top.style == "thin" and report["A1"].alignment.vertical == "center"
+assert report["A2"].alignment.wrap_text and report["F2"].alignment.wrap_text
+assert report["G4"].font.name == "Calibri" and report["G4"].font.sz == 11
+assert report["G4"].border.top.color.rgb == "FF000000"
+assert report["G4"].border.bottom.style is None
+assert all(report[ref].alignment.shrink_to_fit for ref in ("F4", "AC3", "AC4", "C5", "D5", "E5"))
+assert report["AC4"].font.sz == 8 and report["AC4"].alignment.horizontal == "left"
+assert (report.page_setup.paperSize, report.page_setup.orientation, report.page_setup.scale) == (9, "portrait", 100)
+assert report.page_setup.pageOrder == "downThenOver"
+assert (report.page_margins.left, report.page_margins.right, report.page_margins.top, report.page_margins.bottom,
+        report.page_margins.header, report.page_margins.footer) == (0.7, 0.7, 0.75, 0.75, 0.3, 0.3)
 formats = {"C": "0.000", "D": "0.000", "E": "0.000", "O": "0.00", "AD": "0"}
 for row in report.iter_rows(min_row=5):
     assert all(cell.number_format == formats.get(cell.column_letter, "General") for cell in row)

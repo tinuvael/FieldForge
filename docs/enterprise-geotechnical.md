@@ -63,9 +63,12 @@ excavation selection as the detailed export. It shares `FieldForge-Geotechnical.
 through iOS. The workbook has one visible sheet named `Data`, exactly A:AD, with
 the four header rows and [field mapping from the Stage 1 audit](regulatory-excel-audit.md#exact-aad-mapping).
 The title merge stops at AD and «Рейтинг массива» occupies AD2. The layout uses
-the reference widths, row heights and rotated descriptions. AD2 uses shrink-to-fit
-within the original column width. The filter starts at row 4 and the four header
-rows stay frozen.
+the reference widths, row heights and rotated descriptions. Headings and XY/Z
+cells can shrink to fit the original column widths. Longer row-4 keys use a
+smaller font to clear the filter button. The four header rows stay frozen.
+The portable print settings match the reference A4 portrait
+layout at 100% scale, with the same margins. The sheet can span several pages
+across. The printer-specific driver settings stay with the original XLSB.
 
 Each tectonic structure in the effective observation revision has its own report
 row. The other cells repeat, and S:U use that record's dip and dip direction in
@@ -76,16 +79,24 @@ share the same stored observation identity.
 - A uses the excavation name, B the display picket and F the exact stored ROCK code as text.
 - C:E use the saved coordinates. XY retain their source units, Z is in metres and
   azimuths retain their stored north reference. The workbook has no cells for
-  CRS, units, axes or north metadata. Use the journal or Exchange to verify those
-  references before combining rows.
-- G/I/P/R use explicitly supported categories. A1 is field-grade-only. A45 stays
+  CRS, units, axes, vertical datum or north metadata. The export screen checks the
+  selected values for mixed or unknown references and waits for a separate
+  export action when it finds them. Narrow the selection or check spatial
+  references in the detailed workbook before combining rows. The export performs
+  no coordinate, unit or north conversion.
+- G/I/P/R use explicitly supported categories. A1 is field-grade-only. The
+  stored R0 grade has a documented field interval of 0.25–1 MPa and does not
+  separately represent the part of the enterprise <1 MPa band below 0.25 MPa.
+  Laboratory UCS remains available in J. A45 stays
   blank for the decomposed-wall category, and a separate crushed-wall score is
   unavailable. J uses only stored UCS in MPa. JCond76 stays independent of RMR89
   and Barton Q inputs.
 - H/L/M/N use original Q coefficients. K uses original RQD as a percentage from
   the shared conflict-aware source selector. When both RQD sources disagree, K
-  is blank. O uses the arithmetic mean in metres of finite positive saved J1–J4
-  spacings. With no eligible spacing, O is blank. No spacing estimates are
+  is blank. Before sharing, the export screen lists affected observations and
+  both stored RQD values. Correct the observations in the journal and reopen the
+  export to prepare a fresh snapshot. O uses the arithmetic mean in metres of
+  finite positive saved J1–J4 spacings. With no eligible spacing, O is blank. No spacing estimates are
   recalculated on export.
 - V:AC use the saved representative orientations for J1–J4. AD uses only the
   saved final GSI. The report has no derived classification totals or formulas.

@@ -80,7 +80,10 @@ struct MappingExportView: View {
             Section {
                 Text(format == .exchange ? "Обмен: подтверждённый снимок после ранее принятых сохранений. Импорт пока недоступен." : "Подтверждённый снимок журнала при открытии выгрузки. Незавершённые сохранения не включены.").font(.caption).foregroundStyle(.secondary)
                 Text("Наблюдений: \(selectedCount)").accessibilityIdentifier("mappingExportPointCount")
-                Button(format == .exchange ? "Экспортировать Excel Exchange" : format == .enterpriseGeotechnical ? "Экспортировать по регламенту" : format == .xlsx ? "Экспортировать Excel" : format == .csv ? "Экспортировать CSV" : "Экспортировать фотографии ZIP") {
+                if format == .enterpriseGeotechnical, let report = preview?.enterpriseReport, report.requiresReview {
+                    regulatoryWarnings(report)
+                }
+                Button(exportButtonTitle) {
                     if format == .exchange { shareExchange() }
                     else if let preview { shareOrConfirm(preview) } else { prepare(shareWhenReady: true) }
                 }.disabled(busy || sharing || selection == nil).accessibilityIdentifier("mappingExportShare")
@@ -162,6 +165,37 @@ struct MappingExportView: View {
             if let files { MappingExportShareSheet(files: files) }
         }
     }
+    private var exportButtonTitle: String {
+        switch format {
+        case .enterpriseGeotechnical:
+            return preview?.enterpriseReport?.requiresReview == true
+                ? "Экспортировать с предупреждениями" : "Экспортировать по регламенту"
+        case .exchange: return "Экспортировать Excel Exchange"
+        case .xlsx: return "Экспортировать Excel"
+        case .csv: return "Экспортировать CSV"
+        case .photoPackage: return "Экспортировать фотографии ZIP"
+        }
+    }
+    @ViewBuilder private func regulatoryWarnings(_ report: EnterpriseGeotechnicalWorkbook) -> some View {
+        if !report.rqdConflicts.isEmpty {
+            Text("Расхождение RQD в Q и RMR89. Наблюдений: \(report.rqdConflicts.count). В их строках RQD будет пустым.")
+                .foregroundStyle(.orange)
+                .accessibilityIdentifier("mappingRegulatoryRQDWarning")
+            DisclosureGroup("Наблюдения с расхождением RQD") {
+                ForEach(report.rqdConflicts) { conflict in
+                    Text(verbatim: "\(conflict.excavation), \(conflict.picket) · Q: \(conflict.q) %, RMR89: \(conflict.rmr) %\nUUID: \(conflict.id.uuidString)")
+                }
+            }
+            Text("Сверьте значения с источником. Исправьте наблюдения в журнале и заново откройте выгрузку.")
+        }
+        if !report.spatialWarnings.isEmpty {
+            Text("Проверьте пространственную привязку")
+                .foregroundStyle(.orange)
+                .accessibilityIdentifier("mappingRegulatorySpatialWarning")
+            ForEach(report.spatialWarnings, id: \.self) { Text(verbatim: $0) }
+            Text("Лист Data не содержит единиц XY, СК, осей, высотной системы или типа севера. Сузьте отбор до совместимых записей или используйте полную книгу Excel для проверки привязки. При продолжении значения останутся в исходных системах.")
+        }
+    }
     private var selectedCount: Int {
         guard let selection, let bounds = try? selection.bounds() else { return 0 }
         return committed.observations(projectID: selection.projectID).filter {
@@ -214,7 +248,7 @@ struct MappingExportView: View {
                 let result = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
                 busy = false
                 try Task.checkCancellation(); preview = result.0; photoPreview = result.1
-                if shareWhenReady { shareOrConfirm(result.0) }
+                if shareWhenReady, result.0.enterpriseReport?.requiresReview != true { shareOrConfirm(result.0) }
             } catch is CancellationError { busy = false }
             catch { busy = false; errorMessage = "Ошибка выгрузки: \(error.localizedDescription)" }
         }

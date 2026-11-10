@@ -344,7 +344,19 @@ import XCTest
         let exportID = draftID(9)
         let export = try MappingCSVExport.prepare(journal: journal, selection: selection, now: now, id: exportID, includeEnterprise: true)
         let plain = try MappingCSVExport.prepare(journal: journal, selection: selection, now: now, id: exportID)
-        let report = try XCTUnwrap(export.enterpriseTable)
+        let regulatory = try XCTUnwrap(export.enterpriseReport)
+        let report = regulatory.table
+        XCTAssertTrue(regulatory.requiresReview)
+        XCTAssertEqual(regulatory.rqdConflicts.map(\.id), [oneFault.id])
+        XCTAssertEqual(regulatory.rqdConflicts.first?.picket, oneFault.displayPicket)
+        XCTAssertEqual(regulatory.rqdConflicts.first?.q, "90")
+        XCTAssertEqual(regulatory.rqdConflicts.first?.rmr, "80")
+        XCTAssertEqual(regulatory.spatialWarnings, [
+            "Высотная система Z: есть неизвестные значения.",
+            "В азимутах используются разные типы севера: магнитный, истинный, сеточный."
+        ])
+        // J5 and a dip without an azimuth do not contribute a north reference.
+        XCTAssertFalse(try EnterpriseGeotechnicalWorkbook.prepare(points: [noFault], journal: journal).requiresReview)
         XCTAssertEqual(report.name, "Data")
         XCTAssertEqual(report.columns.joined(separator: " "), "ID PK X Y Z ROCK A45 JW A1 UCS RQD JN JR JA SD A43 JCON76 A42 F_DIP F_AZI F_THI J_DIP_1 J_AZI_1 J_DIP_2 J_AZI_2 J_DIP_3 J_AZI_3 J_DIP_4 J_AZI_4 GSI")
         XCTAssertEqual(report.rows.count, 4)
@@ -381,6 +393,52 @@ import XCTest
             let path = URL(fileURLWithPath: fixture)
             try FileManager.default.createDirectory(at: path, withIntermediateDirectories: true)
             try Data(contentsOf: workbook).write(to: path.appendingPathComponent(workbook.lastPathComponent))
+        }
+    }
+    func testRegulatorySpatialWarningsPreserveCoordinatesAndAzimuths() throws {
+        try directory { root in
+            var w = try configured(MappingTests.MemoryStore())
+            let plans = ManagedPlanStore(root: root)
+            let dxf = DXFFixtures.drawing("0\nLINE\n10\n0\n20\n0\n11\n10\n21\n0\n")
+            let horizonID = try XCTUnwrap(w.context.horizonID)
+            w.draft = MappingDraft()
+            w.draft.picket = "1"; w.draft.observedAtOverride = now
+            w.draft.x = "0"; w.draft.y = "21"; w.draft.crs = "Grid A"; w.draft.axes = "X north"
+            let manual = try w.save(now: now)
+
+            let millimeters = try plans.stage(data: dxf, filename: "mm.dxf", horizonID: horizonID,
+                version: "mm", units: .millimeters, crs: "Grid B", axes: "X east")
+            try w.registerPlan(millimeters)
+            try w.selectPlanPoint(.init(x: 1000, y: 2000), planID: millimeters.id)
+            w.draft.picket = "2"; w.draft.observedAtOverride = now
+            let metricPlan = try w.save(now: now)
+
+            let drawing = try plans.stage(data: dxf, filename: "drawing.dxf", horizonID: horizonID,
+                version: "drawing", units: .unknown, crs: "local", axes: "не указано")
+            try w.registerPlan(drawing)
+            try w.selectPlanPoint(.init(x: 15, y: 25), planID: drawing.id)
+            w.draft.picket = "3"; w.draft.observedAtOverride = now
+            var fault = TectonicStructureDraft()
+            fault.orientation = .init(dipDirectionText: "33", reference: .unknown)
+            w.draft.tectonicStructures = [fault]
+            let unknownPlan = try w.save(now: now)
+
+            let regulatory = try EnterpriseGeotechnicalWorkbook.prepare(points: w.observations, journal: w.journal)
+            XCTAssertTrue(regulatory.requiresReview)
+            XCTAssertEqual(regulatory.spatialWarnings, [
+                "Единицы XY: есть неизвестные значения.", "Единицы XY: разные значения (m, mm).",
+                "СК XY: есть неизвестные значения.", "СК XY: разные значения (grid a, grid b).",
+                "Оси XY: есть неизвестные значения.", "Оси XY: разные значения (x east, x north).",
+                "Есть азимуты с неизвестным типом севера."
+            ])
+            let rows = Dictionary(uniqueKeysWithValues: regulatory.table.rows.map { ($0[1].csv, $0) })
+            for (point, x, y) in [(manual, 0.0, 21.0), (metricPlan, 1000, 2000), (unknownPlan, 15, 25)] {
+                let row = try XCTUnwrap(rows[MappingCSVExport.Cell.text(point.displayPicket).csv])
+                XCTAssertEqual(row[2].csv, MappingCSVExport.Cell.number(x).csv)
+                XCTAssertEqual(row[3].csv, MappingCSVExport.Cell.number(y).csv)
+            }
+            let unknownRow = try XCTUnwrap(rows[MappingCSVExport.Cell.text(unknownPlan.displayPicket).csv])
+            XCTAssertEqual(unknownRow[19].csv, MappingCSVExport.Cell.number(33).csv)
         }
     }
     func testStagedSystemAcceptanceUsesCurrentRQDButKeepsManualOverride() throws {
@@ -442,7 +500,7 @@ import XCTest
     func testEmptyLegacyObservationsRemainExportableAndNoMissingValueBecomesZero() throws {
         var w = try configured(MappingTests.MemoryStore()); w.draft = MappingDraft(); w.draft.picket = "0"
         let point = try w.save(now: now)
-        let report = try EnterpriseGeotechnicalWorkbook.table(points: [point], journal: w.journal)
+        let report = try EnterpriseGeotechnicalWorkbook.prepare(points: [point], journal: w.journal).table
         if case .number(let mean) = report.rows[0][14] { XCTAssertNil(mean) } else { XCTFail("Missing SD") }
         let files = try MappingExportFiles.write(MappingCSVExport.prepare(journal: w.journal, selection: MappingExportSelection(projectID: point.projectID, firstDay: now, lastDay: now, timeZoneID: "UTC"), includeEnterprise: true), format: .enterpriseGeotechnical)
         XCTAssertEqual(files.urls.count, 1); files.cleanup()

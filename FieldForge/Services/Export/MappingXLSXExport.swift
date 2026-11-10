@@ -20,7 +20,7 @@ enum MappingXLSXExport {
                       append: @escaping (Data, FileHandle) throws -> Void = { try $1.write(contentsOf: $0) }) throws {
         try Task.checkCancellation()
         if enterprise {
-            guard let table = snapshot.enterpriseTable else { throw StorageError.invalidRecord }
+            guard let table = snapshot.enterpriseReport?.table else { throw StorageError.invalidRecord }
             try writeWorkbook([table], to: url, exportID: snapshot.id, snapshotAt: snapshot.snapshotAt,
                 timeZoneID: snapshot.selection.timeZoneID, summaryIndex: -1,
                 numericSheetCount: 1, technicalVisible: true, regulatory: true, textOnly: false,
@@ -176,6 +176,7 @@ enum MappingXLSXExport {
                 if regulatory {
                     let merges = EnterpriseGeotechnicalWorkbook.merges
                     try emit("<mergeCells count=\"\(merges.count)\">" + merges.map { "<mergeCell ref=\"\($0)\"/>" }.joined() + "</mergeCells>")
+                    try emit(RegulatoryLayout.printSetup)
                 }
                 try emit("</worksheet>")
             }
@@ -331,10 +332,15 @@ private enum RegulatoryLayout {
     private enum Style: Int {
         case general, coordinates, spacing, gsi, title, group, lastGroup
         case location, locationCoordinates, rock, strength, rqd, jointCount, condition, conditionSpacing
-        case tectonics, joints, rating, key, keyCoordinates, keySpacing, keyCategory
+        case tectonics, joints, rating, key, keyCoordinates, keySpacing, compactKey
     }
 
     static let headerHeights = ["15", "15", "193.5", "14.1"]
+    // Portable page settings from the reference. Its printer-driver relationship is not copied.
+    static let printSetup = """
+    <pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>
+    <pageSetup paperSize="9" scale="100" orientation="portrait" pageOrder="downThenOver"/>
+    """
 
     static func width(_ column: Int) -> Double {
         switch column {
@@ -368,7 +374,7 @@ private enum RegulatoryLayout {
             switch column {
             case 2...4: style = .keyCoordinates
             case 14: style = .keySpacing
-            case 6, 15, 17: style = .keyCategory
+            case 5, 16, 18...28: style = .compactKey
             default: style = .key
             }
         }
@@ -389,7 +395,8 @@ private enum RegulatoryLayout {
     static let styles: String = {
         // Built-in formats 1 and 2 are 0 and 0.00. Coordinates use a custom 0.000.
         let center = "horizontal=\"center\" vertical=\"center\""
-        let rotated = center + " textRotation=\"90\""
+        let shrink = center + " shrinkToFit=\"1\""
+        let rotated = shrink + " textRotation=\"90\""
         func xf(number: Int = 0, font: Int = 0, fill: Int = 0, border: Int = 0, alignment: String) -> String {
             """
             <xf numFmtId="\(number)" fontId="\(font)" fillId="\(fill)" borderId="\(border)" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment \(alignment)/></xf>
@@ -401,24 +408,29 @@ private enum RegulatoryLayout {
             """ }.joined()
         // XFs follow Style's raw values.
         let formats = [
-            xf(alignment: center), xf(number: 164, alignment: center), xf(number: 2, alignment: center),
-            xf(number: 1, alignment: center), xf(alignment: "horizontal=\"center\""),
-            xf(border: 1, alignment: center), xf(border: 1, alignment: center + " shrinkToFit=\"1\""),
+            xf(alignment: center), xf(number: 164, alignment: shrink), xf(number: 2, alignment: center),
+            xf(number: 1, alignment: center), xf(border: 1, alignment: center),
+            xf(border: 1, alignment: center + " wrapText=\"1\""), xf(border: 1, alignment: shrink),
             xf(fill: 2, border: 1, alignment: rotated), xf(number: 164, fill: 2, border: 1, alignment: rotated),
             xf(fill: 3, border: 1, alignment: rotated), xf(fill: 4, border: 1, alignment: rotated),
             xf(fill: 5, border: 1, alignment: rotated), xf(fill: 6, border: 1, alignment: rotated),
             xf(fill: 7, border: 1, alignment: rotated), xf(number: 2, fill: 7, border: 1, alignment: rotated),
             xf(fill: 8, border: 1, alignment: rotated), xf(fill: 9, border: 1, alignment: rotated),
-            xf(fill: 10, border: 1, alignment: rotated), xf(border: 1, alignment: center),
-            xf(number: 164, border: 1, alignment: center), xf(number: 2, border: 1, alignment: center),
-            xf(font: 1, border: 1, alignment: center)
+            xf(fill: 10, border: 1, alignment: rotated), xf(border: 2, alignment: shrink),
+            xf(number: 164, border: 2, alignment: shrink), xf(number: 2, border: 2, alignment: shrink),
+            // Leave room for the filter button at the original column width.
+            xf(font: 1, border: 2, alignment: "horizontal=\"left\" vertical=\"center\" shrinkToFit=\"1\"")
         ]
         return """
         <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
         <numFmts count="1"><numFmt numFmtId="164" formatCode="0.000"/></numFmts>
-        <fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><sz val="10"/><name val="Arial Cyr"/></font></fonts>
+        <fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><sz val="8"/><name val="Calibri"/></font></fonts>
         <fills count="\(colors.count + 2)"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>\(fills)</fills>
-        <borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"/><right style="thin"/><top style="thin"/><bottom style="thin"/><diagonal/></border></borders>
+        <borders count="3">
+        <border><left/><right/><top/><bottom/><diagonal/></border>
+        <border><left style="thin"/><right style="thin"/><top style="thin"/><bottom style="thin"/><diagonal/></border>
+        <border><left style="thin"/><right style="thin"/><top style="thin"><color rgb="FF000000"/></top><bottom/><diagonal/></border>
+        </borders>
         <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
         <cellXfs count="\(formats.count)">\(formats.joined())</cellXfs>
         <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>

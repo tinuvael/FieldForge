@@ -1,9 +1,22 @@
 import Foundation
 
 /// Data!A:AD reporting projection from the selected effective observations.
-enum EnterpriseGeotechnicalWorkbook {
+struct EnterpriseGeotechnicalWorkbook: Sendable {
     typealias Cell = MappingCSVExport.Cell
     typealias Table = MappingCSVExport.Table
+
+    struct RQDConflict: Identifiable, Sendable {
+        let id: UUID
+        let excavation: String
+        let picket: String
+        let q: String
+        let rmr: String
+    }
+
+    let table: Table
+    let rqdConflicts: [RQDConflict]
+    let spatialWarnings: [String]
+    var requiresReview: Bool { !rqdConflicts.isEmpty || !spatialWarnings.isEmpty }
 
     private static let joints: [JointSetIdentifier] = [.J1, .J2, .J3, .J4]
     static let columns = [
@@ -27,9 +40,11 @@ enum EnterpriseGeotechnicalWorkbook {
     ]
     static let merges = ["A1:AD1", "A2:E2", "F2:H2", "I2:J2", "K2:L2", "M2:R2", "S2:U2", "V2:AC2", "C3:E3"]
 
-    static func table(points: [MappingObservation], journal: MappingJournal) throws -> Table {
+    static func prepare(points: [MappingObservation], journal: MappingJournal) throws -> Self {
         let excavations = Dictionary(uniqueKeysWithValues: journal.excavations.map { ($0.id, $0.name) })
         var report = Table(name: "Data", columns: columns)
+        var rqdConflicts: [RQDConflict] = []
+        var spatial = SpatialReferences()
         for point in points {
             try Task.checkCancellation()
             guard let excavation = excavations[point.excavationID] else { throw StorageError.invalidRecord }
@@ -39,6 +54,11 @@ enum EnterpriseGeotechnicalWorkbook {
             let sets = (point.geology?.jointSets ?? []).filter { joints.contains($0.identifier) }
             let coordinates = point.coordinates
             let ucs = rmr?.strengthTest == .ucs ? number(rmr?.strengthMPa) : .empty
+            // Valid saved assessments reach this branch when both original RQD inputs disagree.
+            if rqd.source == nil, rqd.warning != nil, let q, let rmr {
+                rqdConflicts.append(.init(id: point.id, excavation: excavation, picket: point.displayPicket, q: q.rqd, rmr: rmr.rqd))
+            }
+            if let coordinates { spatial.record(coordinates) }
 
             let beforeFault: [Cell] = [
                 .text(excavation), .text(point.displayPicket),
@@ -53,6 +73,7 @@ enum EnterpriseGeotechnicalWorkbook {
             let jointOrientations: [Cell] = try joints.flatMap { identifier -> [Cell] in
                 guard let set = sets.first(where: { $0.identifier == identifier }) else { return [.empty, .empty] }
                 let orientation = try set.representative.validated().orientation
+                if orientation.dipDirection != nil { spatial.north.insert(set.representative.reference) }
                 return [.number(orientation.dipAngle), .number(orientation.dipDirection)]
             }
             let afterFault = jointOrientations + [.number(point.ratings?.gsi?.finalValue)]
@@ -64,12 +85,46 @@ enum EnterpriseGeotechnicalWorkbook {
             for fault in faults {
                 try Task.checkCancellation()
                 let orientation = try fault.orientation.validatedTectonic()
+                if orientation.dipDirection != nil { spatial.north.insert(fault.orientation.reference) }
                 report.rows.append(beforeFault + [
                     .number(orientation.dipAngle), .number(orientation.dipDirection), .number(fault.thicknessMeters)
                 ] + afterFault)
             }
         }
-        return report
+        return Self(table: report, rqdConflicts: rqdConflicts, spatialWarnings: spatial.warnings)
+    }
+
+    private struct SpatialReferences {
+        var units: Set<String?> = []
+        var crs: Set<String?> = []
+        var axes: Set<String?> = []
+        var datum: Set<String?> = []
+        var north: Set<GeographicReference> = []
+
+        mutating func record(_ coordinates: MappingCoordinates) {
+            if coordinates.x != nil || coordinates.y != nil {
+                units.insert(coordinates.units == PlanUnits.unknown.coordinateUnits ? nil : coordinates.units)
+                crs.insert(PlanCoordinateCompatibility.known(coordinates.crs))
+                axes.insert(PlanCoordinateCompatibility.known(coordinates.axes))
+            }
+            if coordinates.z != nil {
+                datum.insert((coordinates.zPlanGeometry?.verticalDatum ?? coordinates.zDatum).flatMap(PlanCoordinateCompatibility.known))
+            }
+        }
+
+        var warnings: [String] {
+            var result: [String] = []
+            for (label, values) in [("Единицы XY", units), ("СК XY", crs), ("Оси XY", axes), ("Высотная система Z", datum)] {
+                if values.contains(nil) { result.append("\(label): есть неизвестные значения.") }
+                let known = values.compactMap { $0 }.sorted()
+                if known.count > 1 { result.append("\(label): разные значения (\(known.joined(separator: ", "))).") }
+            }
+            if north.contains(.unknown) { result.append("Есть азимуты с неизвестным типом севера.") }
+            let labels: [(GeographicReference, String)] = [(.magneticNorth, "магнитный"), (.trueNorth, "истинный"), (.gridNorth, "сеточный")]
+            let present = labels.compactMap { north.contains($0.0) ? $0.1 : nil }
+            if present.count > 1 { result.append("В азимутах используются разные типы севера: \(present.joined(separator: ", ")).") }
+            return result
+        }
     }
 
     private static func number(_ raw: String?) -> Cell {

@@ -101,7 +101,7 @@ final class GSIChartTests: XCTestCase {
         let value = try XCTUnwrap(ordinary.columns.firstIndex(of: "GSI · оценка"))
         guard case .number(let n) = ordinary.rows[0][value] else { return XCTFail("GSI must be a numeric Excel cell") }
         XCTAssertEqual(n, gsi.finalValue)
-        let enterprise = try XCTUnwrap(export.enterpriseTable)
+        let enterprise = try XCTUnwrap(export.enterpriseReport?.table)
         XCTAssertEqual(enterprise.columns.last, "GSI")
         guard case .number(let final)? = enterprise.rows[0].last else { return XCTFail("AD must be numeric") }
         XCTAssertEqual(final, gsi.finalValue)
