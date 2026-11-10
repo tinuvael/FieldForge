@@ -140,6 +140,7 @@ import XCTest
         var input = Self.referenceInput(); input.basicSelections?["infill"] = "infill-4"
         XCTAssertNil(try input.basicEvaluation().value)
         input.basicSelections?["overallCondition"] = "overallCondition-4"
+        input.overallConditionContinuity = .continuous
         XCTAssertEqual(try input.basicEvaluation().value, 42)
         XCTAssertEqual(try input.basicEvaluation().components["condition"], 0)
         input.basicSelections?["roughness"] = "roughness-0"
@@ -150,26 +151,101 @@ import XCTest
         input.basicSelections?["infill"] = "infill-2"
         XCTAssertNil(try input.basicEvaluation().value) // Hard >5 mm is not uniquely covered by A.4.
     }
-    func testRMR89DirectA4ConditionAndChartEBoundaries() throws {
+    private func directA4Input(_ row: Int) -> RMR89Input {
         var input = Self.referenceInput()
         for key in ["persistence", "aperture", "roughness", "infill", "weathering"] { input.basicSelections?[key] = nil }
         input.apertureMillimeters = ""; input.persistenceMeters = ""
-        for (index, score) in [30, 25, 20, 10, 0].enumerated() {
-            input.basicSelections?["overallCondition"] = "overallCondition-\(index)"
-            let result = try input.basicEvaluation()
-            XCTAssertEqual(result.components["condition"], score); XCTAssertEqual(result.value, 42 + score)
-        }
-        input.basicSelections?["infill"] = "infill-2"; input.apertureMillimeters = "8"
-        XCTAssertEqual(try input.basicEvaluation().value, 42) // Continuous and aperture >5 mm.
-        XCTAssertNil(try input.historicalBasicEvaluation().value)
-        input.apertureMillimeters = "5"
-        XCTAssertThrowsError(try input.basicEvaluation()) // Hard gouge is not the soft-gouge alternative.
-        input.basicSelections?["overallCondition"] = "overallCondition-3"
-        XCTAssertEqual(try input.basicEvaluation().value, 52) // Continuous and aperture 1–5 mm.
-        input.apertureMillimeters = "0.5"
-        XCTAssertThrowsError(try input.basicEvaluation())
+        input.basicSelections?["overallCondition"] = "overallCondition-\(row)"
+        return input
+    }
 
-        input = Self.referenceInput()
+    func testRMR89A4RowSelectionAloneCannotSupplyEvidence() throws {
+        for (row, missingCount) in [4, 3, 3, 2, 2].enumerated() {
+            let result = try directA4Input(row).basicEvaluation()
+            XCTAssertNil(result.components["condition"]); XCTAssertNil(result.value)
+            XCTAssertEqual(result.missing.count, missingCount, "A.4 row \(row)")
+            XCTAssertTrue(result.missing.allSatisfy { $0.hasPrefix("A.4:") })
+        }
+    }
+
+    func testRMR89A4ThirtyRequiresAllFourDescriptors() throws {
+        var input = directA4Input(0)
+        input.basicSelections?["roughness"] = "roughness-0"; input.basicSelections?["weathering"] = "weathering-0"
+        input.apertureMillimeters = "0"; input.persistenceMeters = "0.5"
+        let unconfirmed = try input.basicEvaluation()
+        XCTAssertNil(unconfirmed.value); XCTAssertEqual(unconfirmed.missing, ["A.4: требуется подтверждение (прерывистость)"])
+        input.overallConditionContinuity = .continuous
+        XCTAssertThrowsError(try input.basicEvaluation())
+        input.overallConditionContinuity = .discontinuous
+        XCTAssertEqual(try input.basicEvaluation().value, 72)
+        for (key, wrong) in [("roughness", "roughness-1"), ("weathering", "weathering-1")] {
+            var changed = input; changed.basicSelections?[key] = nil
+            XCTAssertNil(try changed.basicEvaluation().value)
+            changed.basicSelections?[key] = wrong
+            XCTAssertThrowsError(try changed.basicEvaluation())
+        }
+        input.apertureMillimeters = ""; XCTAssertNil(try input.basicEvaluation().value)
+        input.basicSelections?["aperture"] = "aperture-0"; XCTAssertEqual(try input.basicEvaluation().value, 72)
+        input.basicSelections?["aperture"] = nil; input.apertureMillimeters = "0.0001"
+        XCTAssertThrowsError(try input.basicEvaluation())
+    }
+
+    func testRMR89A4TwentyFiveAndTwentyRequireMatchingWallsRoughnessAndAperture() throws {
+        for (row, weathering, wrong, total) in [(1, "weathering-1", "weathering-3", 67), (2, "weathering-3", "weathering-1", 62)] {
+            var input = directA4Input(row)
+            input.basicSelections?["roughness"] = "roughness-2"; input.basicSelections?["weathering"] = weathering
+            input.basicSelections?["aperture"] = "aperture-2" // Includes 1 mm, so cannot establish <1 mm.
+            XCTAssertNil(try input.basicEvaluation().value)
+            input.apertureMillimeters = "0.5"
+            XCTAssertEqual(try input.basicEvaluation().value, total) // Continuity is absent from both printed rows.
+            input.apertureMillimeters = "1"; XCTAssertThrowsError(try input.basicEvaluation())
+            input.apertureMillimeters = "0.5"; input.basicSelections?["weathering"] = nil
+            XCTAssertNil(try input.basicEvaluation().value)
+            input.basicSelections?["weathering"] = wrong; XCTAssertThrowsError(try input.basicEvaluation())
+            input.basicSelections?["weathering"] = weathering; input.basicSelections?["roughness"] = "roughness-3"
+            XCTAssertThrowsError(try input.basicEvaluation())
+        }
+    }
+
+    func testRMR89A4TenRequiresContinuityAndOneOfThreeAlternatives() throws {
+        var input = directA4Input(3)
+        input.persistenceMeters = "25"; input.apertureMillimeters = "2"
+        XCTAssertNil(try input.basicEvaluation().value)
+        input.overallConditionContinuity = .discontinuous
+        XCTAssertThrowsError(try input.basicEvaluation())
+        input.overallConditionContinuity = .continuous
+        input.apertureMillimeters = ""; XCTAssertNil(try input.basicEvaluation().value)
+        for (key, category) in [("roughness", "roughness-4"), ("infill", "infill-1"), ("infill", "infill-3")] {
+            var confirmed = input; confirmed.basicSelections?[key] = category
+            XCTAssertEqual(try confirmed.basicEvaluation().value, 52)
+        }
+        input.basicSelections?["roughness"] = "roughness-3"; input.basicSelections?["infill"] = "infill-2"
+        for aperture in ["1", "5"] {
+            input.apertureMillimeters = aperture; XCTAssertEqual(try input.basicEvaluation().value, 52)
+        }
+        for aperture in ["0.999", "5.001"] {
+            input.apertureMillimeters = aperture; XCTAssertThrowsError(try input.basicEvaluation())
+        }
+        input.basicSelections?["roughness"] = "roughness-4"
+        XCTAssertEqual(try input.basicEvaluation().value, 52) // A.4 independently accepts observed slickensides.
+    }
+
+    func testRMR89A4ZeroRequiresContinuityAndOneOfTwoAlternatives() throws {
+        var input = directA4Input(4)
+        input.apertureMillimeters = "8"; input.basicSelections?["infill"] = "infill-2"
+        XCTAssertNil(try input.basicEvaluation().value)
+        input.overallConditionContinuity = .discontinuous; XCTAssertThrowsError(try input.basicEvaluation())
+        input.overallConditionContinuity = .continuous
+        let wide = try input.basicEvaluation()
+        XCTAssertEqual(wide.components["condition"], 0); XCTAssertEqual(wide.value, 42)
+        input.apertureMillimeters = "5"; XCTAssertThrowsError(try input.basicEvaluation())
+        input.basicSelections?["infill"] = nil; XCTAssertNil(try input.basicEvaluation().value)
+        input.apertureMillimeters = ""; input.basicSelections?["infill"] = "infill-4"
+        XCTAssertEqual(try input.basicEvaluation().value, 42)
+    }
+
+    func testRMR89ChartEBoundaries() throws {
+        var input = Self.referenceInput()
         input.persistenceMeters = "3"; input.apertureMillimeters = "1"
         XCTAssertEqual(try input.basicEvaluation().components["condition"], 22)
         input.basicSelections?["persistence"] = "persistence-2"; input.basicSelections?["aperture"] = "aperture-3"
@@ -183,6 +259,7 @@ import XCTest
         input.rqd = "0"; input.spacingMeters = "0.03"; input.apertureMillimeters = "8"
         input.inflowLitersPerMinutePer10m = "200"
         input.basicSelections = ["strength": "strength-6", "rqd": "rqd-4", "spacing": "spacing-4", "overallCondition": "overallCondition-4", "groundwater": "groundwater-4"]
+        input.overallConditionContinuity = .continuous
         input.application = .tunnelsAndMines; input.orientationFavorability = .unfavorable
         input.orientationDescription = "Continuous set, strike perpendicular, 30° against drive"
         let result = try input.basicEvaluation()
@@ -221,6 +298,31 @@ import XCTest
         let fieldReopened = try JSONDecoder().decode(RMR89Assessment.self, from: JSONEncoder().encode(field))
         try fieldReopened.validate(); XCTAssertEqual(fieldReopened, field)
         XCTAssertEqual(field.calculation?.value, 52); XCTAssertNil(field.calculation?.orientationAdjustment)
+    }
+
+    func testRMR89V3A4SnapshotRetainsOriginalResultAndV4ProtectsConfirmation() throws {
+        let now = Date(timeIntervalSince1970: 100)
+        var input = directA4Input(3)
+        input.apertureMillimeters = "2"
+        input.application = .tunnelsAndMines; input.orientationFavorability = .fair; input.orientationDescription = "Recorded assessment"
+        let v3 = try RMR89Assessment(input: input, now: now, method: RMR89Assessment.preA4VerificationVersion)
+        let saved = try JSONDecoder().decode(RMR89Assessment.self, from: JSONEncoder().encode(v3))
+        try saved.validate(); XCTAssertEqual(saved, v3)
+        XCTAssertNil(saved.input.overallConditionContinuity)
+        XCTAssertEqual(saved.calculation?.value, 52); XCTAssertEqual(saved.calculation?.adjustedValue, 47)
+        XCTAssertNil(try RMR89Assessment(input: input, now: now).calculation?.value)
+
+        input.overallConditionContinuity = .continuous
+        let v4 = try RMR89Assessment(input: input, now: now)
+        XCTAssertEqual(v4.method, RMR89Assessment.verifiedVersion); XCTAssertEqual(v4.calculation?.adjustedValue, 47)
+        let bytes = try JSONEncoder().encode(v4)
+        let reopened = try JSONDecoder().decode(RMR89Assessment.self, from: bytes)
+        try reopened.validate(); XCTAssertEqual(reopened.input.overallConditionContinuity, .continuous)
+        var snapshot = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
+        var alteredInput = try XCTUnwrap(snapshot["input"] as? [String: Any])
+        alteredInput["overallConditionContinuity"] = nil; snapshot["input"] = alteredInput
+        let tampered = try JSONDecoder().decode(RMR89Assessment.self, from: JSONSerialization.data(withJSONObject: snapshot))
+        XCTAssertThrowsError(try tampered.validate())
     }
     func testCalculatedCorrectionPreservesOriginalsAndReloadsCurrentJournal() throws {
         let (store, initial, original) = try P33RevisionTests().seed(); var workflow = initial

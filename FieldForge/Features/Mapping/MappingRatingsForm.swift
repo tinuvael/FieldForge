@@ -258,6 +258,13 @@ private struct RMR89Form: View {
         }
         category(.overallCondition)
         Text("A.4 заменяет сумму компонентов диаграммы E. При наличии заполнителя выберите строку A.4, если подходит её полное описание.").font(.caption)
+        if input.basicSelections?[RMR89Parameter.overallCondition.rawValue] != nil || input.overallConditionContinuity != nil {
+            Picker("Непрерывность трещин · A.4", selection: $input.overallConditionContinuity) {
+                Text("Не подтверждена").tag(nil as RMR89DiscontinuityContinuity?)
+                ForEach(RMR89DiscontinuityContinuity.allCases, id: \.self) { Text($0.title).tag(Optional($0)) }
+            }.accessibilityIdentifier("rmrA4Continuity")
+            Text("Для 30 баллов подтвердите прерывистость, для 10 или 0 — непрерывность. Оцените её для той же системы трещин и выработки. Протяжённость вводится отдельно.").font(.caption)
+        }
         if input.strengthTest == .pointLoadIs50 {
             Text("Is(50) <1 МПа: требуется UCS. Пересчёт Is(50) в UCS не выполняется.").font(.caption)
         }
@@ -378,6 +385,15 @@ extension RMR89OrientationFavorability {
         case .fair: return "Средняя"
         case .unfavorable: return "Неблагоприятная"
         case .veryUnfavorable: return "Очень неблагоприятная"
+        }
+    }
+}
+
+extension RMR89DiscontinuityContinuity {
+    var title: String {
+        switch self {
+        case .discontinuous: return "Прерывистые"
+        case .continuous: return "Непрерывные"
         }
     }
 }

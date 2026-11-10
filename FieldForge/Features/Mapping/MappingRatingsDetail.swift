@@ -53,6 +53,9 @@ struct MappingRatingsDetail: View {
                     value("Прочность, МПа", rmr.input.strengthMPa); value("Источник испытания", rmr.input.strengthEvidence)
                     value("RQD исходное, %", rmr.input.rqd); value("Источник RQD", rmr.input.rqdEvidence)
                     value("Расстояние, м", rmr.input.spacingMeters); value("Протяжённость, м", rmr.input.persistenceMeters)
+                    if let continuity = rmr.input.overallConditionContinuity {
+                        value("Подтверждение непрерывности · A.4", continuity.title)
+                    }
                     value("Раскрытие, мм", rmr.input.apertureMillimeters); value("Шероховатость", rmr.input.roughness)
                     value("Заполнитель", rmr.input.infill); value("Выветрелость", rmr.input.weathering)
                     value("Подземные воды", rmr.input.groundwater); value("Приток, л/мин на 10 м", rmr.input.inflowLitersPerMinutePer10m)

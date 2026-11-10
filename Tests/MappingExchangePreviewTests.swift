@@ -107,13 +107,17 @@ import zlib
     }
     func testRMR89ExchangePreservesStoredCorrectionAndProtectsResult() throws {
         var input = FinalFieldPolishTests.referenceInput()
+        input.apertureMillimeters = "2"; input.basicSelections?["aperture"] = "aperture-3"
+        input.basicSelections?["overallCondition"] = "overallCondition-3"
+        input.overallConditionContinuity = .continuous
         input.application = .foundations; input.orientationFavorability = .fair
         input.orientationDescription = "Documented foundation-specific interpretation"
         let j = try fixture(includeRegulatory: true, rmr89: input), e = try export(j)
         let snapshot = try XCTUnwrap(j.observations.first?.ratings?.rmr89)
-        XCTAssertEqual(snapshot.calculation?.adjustedValue, 57)
+        XCTAssertEqual(snapshot.calculation?.adjustedValue, 45)
         let p = try preview(e, journal: j)
         XCTAssertEqual(p.count(.unchanged), 1); XCTAssertEqual(p.records.first?.proposed?.ratings?.rmr89, snapshot)
+        XCTAssertEqual(p.records.first?.proposed?.ratings?.rmr89?.input.overallConditionContinuity, .continuous)
         let assessments = try XCTUnwrap(e.tables.first { $0.name == "assessments" })
         let rmrRow = try XCTUnwrap(assessments.rows.firstIndex { if case .text("RMR89-basic") = $0[1] { return true }; return false })
         let modified = edit(e, sheet: "assessments", row: rmrRow, values: ["stored_rmr_calculation_json": "{}"])

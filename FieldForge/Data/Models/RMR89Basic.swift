@@ -59,6 +59,10 @@ enum RMR89Parameter: String, CaseIterable, Sendable {
     }
 }
 
+enum RMR89DiscontinuityContinuity: String, Codable, CaseIterable, Sendable {
+    case discontinuous, continuous
+}
+
 enum RMR89OrientationFavorability: String, Codable, CaseIterable, Sendable {
     case veryFavorable, favorable, fair, unfavorable, veryUnfavorable
 
@@ -100,6 +104,14 @@ struct RMR89BasicEvaluation: Codable, Equatable, Sendable {
 
 extension RMR89Input {
     func basicEvaluation() throws -> RMR89BasicEvaluation {
+        try basicEvaluation(requireConfirmedA4: true)
+    }
+
+    func v3BasicEvaluation() throws -> RMR89BasicEvaluation {
+        try basicEvaluation(requireConfirmedA4: false)
+    }
+
+    private func basicEvaluation(requireConfirmedA4: Bool) throws -> RMR89BasicEvaluation {
         let selected = try checkedSelections()
         var missing: [String] = [], components: [String: Int] = [:]
         let strength = try RatingNumber.optional(strengthMPa, name: RMR89Parameter.strength.title)
@@ -116,8 +128,14 @@ extension RMR89Input {
             else { missing.append(parameter.title) }
         }
         if let overall = selected[.overallCondition] {
-            try checkOverallCondition(overall, selected: selected)
-            components["condition"] = overall.rating
+            if requireConfirmedA4 {
+                let conditionMissing = try checkOverallCondition(overall, selected: selected)
+                if conditionMissing.isEmpty { components["condition"] = overall.rating }
+                else { missing.append(contentsOf: conditionMissing) }
+            } else {
+                try checkV3OverallCondition(overall, selected: selected)
+                components["condition"] = overall.rating
+            }
         } else if let infill = selected[.infill], infill.id != "infill-0" {
             missing.append("Состояние в целом · A.4 (влияние заполнителя)")
         } else {
@@ -156,7 +174,55 @@ extension RMR89Input {
         }
     }
 
-    private func checkOverallCondition(_ overall: RMR89Parameter.Choice, selected: [RMR89Parameter: RMR89Parameter.Choice]) throws {
+    /// Table 4.1 A.4, pp. 54–55. Unknown evidence cannot satisfy a required descriptor.
+    private func checkOverallCondition(_ overall: RMR89Parameter.Choice, selected: [RMR89Parameter: RMR89Parameter.Choice]) throws -> [String] {
+        let measured = try RatingNumber.optional(apertureMillimeters, name: RMR89Parameter.aperture.title)
+        let aperture = measured.map { $0...$0 } ?? selected[.aperture]?.range
+        func matchesAperture(_ expected: ClosedRange<Double>) -> Bool? {
+            guard let aperture else { return nil }
+            if expected.contains(aperture.lowerBound) && expected.contains(aperture.upperBound) { return true }
+            return aperture.overlaps(expected) ? nil : false
+        }
+        func any(_ alternatives: Bool?...) -> Bool? {
+            if alternatives.contains(true) { return true }
+            return alternatives.contains(nil) ? nil : false
+        }
+        let continuity = overallConditionContinuity
+        let roughness = selected[.roughness]?.id
+        let weathering = selected[.weathering]?.id
+        let infill = selected[.infill]?.id
+        let checks: [(String, Bool?)]
+        switch overall.rating {
+        case 30:
+            checks = [("прерывистость", continuity.map { $0 == .discontinuous }),
+                      ("очень шероховатые поверхности", roughness.map { $0 == "roughness-0" }),
+                      ("отсутствие раскрытия", matchesAperture(0...0)),
+                      ("невыветрелые стенки", weathering.map { $0 == "weathering-0" })]
+        case 25, 20:
+            let slightlyWeathered = overall.rating == 25
+            checks = [("слегка шероховатые поверхности", roughness.map { $0 == "roughness-2" }),
+                      ("раскрытие <1 мм", matchesAperture(0...1.nextDown)),
+                      (slightlyWeathered ? "слабо выветрелые стенки" : "сильно выветрелые стенки",
+                       weathering.map { $0 == (slightlyWeathered ? "weathering-1" : "weathering-3") })]
+        case 10:
+            let alternative = any(roughness.map { $0 == "roughness-4" },
+                                  infill.map { $0 == "infill-1" || $0 == "infill-3" }, matchesAperture(1...5))
+            checks = [("непрерывность", continuity.map { $0 == .continuous }),
+                      ("зеркала скольжения, заполнитель <5 мм или раскрытие 1–5 мм", alternative)]
+        case 0:
+            let alternative = any(infill.map { $0 == "infill-4" }, matchesAperture(5.nextUp...Double.greatestFiniteMagnitude))
+            checks = [("непрерывность", continuity.map { $0 == .continuous }),
+                      ("мягкий заполнитель >5 мм или раскрытие >5 мм", alternative)]
+        default: throw StorageError.invalidRecord
+        }
+        if let conflict = checks.first(where: { $0.1 == false }) {
+            throw MappingError.invalid("Состояние A.4: противоречие с выбранной категорией (\(conflict.0)).")
+        }
+        return checks.compactMap { label, match in match == nil ? "A.4: требуется подтверждение (\(label))" : nil }
+    }
+
+    /// Frozen for validating v3 snapshots, which could use unconfirmed A.4 descriptors.
+    private func checkV3OverallCondition(_ overall: RMR89Parameter.Choice, selected: [RMR89Parameter: RMR89Parameter.Choice]) throws {
         let measured = try RatingNumber.optional(apertureMillimeters, name: RMR89Parameter.aperture.title)
         let aperture = measured.map { $0...$0 } ?? selected[.aperture]?.range
         let infill = selected[.infill]?.id

@@ -271,6 +271,7 @@ enum RMREngineeringApplication: String, Codable, CaseIterable, Sendable { case t
 /// Original free-text evidence and explicitly selected category identifiers.
 struct RMR89Input: Codable, Equatable, Sendable {
     var basicSelections: [String: String]? = nil
+    var overallConditionContinuity: RMR89DiscontinuityContinuity? = nil
     var fieldStrength: FieldStrengthAssessment? = nil
     var jcond76: JCond76Assessment? = nil
     var strengthTest: RMRStrengthTest?
@@ -311,7 +312,8 @@ struct RMR89Assessment: Codable, Equatable, Sendable {
     static let version = "Bieniawski-RMR89/input-only-v1"
     static let calculatedVersion = "Bieniawski-RMR89/basic-categories-v1"
     static let fieldStrengthVersion = "Bieniawski-RMR89/basic-categories-field-strength-v2"
-    static let verifiedVersion = "Bieniawski-RMR89/table-4.1-categories-v3"
+    static let preA4VerificationVersion = "Bieniawski-RMR89/table-4.1-categories-v3"
+    static let verifiedVersion = "Bieniawski-RMR89/table-4.1-categories-v4"
     static let reference = "Bieniawski, Z.T. (1989). Engineering Rock Mass Classifications. Wiley. ISBN 0-471-60172-1. Таблица 4.1, с. 54–55; диаграмма E, с. 58; таблица 4.2, с. 59."
     let method: String
     let revision: Int
@@ -319,17 +321,18 @@ struct RMR89Assessment: Codable, Equatable, Sendable {
     let input: RMR89Input
     let missing: [String]
     let calculation: RMR89BasicEvaluation?
-    var usesHistoricalMethod: Bool { method != Self.verifiedVersion }
+    var usesHistoricalMethod: Bool { method != Self.verifiedVersion && method != Self.preA4VerificationVersion }
     var orientationStatus: String {
         calculation.flatMap { usesHistoricalMethod ? nil : $0.orientationStatus } ?? "Историческая методика: поправка не рассчитывалась."
     }
     init(input: RMR89Input, now: Date, method requestedMethod: String? = nil) throws {
         try input.validate(); revision = 1; assessedAt = now; self.input = input
-        let hasSelections = input.basicSelections != nil || input.strengthTest == .fieldEstimate
+        let hasSelections = input.basicSelections != nil || input.strengthTest == .fieldEstimate || input.overallConditionContinuity != nil
         method = requestedMethod ?? (hasSelections || input.orientationFavorability != nil ? Self.verifiedVersion : Self.version)
         switch method {
         case Self.version: calculation = nil
         case Self.calculatedVersion, Self.fieldStrengthVersion: calculation = try input.historicalBasicEvaluation()
+        case Self.preA4VerificationVersion: calculation = try input.v3BasicEvaluation()
         case Self.verifiedVersion: calculation = try input.basicEvaluation()
         default: throw StorageError.invalidRecord
         }
@@ -343,6 +346,7 @@ struct RMR89Assessment: Codable, Equatable, Sendable {
         let expected: RMR89BasicEvaluation?
         switch method {
         case Self.version: expected = nil
+        case Self.preA4VerificationVersion: expected = try input.v3BasicEvaluation()
         case Self.verifiedVersion: expected = try input.basicEvaluation()
         default: expected = try input.historicalBasicEvaluation()
         }
@@ -350,12 +354,14 @@ struct RMR89Assessment: Codable, Equatable, Sendable {
     }
 
     private func validateMethod() throws {
+        if method == Self.verifiedVersion { return }
+        guard input.overallConditionContinuity == nil else { throw StorageError.invalidRecord }
+        if method == Self.preA4VerificationVersion { return }
         let valid: Bool
         switch method {
         case Self.version: valid = input.basicSelections == nil && input.strengthTest != .fieldEstimate
         case Self.calculatedVersion: valid = input.basicSelections != nil && input.strengthTest != .fieldEstimate
         case Self.fieldStrengthVersion: valid = input.strengthTest == .fieldEstimate
-        case Self.verifiedVersion: return
         default: throw StorageError.invalidRecord
         }
         guard valid, input.orientationFavorability == nil else { throw StorageError.invalidRecord }
