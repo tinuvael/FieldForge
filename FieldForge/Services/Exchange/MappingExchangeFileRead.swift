@@ -5,13 +5,14 @@ import Foundation
 enum MappingExchangeFileRead {
     static func prepare(url: URL, committed: MappingCommittedSnapshot,
                         limits: ExchangeLimits = .init()) async throws -> MappingExchangePreview {
+        let bytes = try await data(url: url, limits: limits)
+        return try MappingExchangePreview.prepare(data: bytes, committed: committed, limits: limits)
+    }
+
+    static func data(url: URL, limits: ExchangeLimits = .init()) async throws -> Data {
         let reader = ExchangeCoordinatedRead()
         return try await withTaskCancellationHandler(operation: {
-            let bytes = try reader.data(url: url, maximum: limits.fileBytes)
-            try Task.checkCancellation()
-            let archive = try ExchangeArchive(data: bytes, limits: limits)
-            let workbook = try ExchangeWorkbook(parts: archive.parts, limits: limits)
-            return try MappingExchangePreview.prepare(workbook: workbook, committed: committed)
+            try reader.data(url: url, maximum: limits.fileBytes)
         }, onCancel: { reader.cancel() })
     }
 }

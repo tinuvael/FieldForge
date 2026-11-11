@@ -1,5 +1,8 @@
 # B2b — read-only Excel Exchange preparation
 
+Historical preview design and validation notes. The confirmed workflow, current edit permissions, and batch/recovery behavior are documented in [Stage 4b](excel-exchange-stage-4b.md).
+
+
 Parent: [#68](https://github.com/tinuvael/FieldForge/issues/68). Input remains
 [FieldForge-Exchange/1](excel-exchange-v1.md), schema **8**. No migration, storage
 ledger, import transaction, attachment operation or Apply action is implemented.

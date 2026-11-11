@@ -1,7 +1,7 @@
 import Foundation
 import CryptoKit
 
-/// Export-only exchange contract. No importer, persistence mutation or attachment IO.
+/// Versioned workbook projection shared by export and import validation.
 struct MappingExchangeExport: Sendable {
     static let version = "FieldForge-Exchange/1"
     static let fingerprintVersion = "FieldForge-Exchange-Base/1"
@@ -52,6 +52,77 @@ struct MappingExchangeExport: Sendable {
         return SHA256.hash(data: Data(try json(base).utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
+    static func importContextFingerprint(_ target: MappingImportTarget, in snapshot: MappingCommittedSnapshot) throws -> String {
+        struct Context: Encodable {
+            let project: MappingProject
+            let horizon: MappingHorizon
+            let excavation: ExcavationRecord
+            let plans: [MappingPlanReference]
+        }
+        guard let project = snapshot.projects[target.projectID], let horizon = snapshot.horizons[target.horizonID],
+              let excavation = snapshot.excavations[target.excavationID] else { throw StorageError.invalidRecord }
+        let horizons = Set(snapshot.journal.horizons.filter { $0.projectID == project.id }.map(\.id))
+        let plans = snapshot.journal.plans.filter { horizons.contains($0.horizonID) }.sorted { $0.id.uuidString < $1.id.uuidString }
+        return try MappingImportLedger.fingerprint(Context(project: project, horizon: horizon, excavation: ExcavationRecord(excavation), plans: plans))
+    }
+
+    static let legacyInstructions: [(String, String)] = [
+            ("workflow", "B2a: только экспорт. Импорт появится в B2b. Сначала сохраните резервную копию ZIP."),
+            ("editing", "Редактируйте points, joint_sets, tectonic_structures и входы assessments как предложения. source_records и базовые UUID/версии/отпечатки не редактировать."),
+            ("new_records", "Будущий B2b: record_action=new, уникальный client_record_id (UUID), point_id/original_id/revision_id/version/base_fingerprint пустые. Родительские UUID обязательны."),
+            ("precision", "Все значения — текст. Десятичная точка; пусто = null, не 0. *_reference_seconds — точное время от 2001-01-01 UTC. Не преобразовывайте ячейки в числа/даты."),
+            ("evidence", "source_records: полный сохранённый JSON выбранных записей и истории, UTF-8 части по порядку chunk_index. Изменять запрещено. Это не резервная копия: нет байтов фото/DXF и независимого журнала."),
+            ("units", "XY: xy_units/crs/axes; Z, chainage, spacing, persistence, thickness: м; aperture: мм; orientation: градусы. Север не преобразован."),
+            ("limitations", "Нет недоступных исходных метаданных, точности времени сверх Date, автоматической подземной позиции и пересчёта рейтингов. Сохранённые личные строки/диагностика могут присутствовать.")
+    ]
+
+    static let instructions: [(String, String)] = [
+        ("workflow", "Отредактируйте значения и откройте «Журнал → Импорт Excel». Просмотрите строки, выберите нужные и подтвердите."),
+        ("editing", "Редактируйте только поля из листа «Колонки». Сохраняйте всю строку при сортировке. Не удаляйте строки или листы."),
+        ("new_records", "Новая точка: record_action=new, уникальный client_record_id (UUID), исходные UUID точки/версии и время создания пустые. Используйте существующие родительские UUID."),
+        ("precision", "Ячейки должны оставаться текстом. Пустое редактируемое поле сохраняет исходное значение. #CLEAR очищает только поля, указанные на листе «Колонки»."),
+        ("evidence", "source_records, базовые метаданные и UUID защищены. Для копии журнала с файлами фото/DXF используйте резервную копию ZIP."),
+        ("units", "Цепочка, интервалы, расстояние, протяжённость и мощность — м; раскрытие — мм. Север и координаты существующей точки не менять."),
+        ("limitations", "Data!A:AD и регуляторные категории недоступны для импорта. Результаты оценок и исторические методики не редактируются.")
+    ]
+
+    static var legacyGuide: Table {
+        Table(name: "Колонки", columns: ["sheet", "columns", "description_ru", "policy"], rows: [
+            ["points", "picket / chainage_m / chainage_origin_direction", "Пикет / метры от начала / начало и направление отсчёта; текст и число должны согласоваться", "Предложение исправления"],
+            ["points", "observed_at_utc / observed_at_reference_seconds / observed_zone / observed_offset_seconds", "Полевая дата UTC / точные секунды от 2001-01-01 / часовой пояс / исходное смещение в секундах", "Предложение; точные секунды обязательны"],
+            ["points", "x / y / z_m / xy_units / crs / axes / coordinate_source / coordinate_provenance / z_origin", "Координаты и их происхождение; неизвестное оставить пустым. Z — метры. Подземный GPS не предполагается", "Только явные ручные предложения; плановые источники сохранить"],
+            ["points", "interval_start_text / interval_start_m / interval_end_text / interval_end_m / position", "Интервал и место: roof, leftWall, rightWall, face, other", "Предложение исправления"],
+            ["points", "notes / rock_json", "Примечание / сохранённая литология", "Предложение исправления"],
+            ["points", "point_id / original_id / revision_id / version / base_fingerprint", "UUID наблюдения / оригинала / актуальной версии, номер и отпечаток базы", "Не изменять"],
+            ["points", "record_action / client_record_id", "existing — существующая запись; new — новая, с уникальным клиентским UUID", "Новая запись: базовые идентификаторы и отпечаток пустые"],
+            ["points", "correction_reason / correction_author", "Причина исправления / автор", "Причина обязательна для исправления"],
+            ["joint_sets", "original_direction_text / original_dip_text / north / representative_json", "Представительная ориентация J1–J5: исходный текст азимута и падения, север, условная сторона", "Предложение интерпретации; не исходный замер"],
+            ["joint_sets", "spacing_m / persistence_m / aperture_mm / roughness / infill / notes", "Расстояние (м) / протяжённость (м) / раскрытие (мм) / шероховатость / заполнитель / примечание", "Предложение; сохранять происхождение spacing_provenance_json"],
+            ["tectonic_structures", "type / original_direction_text / original_dip_text / thickness_m / position / description", "Тип / исходная ориентация / мощность (м) / положение / описание структуры", "Предложение; неполные ориентации допустимы"],
+            ["assessments", "kind / method / input_json", "Система оценки / версия методики / полный сохранённый ввод Q, RMR89 или GSI", "Только предложения входов; результаты и метод не менять"],
+            ["measurements / interpretation_evidence / source_records", "Все столбцы", "Исходные измерения, связи доказательств, полные записи и история", "Не изменять"],
+            ["projects / horizons / excavations / photos / photo_attachments / photo_point_contexts", "Все столбцы", "Контекст, справочники и фотографии; файлы оригиналов не включены", "Не изменять"]
+        ].map { $0.map(Cell.text) })
+    }
+
+    private static var guide: Table {
+        Table(name: "Колонки", columns: ["sheet", "columns", "description_ru", "policy"], rows: [
+            ["points", "notes / rock_json / position", "Примечание / код и название породы / roof, leftWall, rightWall, face, other", "Редактировать; #CLEAR очищает поле"],
+            ["points", "interval_start_text / interval_start_m / interval_end_text / interval_end_m / has_geology", "Интервал и наличие геологических данных", "Текст и метры должны совпадать; #CLEAR в обеих ячейках границы. Удаление геологии запрещено"],
+            ["points", "correction_reason / correction_author", "Причина исправления / автор", "Причина обязательна; #CLEAR удаляет имя автора из предложения"],
+            ["points", "record_action / client_record_id", "Явно новая точка с уникальным клиентским UUID", "Только для добавленной строки; система, структуры и оценки добавляются в приложении"],
+            ["points", "picket / observed_at_utc / x / y / z_m / coordinate_provenance", "Пикет, время, координаты и происхождение", "Существующие точки: только просмотр. Для новой точки допустимы явные ручные координаты"],
+            ["joint_sets", "spacing_m / persistence_m / aperture_mm / roughness / infill / notes", "Характеристики существующих J1–J4", "Только уже ручное spacing_m; #CLEAR для остальных полей. Историческая J5 защищена"],
+            ["tectonic_structures", "type / thickness_m / position / description", "Тип / мощность / положение / описание существующей структуры", "Редактировать; #CLEAR для всех кроме типа. Ориентация и пикет защищены"],
+            ["assessments", "Q: rqd_text / jn_text / jr_text / ja_text / jw_text / srf_text / input_json", "RQD и коэффициенты NGI 2025", "Редактировать входы; при смене категории согласуйте JSON и текст. Источники, обоснования и поправки защищены"],
+            ["assessments", "RMR89: rqd_text / rmr_spacing_m_text / input_json", "RQD и расстояние, basicSelections.rqd и .spacing", "Только текущая проверенная методика (v4). Прочие входы, JCond76 и исторические методы защищены"],
+            ["assessments", "GSI: input_json", "Явный категориальный интервал: lower и upper", "Оценка по графику и все остальные поля GSI защищены"],
+            ["assessments", "method / kind / stored_* / missing_json / assessed_at_utc", "Методика, результаты и происхождение оценки", "Не изменять; добавление или удаление оценок запрещено"],
+            ["Формат / Колонки / projects / horizons / excavations / excavation_horizons", "Все столбцы", "Метаданные, справочники и родительские связи", "Не изменять"],
+            ["measurements / interpretation_evidence / source_records / photos / photo_attachments / photo_point_contexts", "Все столбцы", "Замеры, связи, фотографии, планы и история", "Не изменять; все остальные неперечисленные поля также только для просмотра"]
+        ].map { $0.map(Cell.text) })
+    }
+
     static func prepare(committed: MappingCommittedSnapshot, selection: MappingExportSelection,
                         now: Date = Date(), id: UUID = UUID()) throws -> Self {
         try Task.checkCancellation()
@@ -77,36 +148,15 @@ struct MappingExchangeExport: Sendable {
             "start_inclusive_reference_seconds": String(bounds.start.timeIntervalSinceReferenceDate),
             "end_exclusive_reference_seconds": String(bounds.end.timeIntervalSinceReferenceDate),
             "timezone": selection.timeZoneID, "calendar": "gregorian", "policy": "effective_observed_at"]
-        var metadata = Table(name: "Формат", columns: ["key", "value"])
-        for (key, value) in [
+        let metadataValues = [
             ("format", version), ("mapping_schema", String(MappingJournal.currentSchemaVersion)),
             ("workbook_id", id.uuidString), ("exported_at_utc", MappingCSVExport.iso(now)),
             ("exported_at_reference_seconds", String(now.timeIntervalSinceReferenceDate)),
-            ("fingerprint_algorithm", fingerprintVersion), ("selection_json", try json(scope)),
-            ("workflow", "B2a: только экспорт. Импорт появится в B2b. Сначала сохраните резервную копию ZIP."),
-            ("editing", "Редактируйте points, joint_sets, tectonic_structures и входы assessments как предложения. source_records и базовые UUID/версии/отпечатки не редактировать."),
-            ("new_records", "Будущий B2b: record_action=new, уникальный client_record_id (UUID), point_id/original_id/revision_id/version/base_fingerprint пустые. Родительские UUID обязательны."),
-            ("precision", "Все значения — текст. Десятичная точка; пусто = null, не 0. *_reference_seconds — точное время от 2001-01-01 UTC. Не преобразовывайте ячейки в числа/даты."),
-            ("evidence", "source_records: полный сохранённый JSON выбранных записей и истории, UTF-8 части по порядку chunk_index. Изменять запрещено. Это не резервная копия: нет байтов фото/DXF и независимого журнала."),
-            ("units", "XY: xy_units/crs/axes; Z, chainage, spacing, persistence, thickness: м; aperture: мм; orientation: градусы. Север не преобразован."),
-            ("limitations", "Нет недоступных исходных метаданных, точности времени сверх Date, автоматической подземной позиции и пересчёта рейтингов. Сохранённые личные строки/диагностика могут присутствовать.")
-        ] { metadata.rows.append([.text(key), .text(value)]) }
-        let guide = Table(name: "Колонки", columns: ["sheet", "columns", "description_ru", "policy"], rows: [
-            ["points", "picket / chainage_m / chainage_origin_direction", "Пикет / метры от начала / начало и направление отсчёта; текст и число должны согласоваться", "Предложение исправления"],
-            ["points", "observed_at_utc / observed_at_reference_seconds / observed_zone / observed_offset_seconds", "Полевая дата UTC / точные секунды от 2001-01-01 / часовой пояс / исходное смещение в секундах", "Предложение; точные секунды обязательны"],
-            ["points", "x / y / z_m / xy_units / crs / axes / coordinate_source / coordinate_provenance / z_origin", "Координаты и их происхождение; неизвестное оставить пустым. Z — метры. Подземный GPS не предполагается", "Только явные ручные предложения; плановые источники сохранить"],
-            ["points", "interval_start_text / interval_start_m / interval_end_text / interval_end_m / position", "Интервал и место: roof, leftWall, rightWall, face, other", "Предложение исправления"],
-            ["points", "notes / rock_json", "Примечание / сохранённая литология", "Предложение исправления"],
-            ["points", "point_id / original_id / revision_id / version / base_fingerprint", "UUID наблюдения / оригинала / актуальной версии, номер и отпечаток базы", "Не изменять"],
-            ["points", "record_action / client_record_id", "existing — существующая запись; new — новая, с уникальным клиентским UUID", "Новая запись: базовые идентификаторы и отпечаток пустые"],
-            ["points", "correction_reason / correction_author", "Причина исправления / автор", "Причина обязательна для исправления"],
-            ["joint_sets", "original_direction_text / original_dip_text / north / representative_json", "Представительная ориентация J1–J5: исходный текст азимута и падения, север, условная сторона", "Предложение интерпретации; не исходный замер"],
-            ["joint_sets", "spacing_m / persistence_m / aperture_mm / roughness / infill / notes", "Расстояние (м) / протяжённость (м) / раскрытие (мм) / шероховатость / заполнитель / примечание", "Предложение; сохранять происхождение spacing_provenance_json"],
-            ["tectonic_structures", "type / original_direction_text / original_dip_text / thickness_m / position / description", "Тип / исходная ориентация / мощность (м) / положение / описание структуры", "Предложение; неполные ориентации допустимы"],
-            ["assessments", "kind / method / input_json", "Система оценки / версия методики / полный сохранённый ввод Q, RMR89 или GSI", "Только предложения входов; результаты и метод не менять"],
-            ["measurements / interpretation_evidence / source_records", "Все столбцы", "Исходные измерения, связи доказательств, полные записи и история", "Не изменять"],
-            ["projects / horizons / excavations / photos / photo_attachments / photo_point_contexts", "Все столбцы", "Контекст, справочники и фотографии; файлы оригиналов не включены", "Не изменять"]
-        ].map { $0.map(Cell.text) })
+            ("fingerprint_algorithm", fingerprintVersion), ("selection_json", try json(scope))
+        ] + instructions
+        let manifest = try MappingImportLedger.fingerprint(Dictionary(uniqueKeysWithValues: metadataValues))
+        let metadata = Table(name: "Формат", columns: ["key", "value"],
+            rows: (metadataValues + [("metadata_sha256", manifest)]).map { [.text($0.0), .text($0.1)] })
         var tables = [metadata, guide]
         tables.append(Table(name: "projects", columns: ["project_id", "name", "lithologies_json"], rows: try journal.projects.filter { $0.id == selection.projectID }.map {
             [.text($0.id.uuidString), .text($0.name), try encoded($0.lithologies)]

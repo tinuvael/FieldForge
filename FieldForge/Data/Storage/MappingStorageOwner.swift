@@ -82,6 +82,51 @@ final class MappingStorageOwner: @unchecked Sendable {
         }
     }
 
+    /// One FIFO admission, with a separate atomic commit and receipt for each row.
+    func applyExchange(_ batch: MappingExchangeImport.Batch,
+                       checkpoint: @escaping @Sendable (MappingImportOperation, MappingImportApply.Checkpoint) throws -> Void = { _, _ in }) async throws
+        -> (MappingCommittedSnapshot, MappingExchangeImport.Report) {
+        try await run {
+            guard let file = self.store as? FileMappingStore, let initial = self.committed else { throw StorageError.writesBlocked }
+            var interrupted = false
+            var rows: [MappingExchangeImport.Result] = []
+            let save: (MappingJournal) throws -> Void = { journal in
+                try file.save(journal)
+                self.committed = MappingCommittedSnapshot(journal)
+            }
+            for item in batch.items {
+                if case .report(let status, let detail) = item.action {
+                    rows.append(item.result(status, detail))
+                    continue
+                }
+                let current = self.committed ?? initial
+                do {
+                    guard !interrupted else { throw StorageError.writesBlocked }
+                    try file.requireUnchanged()
+                    let outcome: MappingImportOutcome
+                    let existing = item.action.operation.flatMap { current.journal.importLedger?[$0.id] }
+                    switch try item.reconciling(existing) {
+                    case .execute(let op, let proposal):
+                        outcome = try MappingImportApply.execute(op, source: batch.source, proposal: proposal,
+                            current: current, save: save, checkpoint: { try checkpoint(op, $0) })
+                    case .rejectPending(let op):
+                        outcome = try MappingImportApply.rejectPending(op, source: batch.source, current: current, save: save)
+                    case .report(let status, let detail):
+                        rows.append(item.result(status, detail))
+                        continue
+                    }
+                    rows.append(item.result(for: outcome))
+                } catch {
+                    interrupted = true
+                    let entry = item.action.operation.flatMap { self.committed?.journal.importLedger?[$0.id] }
+                    rows.append(entry.map { item.result(for: $0.outcome) } ??
+                        item.result(.notProcessed, "Сохранение прервано. Проверьте ту же книгу, чтобы продолжить."))
+                }
+            }
+            return (self.committed ?? initial, MappingExchangeImport.Report(rows: rows, interrupted: interrupted))
+        }
+    }
+
     /// Reopening already validates applied receipts. Pending intents are classified
     /// against the latest baseline without writing or recreating an approved payload.
     func importRecovery() async throws -> [MappingImportRecovery] {

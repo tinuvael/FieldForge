@@ -5,7 +5,7 @@ import FoundationXML
 
 struct ExchangeWorkbook: Sendable {
     typealias Row = [String: String]
-    struct Sheet: Sendable { let columns: [String]; let rows: [Row] }
+    struct Sheet: Sendable { let columns: [String]; let rows: [Row]; var rowNumbers: [Int] = [] }
     let sheets: [String: Sheet]
     static let spreadsheet = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
     static let relationships = "http://schemas.openxmlformats.org/package/2006/relationships"
@@ -22,9 +22,9 @@ struct ExchangeWorkbook: Sendable {
                 throw fail("Неподдерживаемая часть XLSX: \(path). Макросы, подключения и внешние ссылки запрещены.")
             }
         }
-        func xml(_ path: String, namespace: String, start: @escaping ExchangeXML.Start = { _, _, _ in }, end: @escaping ExchangeXML.End = { _, _, _ in }) throws {
+        func xml(_ path: String, namespace: String, additionalElements: [String: Set<String>] = [:], start: @escaping ExchangeXML.Start = { _, _, _ in }, end: @escaping ExchangeXML.End = { _, _, _ in }) throws {
             guard let data = parts[path] else { throw fail("Отсутствует часть XLSX: \(path)") }
-            try ExchangeXML.read(data, namespace: namespace, limits: limits, start: start, end: end)
+            try ExchangeXML.read(data, namespace: namespace, limits: limits, additionalElements: additionalElements, start: start, end: end)
         }
         struct Rel { let type: String; let target: String }
         func rels(_ path: String, base: String, allowed: Set<String>) throws -> [String: Rel] {
@@ -83,23 +83,87 @@ struct ExchangeWorkbook: Sendable {
                 if name == "si" { guard shared.count < limits.sharedStrings else { throw fail("Слишком много shared strings.") }; shared.append(try Self.unescape(sharedValue)) }
             })
         }
-        var sheetPaths: [String: String] = [:], sheetIDs = Set<String>()
-        try xml("xl/workbook.xml", namespace: Self.spreadsheet, start: { name, a, ancestors in
-            if name == "sheet" {
+        var sheetPaths: [String: String] = [:], sheetIDs = Set<String>(), sheetOrder: [String] = []
+        var filterNames: [Int: String] = [:], filterIndex: Int?
+        let officeWorkbookElements: [String: Set<String>] = [
+            "http://schemas.openxmlformats.org/markup-compatibility/2006": ["AlternateContent", "Choice", "Fallback"],
+            "http://schemas.microsoft.com/office/spreadsheetml/2010/11/ac": ["absPath"],
+            "http://schemas.microsoft.com/office/spreadsheetml/2014/revision": ["revisionPtr"],
+            "http://schemas.microsoft.com/office/spreadsheetml/2018/calcfeatures": ["calcFeatures", "feature"]
+        ]
+        try xml("xl/workbook.xml", namespace: Self.spreadsheet, additionalElements: officeWorkbookElements, start: { name, a, ancestors in
+            switch name {
+            case "sheet":
                 guard ancestors == ["workbook", "sheets"], let name = a["name"], sheetPaths[name] == nil,
+                      a["state"] == nil || a["state"] == "visible",
                       let id = a["r:id"], let rel = relationships[id], rel.type == d + "worksheet",
                       let sheetID = a["sheetId"], sheetIDs.insert(sheetID).inserted,
-                      !sheetPaths.values.contains(rel.target) else { throw fail("Неоднозначная идентичность листа XLSX.") }
+                      !sheetPaths.values.contains(rel.target) else { throw fail("Скрытый лист или неоднозначная идентичность листа XLSX.") }
                 sheetPaths[name] = rel.target
+                sheetOrder.append(name)
+            case "definedNames":
+                guard ancestors == ["workbook"] else { throw fail("Некорректный список имён Excel.") }
+            case "definedName":
+                guard ancestors == ["workbook", "definedNames"], a["name"] == "_xlnm._FilterDatabase",
+                      a["hidden"] == "1" || a["hidden"] == "true",
+                      let index = a["localSheetId"].flatMap(Int.init), (0..<32).contains(index), filterNames[index] == nil else {
+                    throw fail("Допускаются только стандартные имена автофильтров Excel.")
+                }
+                filterIndex = index
+            case "AlternateContent":
+                guard ancestors == ["workbook"] else { throw fail("Неподдерживаемое расширение книги XLSX.") }
+            case "Choice", "Fallback":
+                guard ancestors == ["workbook", "AlternateContent"] else { throw fail("Неподдерживаемое расширение книги XLSX.") }
+            case "absPath":
+                // Office's save-location metadata is ignored. Never open the path.
+                guard ancestors == ["workbook", "AlternateContent", "Choice"] else { throw fail("Неподдерживаемый путь в книге XLSX.") }
+            case "revisionPtr":
+                guard ancestors == ["workbook"] else { throw fail("Некорректные сведения о сохранении книги XLSX.") }
+            case "extLst":
+                guard ancestors == ["workbook"] else { throw fail("Неподдерживаемое расширение книги XLSX.") }
+            case "ext":
+                guard ancestors == ["workbook", "extLst"], a["uri"]?.uppercased() == "{B58B0392-4F1F-4190-BB64-5DF3571DCE5F}" else {
+                    throw fail("Неподдерживаемое расширение книги XLSX.")
+                }
+            case "calcFeatures", "feature":
+                let parent = ["workbook", "extLst", "ext"]
+                guard ancestors == (name == "feature" ? parent + ["calcFeatures"] : parent) else {
+                    throw fail("Некорректные сведения о версии Excel.")
+                }
+            case "externalReferences", "pivotCaches":
+                throw fail("Внешние ссылки и сводные таблицы XLSX не поддерживаются.")
+            default:
+                if ancestors.contains(where: { ["definedNames", "AlternateContent", "extLst"].contains($0) }) {
+                    throw fail("Неподдерживаемая структура книги XLSX.")
+                }
             }
-            if ["externalReferences", "definedNames", "pivotCaches", "extLst"].contains(name) { throw fail("Неподдерживаемые ссылки или расширения книги XLSX.") }
+        }, end: { name, value, _ in
+            if name == "definedName", let index = filterIndex { filterNames[index] = value; filterIndex = nil }
         })
+        for (index, formula) in filterNames {
+            guard sheetOrder.indices.contains(index) else { throw fail("Автофильтр указывает на отсутствующий лист.") }
+            let sheet = sheetOrder[index]
+            let quoted = "'" + sheet.replacingOccurrences(of: "'", with: "''") + "'!"
+            guard let prefix = [quoted, sheet + "!"].first(where: { formula.hasPrefix($0) }) else {
+                throw fail("Автофильтр должен ссылаться на свой лист.")
+            }
+            let address = String(formula.dropFirst(prefix.count))
+            let range = address.replacingOccurrences(of: "$", with: "").split(separator: ":", omittingEmptySubsequences: false)
+            guard address.range(of: #"^\$[A-Z]{1,3}\$[1-9][0-9]*(?::\$[A-Z]{1,3}\$[1-9][0-9]*)?$"#, options: .regularExpression) != nil,
+                  range.allSatisfy({ Self.address(String($0)) != nil }) else {
+                throw fail("Имя автофильтра должно содержать только диапазон ячеек своего листа.")
+            }
+        }
         guard sheetPaths.count <= 32, Set(sheetPaths.values) == Set(relationships.values.filter { $0.type == d + "worksheet" }.map(\.target)) else { throw fail("Неучтённые листы XLSX.") }
         var output: [String: Sheet] = [:], totalCells = 0, totalRows = 0
         for (sheet, path) in sheetPaths.sorted(by: { $0.key < $1.key }) {
             var rows: [Int: [Int: String]] = [:], rowNumbers = Set<Int>(), currentRow: Int?, currentColumn: Int?, cellType = "", cellText = "", cellValue = "", seenValue = false, seenInline = false
             try xml(path, namespace: Self.spreadsheet, start: { name, a, ancestors in
-                if ["f", "hyperlinks", "oleObjects", "controls", "extLst", "tableParts", "drawing", "legacyDrawing"].contains(name) { throw fail("\(sheet): формулы (включая кеш), ссылки и встроенные объекты запрещены.") }
+                if ["f", "hyperlinks", "oleObjects", "controls", "extLst", "tableParts", "drawing", "legacyDrawing",
+                    "mergeCells", "dataValidations", "conditionalFormatting"].contains(name) {
+                    let cell = currentRow.flatMap { row in currentColumn.map { "\(MappingXLSXExport.column($0 + 1))\(row)" } }
+                    throw fail("\(sheet)\(cell.map { "!" + $0 } ?? ""): формулы, ссылки и дополнительные структуры листа запрещены.")
+                }
                 if name == "row" {
                     guard ancestors == ["worksheet", "sheetData"], let n = a["r"].flatMap(Int.init), (1...1_048_576).contains(n), rowNumbers.insert(n).inserted else { throw fail("\(sheet): повторная или неверная строка.") }
                     totalRows += 1; guard totalRows <= limits.rows else { throw fail("Превышен предел строк XLSX.") }; currentRow = n; rows[n] = [:]
@@ -130,7 +194,7 @@ struct ExchangeWorkbook: Sendable {
                     case "inlineStr":
                         guard !seenValue else { throw fail("Неоднозначное текстовое значение.") }; value = try Self.unescape(cellText)
                     default:
-                        guard !seenValue, !seenInline else { throw fail("\(sheet), строка \(row): числовая/датированная ячейка; восстановить точность нельзя. Сохраните исходные значения как текст.") }; value = ""
+                        guard !seenValue, !seenInline else { throw fail("\(sheet)!\(MappingXLSXExport.column(col + 1))\(row): числовая/датированная ячейка; восстановить точность нельзя. Сохраните исходные значения как текст.") }; value = ""
                     }
                     rows[row]?[col] = value; currentColumn = nil
                 }
@@ -139,19 +203,19 @@ struct ExchangeWorkbook: Sendable {
             guard let header = rows.removeValue(forKey: 1), let max = header.keys.max(), max < 256 else { throw fail("\(sheet): отсутствует заголовок.") }
             let columns = (0...max).map { header[$0] ?? "" }
             guard !columns.contains(""), Set(columns).count == columns.count else { throw fail("\(sheet): пустые или повторные колонки.") }
-            var values: [Row] = []
-            for (_, cells) in rows.sorted(by: { $0.key < $1.key }) {
+            var values: [Row] = [], numbers: [Int] = []
+            for (number, cells) in rows.sorted(by: { $0.key < $1.key }) {
                 guard cells.keys.allSatisfy({ $0 <= max || cells[$0] == "" }) else { throw fail("\(sheet): данные за пределами колонок.") }
                 if cells.values.allSatisfy(\.isEmpty) { continue }
+                numbers.append(number)
                 values.append(Dictionary(uniqueKeysWithValues: columns.enumerated().map { ($0.element, cells[$0.offset] ?? "") }))
             }
-            output[sheet] = Sheet(columns: columns, rows: values)
+            output[sheet] = Sheet(columns: columns, rows: values, rowNumbers: numbers)
         }
         // Parse even unused metadata/styles to reject DTD/entities and malformed XML everywhere.
         let alreadyParsed = Set(sheetPaths.values).union(["[Content_Types].xml", "_rels/.rels", "xl/_rels/workbook.xml.rels", "xl/workbook.xml", "xl/sharedStrings.xml"])
         for path in parts.keys where !alreadyParsed.contains(path) {
-            let ns = path == "xl/styles.xml" ? Self.spreadsheet : path.hasPrefix("xl/theme/") ? "http://schemas.openxmlformats.org/drawingml/2006/main" : nil
-            try ExchangeXML.read(parts[path]!, namespace: ns, limits: limits)
+            try ExchangeXML.read(parts[path]!, namespace: nil, limits: limits)
         }
         sheets = output
     }
@@ -178,19 +242,19 @@ struct ExchangeWorkbook: Sendable {
 private final class ExchangeXML: NSObject, XMLParserDelegate {
     typealias Start = (String, [String: String], [String]) throws -> Void
     typealias End = (String, String, [String]) throws -> Void
-    let limits: ExchangeLimits; let namespace: String?; let start: Start; let end: End
+    let limits: ExchangeLimits; let namespace: String?; let additionalElements: [String: Set<String>]; let start: Start; let end: End
     var stack: [String] = [], texts: [String] = [], elements = 0
     var error: Error?
-    init(namespace: String?, limits: ExchangeLimits, start: @escaping Start, end: @escaping End) {
-        self.namespace = namespace; self.limits = limits; self.start = start; self.end = end
+    init(namespace: String?, limits: ExchangeLimits, additionalElements: [String: Set<String>], start: @escaping Start, end: @escaping End) {
+        self.namespace = namespace; self.limits = limits; self.additionalElements = additionalElements; self.start = start; self.end = end
     }
-    static func read(_ data: Data, namespace: String?, limits: ExchangeLimits, start: @escaping Start = { _, _, _ in }, end: @escaping End = { _, _, _ in }) throws {
+    static func read(_ data: Data, namespace: String?, limits: ExchangeLimits, additionalElements: [String: Set<String>] = [:], start: @escaping Start = { _, _, _ in }, end: @escaping End = { _, _, _ in }) throws {
         guard data.count <= limits.partBytes, let raw = String(data: data, encoding: .utf8),
               !raw.localizedCaseInsensitiveContains("<!DOCTYPE"), !raw.localizedCaseInsensitiveContains("<!ENTITY"),
               !raw.contains("\u{0}"), raw.range(of: #"encoding\s*=\s*["'](?!UTF-8["']|utf-8["'])"#, options: .regularExpression) == nil else {
             throw ExchangeImportError("DTD, сущности и кодировки кроме UTF-8 запрещены.")
         }
-        let delegate = ExchangeXML(namespace: namespace, limits: limits, start: start, end: end)
+        let delegate = ExchangeXML(namespace: namespace, limits: limits, additionalElements: additionalElements, start: start, end: end)
         let parser = XMLParser(data: data); parser.shouldProcessNamespaces = true
         parser.shouldResolveExternalEntities = false; parser.shouldReportNamespacePrefixes = true; parser.delegate = delegate
         guard parser.parse(), delegate.error == nil else { throw delegate.error ?? ExchangeImportError("Некорректный XML XLSX.") }
@@ -203,7 +267,7 @@ private final class ExchangeXML: NSObject, XMLParserDelegate {
             elements += 1
             guard stack.count < limits.xmlDepth, elements <= limits.xmlElements, attributes.count <= 64,
                   attributes.allSatisfy({ $0.key.utf16.count <= 256 && $0.value.utf16.count <= limits.textUTF16 }),
-                  namespace == nil || namespaceURI == namespace else { throw ExchangeImportError("Превышен предел XML или неподдерживаемое пространство имён.") }
+                  namespace == nil || namespaceURI == namespace || additionalElements[namespaceURI ?? ""]?.contains(name) == true else { throw ExchangeImportError("Превышен предел XML или неподдерживаемое пространство имён.") }
             try start(name, attributes, stack); stack.append(name); texts.append("")
         }
     }

@@ -48,6 +48,20 @@ enum MappingImportApply {
         return outcome
     }
 
+    static func rejectPending(_ operation: MappingImportOperation, source: MappingImportSource,
+                              current: MappingCommittedSnapshot, save: (MappingJournal) throws -> Void) throws -> MappingImportOutcome {
+        guard source == operation.source else { throw MappingImportConflict.sourceChanged }
+        guard let entry = current.journal.importLedger?[operation.id], entry.operation == operation else {
+            throw MappingImportConflict.operationIDReused
+        }
+        if entry.outcome != .pending { return entry.outcome }
+        let outcome = MappingImportOutcome.rejected(try precondition(for: operation, in: current) ?? .previewConflict)
+        var next = current.journal
+        next.recordImport(operation, outcome: outcome)
+        try save(next)
+        return outcome
+    }
+
     static func recovery(in current: MappingCommittedSnapshot) throws -> [MappingImportRecovery] {
         try (current.journal.importLedger?.entries ?? []).filter { $0.outcome == .pending }.map { entry in
             MappingImportRecovery(operation: entry.operation, conflict: try precondition(for: entry.operation, in: current))
@@ -63,7 +77,12 @@ enum MappingImportApply {
         guard journal.validContext(operation.target.context) else { return .ownershipChanged }
         let observation = current.observation(id: operation.target.observationID)
         if let observation, MappingImportTarget(observation) != operation.target { return .ownershipChanged }
-        guard let baseline = operation.baseline else { return observation == nil ? nil : .targetExists }
+        guard let baseline = operation.baseline else {
+            guard observation == nil else { return .targetExists }
+            if let expected = operation.graphFingerprint,
+               try MappingExchangeExport.importContextFingerprint(operation.target, in: current) != expected { return .contextChanged }
+            return nil
+        }
         guard let observation else { return .targetMissing }
         let revision = current.latestRevisions[observation.id]
         let version = revision?.version ?? 1
@@ -71,6 +90,8 @@ enum MappingImportApply {
             return .revisionChanged(currentID: revision?.id, version: version)
         }
         guard try MappingImportLedger.fingerprint(observation) == baseline.fingerprint else { return .observationChanged }
+        if let expected = operation.graphFingerprint,
+           try MappingExchangeExport.fingerprint(observation.id, in: current) != expected { return .contextChanged }
         guard !journal.revisions.contains(where: { $0.id == operation.id }) else { return .revisionIDInUse }
         return nil
     }
@@ -84,7 +105,11 @@ enum MappingImportApply {
             let historicalSets = point.geology?.jointSets.filter { !$0.identifier.isRoutine } ?? []
             guard proposal.measurementIDs == point.measurementIDs,
                   proposal.geology?.jointSets.filter({ !$0.identifier.isRoutine }) ?? [] == historicalSets,
-                  proposal.ratings == point.ratings else { return .rejected(.protectedEvidence) }
+                  ExchangeObservationProposal.ratingsAllowed(proposal.ratings, from: point.ratings) else {
+                return .rejected(.protectedEvidence)
+            }
+            if operation.graphFingerprint != nil,
+               !ExchangeObservationProposal.preservesEvidence(proposal, from: point) { return .rejected(.protectedEvidence) }
             if proposal == point { return .skipped }
             next.appendCorrection(id: operation.id, snapshot: proposal, now: correction.date,
                                   author: correction.author, reason: correction.reason)

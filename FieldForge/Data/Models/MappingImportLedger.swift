@@ -70,12 +70,15 @@ struct MappingImportOperation: Codable, Equatable, Identifiable, Sendable {
     let kind: Kind
     let baseline: MappingImportBaseline?
     let proposalFingerprint: String?
+    /// Exchange export graph precondition; absent in Stage 4a entries.
+    let graphFingerprint: String?
     let creationDate: Date?
     let correction: Correction?
     let note: String?
 
     init(id: UUID = UUID(), source: MappingImportSource, sourceRecordID: String, target: MappingImportTarget,
          kind: Kind, baseline: MappingImportBaseline? = nil, proposal: MappingObservation? = nil,
+         graphFingerprint: String? = nil,
          correction: Correction? = nil, note: String? = nil) throws {
         self.id = id
         self.source = source
@@ -83,6 +86,7 @@ struct MappingImportOperation: Codable, Equatable, Identifiable, Sendable {
         self.target = target
         self.kind = kind
         self.baseline = baseline
+        self.graphFingerprint = graphFingerprint
         proposalFingerprint = try proposal.map { try MappingImportLedger.fingerprint($0) }
         creationDate = kind == .create ? proposal?.createdAt : nil
         self.correction = correction
@@ -106,6 +110,7 @@ struct MappingImportOperation: Codable, Equatable, Identifiable, Sendable {
         guard nonblank(source.documentID, limit: 512), nonblank(sourceRecordID, limit: 512),
               isDigest(source.fingerprint), note.map({ nonblank($0, limit: 2048) }) ?? (kind != .conflict),
               isMutation == (proposalFingerprint != nil), proposalFingerprint.map(isDigest) ?? true,
+              graphFingerprint.map({ isMutation && source.kind == .exchange && isDigest($0) }) ?? true,
               (kind == .create) == (creationDate != nil), creationDate?.timeIntervalSinceReferenceDate.isFinite ?? true,
               (kind == .update) == (correction != nil),
               kind != .create || baseline == nil, kind != .update || baseline != nil else {
@@ -136,6 +141,7 @@ enum MappingImportConflict: Error, Codable, Equatable, Sendable {
     case targetMissing
     case revisionChanged(currentID: UUID?, version: Int)
     case observationChanged
+    case contextChanged
     case revisionIDInUse
     case protectedEvidence
     case invalidProposal
