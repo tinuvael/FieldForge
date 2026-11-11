@@ -21,15 +21,12 @@ import Combine
         let isCurrent: @Sendable (UUID) async throws -> Bool
 
         init(storage: MappingStorageOwner, kind: MappingImportSource.Kind = .exchange,
-             manifestURL: URL? = nil, matches: [String: UUID] = [:]) {
+             regulatoryReview: RegulatoryDataImport.Review = .init()) {
             snapshot = { try await storage.exchangeSnapshot() }
             read = { url, committed in
                 if kind == .exchange { return try await MappingExchangeFileRead.prepare(url: url, committed: committed) }
                 let bytes = try await MappingExchangeFileRead.data(url: url)
-                let manifest: Data?
-                if let manifestURL { manifest = try await MappingExchangeFileRead.data(url: manifestURL) }
-                else { manifest = nil }
-                return try RegulatoryDataImport.prepare(bytes: bytes, manifestBytes: manifest, matches: matches, committed: committed)
+                return try RegulatoryDataImport.prepare(bytes: bytes, review: regulatoryReview, committed: committed)
             }
             isCurrent = { try await storage.exchangePreviewIsCurrent($0) }
         }

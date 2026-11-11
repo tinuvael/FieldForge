@@ -1,153 +1,163 @@
-# Regulatory Excel Data A:AD round-trip
+# Regulatory Excel Data A:AD operational workflow
 
-In **Журнал → Импорт Excel**, select **Регламент · Data A:AD** and choose the
-edited XLSX. The preview reports workbook rows, matched observations, missing
-matches, duplicates, unsupported edits and conflicts. Open an observation to
-review its project, horizon, excavation, field date, UUID, Excel row numbers and
-before/after values. Mark the changes to accept and confirm. The final report
-shows applied, previously applied, skipped, rejected and pending work.
+The regulatory XLSX is FieldForge's primary workbook for exchanging and editing
+the mapping database. FieldForge keeps the committed observations, revisions,
+original evidence, attachments and import receipts in the offline journal.
 
-## Export and matching
+1. In **Журнал → Выгрузка**, choose **Геотехническое картирование — регламент**.
+   The default selection includes all dates in the selected project. Horizon,
+   excavation and field-date filters remain available.
+2. Edit or add rows on `Data`. Keep the four header rows, columns A:AD and the
+   hidden `_FieldForge` worksheet. Repeat the same observation-level values on
+   each tectonic row.
+3. Open **Журнал → Импорт Excel → Регламент · Data A:AD**. Choose the XLSX. For
+   new rows, confirm the project, horizon, field date and time, picket
+   convention, and chainage origin and direction. An exact ID can select a
+   unique existing excavation on that horizon. Choose the excavation when ID
+   is missing or ambiguous. Missing PK requires an explicit picket.
+4. Resolve uncertain matches, grouping and revisions. Open each proposal to see
+   its observation, Excel row numbers, current and proposed values, and any
+   changed calculated Q or RMR89 totals. Select observations and confirm.
+5. Review the import report. New observations appear in the journal and on the
+   associated DXF plan when their XY frame and coordinates are available.
+   Export the consolidated observations for the next edit cycle.
 
-The regulatory exporter still writes `FieldForge-Geotechnical.xlsx` with exactly
-one visible sheet, `Data`, the four existing header rows, columns A:AD and the
-existing layout, styles and values. The optional **Добавить файл сопоставления
-для импорта** setting shares a second file, `FieldForge-Geotechnical-Matching.json`.
-Keep the JSON beside the workbook, edit only the workbook, then select both files
-in the import screen. The default export is still a single XLSX. With the same
-export snapshot, tests compare the XLSX byte for byte with and without the
-companion.
+## Workbook identity and legacy compatibility
 
-The companion records the export UUID and time, and binds the original Excel row
-range to the observation UUID and context, revision/version and observation and
-graph fingerprints. It contains no attachment bytes or editable values. Keep
-the rows in their original positions. The importer checks the workbook UUID if
-the editor retained it and validates the binding against the local journal and
-the complete read-only projection, including all fault rows. If the editor
-dropped the workbook UUID, confirm the companion's target explicitly. A row number
-locates a binding and its diagnostics. The binding and journal supply identity.
-Observations with indistinguishable common read-only report values require
-separate exports. Treat the companion as part of the original export and keep
-it unedited. Fingerprints check consistency with the journal and identify replay.
+`FieldForge-Geotechnical.xlsx` retains the established `Data!A:AD` headers,
+column order, values, styles, merges, filter and print settings. Tests compare the
+complete Data worksheet XML with and without the hidden sheet. The hidden
+`_FieldForge` sheet carries the workbook UUID, original row ranges, observation
+UUIDs and owners, revision IDs, and fingerprints. A single XLSX carries the
+entire exchange workflow. Choose **Совместимость · только лист Data** for
+consumers that require a single-sheet workbook.
 
-Without a companion, the exact excavation name and display picket shortlist
-candidates. Choose the observation even when there is a single candidate.
-Coordinates and other report values are checked after selection. Compare the
-workbook with the current journal before approving, since an anonymous file
-cannot establish which journal revision was originally edited. Retain a
-companion to detect changes made in the journal between export and import.
-Stage 4c updates existing observations. Unmatched rows are reported and
-require reconciliation in the journal.
+The reader checks hidden bindings against the journal's archived observation
+snapshot. Matching uses the workbook UUID, original row position and A/B
+context together. A moved or relabelled row, a stripped workbook UUID or an
+ambiguous original anchor can require an explicit match. A/B and chainage
+shortlist candidates in legacy files. Use the observation's project, horizon,
+excavation, field date and UUID to confirm a match or explicitly create a
+distinct observation. Coordinates never establish identity. Keep original
+rows in place and append new rows to minimize reconciliation. Removing a
+worksheet row does not delete a saved observation or fault.
 
-For observations with several tectonic structures, keep the full set of rows.
-Make the same ROCK, A45 or A1 edit on each row. The group must match the
-projected S:U rows and yield one consistent proposal, which produces one
-revision. Duplicate rows, missing fault rows and differing edits block that
-observation. For another edit cycle, re-export the accepted journal values and
-keep the newly generated companion with the new workbook.
+Rows with the same A/B and identical observation-level cells may describe
+several faults. The preview asks whether to group new or additional rows when
+their ownership is ambiguous. When editing several saved faults, preserve
+their order or confirm the remaining correspondence after reviewing the
+unchanged fault matches. Exact duplicate rows are blocked. Multiple groups
+assigned to the same observation are blocked until reconciled. Unchanged
+faults preserve their UUID and descriptions. A group creates or revises one
+observation.
 
-## Exact column contract
+## Exact A:AD column policy
 
-Row 4 gives the keys below. The descriptive headers, including the trailing
-space in S3, follow the [audited reference](regulatory-excel-audit.md#exact-aad-mapping).
-`p` is the effective observation, `q` and `r` are the saved Barton Q and RMR89
-inputs, and `J1`–`J4` are the saved representative interpretations.
+The [reference audit](regulatory-excel-audit.md#exact-aad-mapping) records the
+four header rows, including the trailing space in S3. The row-4 keys and exact
+source and import rules are below. `p` means effective observation, `q` is
+the saved Barton Q input, and `r` is the saved RMR89 input.
 
-Read-only cells must equal the typed FieldForge projection, including missing
-values. The allowed values below describe that projection. They do not admit
-new measurements, orientations, interpretations or assessment inputs.
-In the editable cells, blank or the legacy dash `-` keeps the current value.
-Use text `#CLEAR` to remove a value explicitly. Zero is a numeric category
-where listed. Category values are numeric Excel cells. ROCK is text.
+Blank cells and the legacy dash retain existing values. In a new observation
+they leave optional values missing. Text `#CLEAR` explicitly removes an
+eligible optional value. Numeric zero remains a value. Exact numbers are
+validated before proposal creation, and date, percentage and unsupported
+numeric formats or cached formula results are rejected. A text ID or picket
+must retain its text representation. When a resave appears to round a
+high-precision value to Excel's 15 significant digits, keep the exact journal
+value explicitly or restore the original cell.
 
-| Column and key | FieldForge source | Type, units and allowed values | Import |
-| --- | --- | --- | --- |
-| A `ID` | Excavation name through `p.excavationID` | Exact text, existing name | Read-only, required match context |
-| B `PK` | `p.displayPicket` | Exact display text in the saved convention | Read-only, required match context |
-| C `X` | `p.coordinates?.x` | Finite number in the saved XY units and axes, or blank | Read-only, exact numeric comparison |
-| D `Y` | `p.coordinates?.y` | Finite number in the saved XY units and axes, or blank | Read-only, exact numeric comparison |
-| E `Z` | `p.coordinates?.z` | Finite elevation in metres in the saved datum, or blank | Read-only, exact numeric comparison |
-| F `ROCK` | `p.rock?.code` | Exact decimal-looking **text** code, including leading/trailing zeroes, or blank | Editable, new code must exist in the target project's catalogue. Preserve name for an unchanged code. `#CLEAR` removes the point's lithology selection |
-| G `A45` | `p.ratings?.regulatory?.wallAlteration` with equivalent RMR89 weathering fallback | Dimensionless score. 6 unweathered, 5 slight, 3 moderate, 1 high, 0 crushed, or blank | Editable independent reporting choice. `#CLEAR` requires the resulting projection to be blank. RMR89 weathering stays intact |
-| H `JW` | `q.jw.value` | Saved numeric Q water coefficient, dimensionless, or blank | Read-only, exact saved coefficient. RMR groundwater is independent |
-| I `A1` | `p.ratings?.regulatory?.strength` with RMR field-grade fallback | Dimensionless score. 0 <1 MPa, 1 for 1–5, 2 for 5–25, 4 for 25–50, 7 for 50–100, 12 for 100–250, 15 >250, or blank | Editable independent reporting band. `#CLEAR` requires the resulting projection to be blank. Field grade and laboratory values stay intact |
-| J `UCS` | `r.strengthMPa` for `r.strengthTest == .ucs` | Saved UCS in MPa, or blank | Read-only, exact numeric comparison. Is(50) stays out |
-| K `RQD` | `SpacingRQD(q:rmr:)` from original inputs | Number 0–100%, or blank if absent or sources disagree | Read-only, exact numeric comparison. Q's numerical floor stays out |
-| L `JN` | `q.jn.value` | Saved numeric Q joint-set-number coefficient, dimensionless, or blank | Read-only, exact saved coefficient |
-| M `JR` | `q.jr.value` | Saved numeric Q roughness coefficient, dimensionless, or blank | Read-only, exact saved coefficient |
-| N `JA` | `q.ja.value` | Saved numeric Q alteration coefficient, dimensionless, or blank | Read-only, exact saved coefficient |
-| O `SD` | `JointSpacingMean` of saved positive J1–J4 spacings | Positive derived number in metres, or blank | Read-only, exact projected mean. Individual spacings remain as saved |
-| P `A43` | RMR89 aperture selection in `r.basicSelections` | Dimensionless score 6, 5, 4, 1 or 0, or blank | Read-only rating, exact projection |
-| Q `JCON76` | `r.jcond76?.rating` | Dimensionless historical score 25, 20, 12, 6 or 0, or blank | Read-only rating, exact projection. Historical method and category stay intact |
-| R `A42` | RMR89 persistence selection in `r.basicSelections` | Dimensionless score 6, 4, 2, 1 or 0, or blank | Read-only rating, exact projection |
-| S `F_DIP` | Current row's tectonic orientation, validated dip angle | 0–90 degrees, or blank | Read-only, exact S:U row comparison |
-| T `F_AZI` | Current row's tectonic orientation, validated dip direction | 0 to <360 degrees in the saved north reference, or blank | Read-only, exact S:U row comparison |
-| U `F_THI` | Current row's tectonic `thicknessMeters` | Nonnegative finite metres, or blank | Read-only, exact S:U row comparison |
-| V `J_DIP_1` | J1 representative dip angle | 0–90 degrees, or blank | Read-only, exact projection |
-| W `J_AZI_1` | J1 representative dip direction | 0 to <360 degrees in the saved north reference, or blank | Read-only, exact projection |
-| X `J_DIP_2` | J2 representative dip angle | 0–90 degrees, or blank | Read-only, exact projection |
-| Y `J_AZI_2` | J2 representative dip direction | 0 to <360 degrees in the saved north reference, or blank | Read-only, exact projection |
-| Z `J_DIP_3` | J3 representative dip angle | 0–90 degrees, or blank | Read-only, exact projection |
-| AA `J_AZI_3` | J3 representative dip direction | 0 to <360 degrees in the saved north reference, or blank | Read-only, exact projection |
-| AB `J_DIP_4` | J4 representative dip angle | 0–90 degrees, or blank | Read-only, exact projection |
-| AC `J_AZI_4` | J4 representative dip direction | 0 to <360 degrees in the saved north reference, or blank | Read-only, exact projection |
-| AD `GSI` | `p.ratings?.gsi?.finalValue` | Saved final estimate, dimensionless, or blank | Read-only, exact projection. GSI chart position, range and method stay intact |
+| Column / key | FieldForge source, type and units | Import policy |
+| --- | --- | --- |
+| A `ID` | Excavation name through `p.excavationID`, text | Creation context. Resolve within the assigned project and horizon. Existing ownership is immutable through workbook revisions. |
+| B `PK` | `p.displayPicket`, text in the declared picket convention | Parse and validate using the existing convention or the explicitly chosen creation convention. A changed picket may require manual identity matching. |
+| C `X` | `p.coordinates?.x`, finite number in the declared XY frame | Editable. Retain the number without conversion. |
+| D `Y` | `p.coordinates?.y`, finite number in the declared XY frame | Editable. Retain the number without conversion. |
+| E `Z` | `p.coordinates?.z`, finite elevation in metres | Editable as an Excel-sourced manual elevation. A changed XY with DXF-derived Z requires an explicit Z or clear. |
+| F `ROCK` | `p.rock?.code`, exact catalogue text | Editable. Preserve lexical zeroes. Legacy numeric cells require explicit mapping to a matching exact code in the project catalogue. The mapping applies to that number within the project. |
+| G `A45` | Independent wall-alteration score, with equivalent RMR89 fallback | Editable independent category. Scores 6, 5, 3, 1 and 0. A clear requires the remaining projection to be blank. |
+| H `JW` | `q.jw.value`, dimensionless NGI Q water coefficient | Editable if the value identifies a published category or fits the existing applicable category. RMR groundwater stays separate. |
+| I `A1` | Independent strength band score, with field-grade fallback | Editable independent category. Scores 0, 1, 2, 4, 7, 12 and 15. A clear requires the remaining projection to be blank. |
+| J `UCS` | `r.strengthMPa` for `r.strengthTest == .ucs`, positive MPa | Editable as UCS. An existing Is(50) or field-strength method requires reconciliation in the journal. |
+| K `RQD` | `SpacingRQD(q:rmr:)` from original inputs, 0–100% | Editable where one source is represented. A new value is an external-report Q input when there is no existing RMR RQD. Two saved sources require separate reconciliation. No use of Q's numerical floor. |
+| L `JN` | `q.jn.value`, dimensionless NGI coefficient | Editable with unique published or already selected applicable category. |
+| M `JR` | `q.jr.value`, dimensionless NGI coefficient | Editable with unique published or already selected applicable category. Equal scores across categories require clarification. |
+| N `JA` | `q.ja.value`, dimensionless NGI coefficient | Editable with unique published or already selected applicable category. Saved wall-contact constraints apply. |
+| O `SD` | Mean of positive saved J1–J4 spacings, metres | Derived and read-only. Individual spacings cannot be recovered from the mean. |
+| P `A43` | RMR89 aperture category, dimensionless score 6, 5, 4, 1 or 0 | Editable category. Keep the existing aperture measurement in mm and validate it against the choice when present. |
+| Q `JCON76` | `r.jcond76?.rating`, historical score 25, 20, 12, 6 or 0 | Editable historical category using the existing edition and scoring table. Independent of the RMR89 total. |
+| R `A42` | RMR89 persistence category, dimensionless score 6, 4, 2, 1 or 0 | Editable category. Keep the existing persistence measurement in metres and validate it against the choice when present. |
+| S `F_DIP` | Tectonic dip of this row, degrees 0–90 | Editable with the saved or explicitly supplied orientation convention. Partial tectonic orientation can remain partial. |
+| T `F_AZI` | Tectonic dip direction of this row, degrees 0–360 | Editable. New orientation uses the declared north reference, which may be unknown. |
+| U `F_THI` | Tectonic thickness of this row, nonnegative metres | Editable. Explicit clear retains the tectonic record and removes thickness. |
+| V `J_DIP_1` | J1 representative dip, degrees 0–90 | Editable interpretation. Complete the angle pair where required. |
+| W `J_AZI_1` | J1 representative dip direction, degrees 0–360 | Editable interpretation. Preserve saved north or declare it for a new interpretation. |
+| X `J_DIP_2` | J2 representative dip, degrees 0–90 | Same policy as J1 dip. |
+| Y `J_AZI_2` | J2 representative dip direction, degrees 0–360 | Same policy as J1 dip direction. |
+| Z `J_DIP_3` | J3 representative dip, degrees 0–90 | Same policy as J1 dip. |
+| AA `J_AZI_3` | J3 representative dip direction, degrees 0–360 | Same policy as J1 dip direction. |
+| AB `J_DIP_4` | J4 representative dip, degrees 0–90 | Same policy as J1 dip. |
+| AC `J_AZI_4` | J4 representative dip direction, degrees 0–360 | Same policy as J1 dip direction. |
+| AD `GSI` | `p.ratings?.gsi?.finalValue`, saved dimensionless estimate | Derived and read-only. A bare estimate cannot recover the chart position, range, method or provenance. |
 
-Source and version details for the two editable ratings and the shared
-A42/A43 projections are in the [field category contract](enterprise-geotechnical.md#regulatory-field-categories-stage-3a).
-A45 zero is the owner-defined crushed-wall selection. A1 scores select field
-bands. The accepted changes preserve Q, RMR89, GSI, JCond76, J5, raw
-measurements, photographs, tectonic structures and earlier snapshots.
-There is no assessment recalculation.
+For unsupported SD and GSI edits, the preview identifies the affected cells and
+allows explicitly proceeding with the other fields while keeping the journal's
+derived values. Legacy source values remain in the original workbook. The
+[regulatory category contract](enterprise-geotechnical.md#regulatory-field-categories-stage-3a)
+documents the A1, A45, A42 and A43 tables.
 
-## Validation, commit and recovery
+The import uses the existing NGI Q and RMR89 evaluators. Missing inputs remain
+missing. Data supplies no SRF, Jn location adjustment, orientation adjustment,
+raw aperture or persistence measurements, GSI chart evidence, or independent
+RMR76 total. It cannot infer them from the nearby regulatory fields. Historical
+Q, RMR89, GSI, JCond76 and J5 snapshots, original measurements and photographs
+remain in the journal. A changed interpretation keeps the links to its original
+measurements and creates a versioned snapshot.
 
-The reader uses Stage 4b's bounded ZIP/XML validation and accepts the
-single-sheet regulatory structure and its header merges. It checks all four
-header rows and reports the addresses of missing, duplicate or reordered
-headings. Nonempty cells beyond AD are rejected. Inline and shared strings
-preserve text codes. Date/percent/custom unit formats, formula cells and cached
-formula results, numeric coercion of text identifiers, unsupported cell types
-and unrepresentable numeric values are refused. When an editor rounds an
-exported protected number to its 15-significant-digit limit, the changed cell
-blocks that observation. Recover the exact value from the source export. Empty
-rows and rows consisting entirely of blank/dash placeholders are ignored.
+## Spatial data and revision conflicts
 
-The Stage 4b confirmation path re-reads the XLSX and compares its SHA-256 to
-the preview. On the storage queue, each approved observation is checked against
-its current revision, content and graph before admission. Stage 4a persists
-the pending intent, then commits the appended revision and receipt together in
-the schema-8 journal. Reopening the same workbook recovers a pending intent
-against its original approved snapshot or offers rejection if the journal
-changed. Applied operations replay without another revision. Rows in other
-observations can succeed independently. The mapping journal carries the ledger
-through the existing backup workflow.
+For new or unbound XY, select a DXF revision when the workbook coordinates are
+known to be in that drawing frame. Confirm the selected plan and its units.
+With complete XY, the saved horizon, excavation and plan relationships flow
+through the existing point renderer. Values without a confirmed frame are
+retained as unbound drawing values and the journal reports the missing frame.
+Incomplete XY remains in the journal. The import performs no coordinate
+transformation, north conversion, GPS inference or DXF geometry edit.
+
+When the journal has changed since export, FieldForge compares the intended
+Excel edits against the archived export baseline and shows the current values.
+Approving Excel changes is tied to the current graph fingerprint. Journal
+fields untouched in Excel are retained. Fault edits with concurrent local fault
+changes require a fresh export. An apply-time conflict requires a fresh preview
+and explicit resolution.
+
+Confirmation re-reads the XLSX and checks its SHA-256. The storage owner
+revalidates each target and commits the new observation or correction with its
+receipt in the existing schema-8 journal. Pending intents retain the approved
+assignment and can resume from the same source bytes. An exact replay reports
+previously applied work. Re-export attaches UUIDs to newly created observations.
+An edited legacy file without metadata requires renewed reconciliation.
 
 ## Reference and verification limits
 
-The local copy of `example(2).xlsb` matched SHA-256
+The local `example(2).xlsb` matched SHA-256
 `9991f51c1a170a224c219edc9eccfb1da3c54abd4f9f8095192e19bc90b66a97`.
-Read-only extraction verified the `Data` header values across A:AD. The
-[Stage 1 audit](regulatory-excel-audit.md#workbook-evidence-and-limits) records
-the broader original used range, formula caches and template differences.
-The original file remains private. FieldForge imports XLSX only. A legacy file
-needs a reviewed values-only XLSX containing the four header rows and A:AD,
-with text identifiers and exact numeric cells. Cross-check the conversion
-against its source. The source's extra columns, formulas and placeholder
-structures can make a direct Save As unsuitable for import.
+Read-only extraction checked the A:AD headers and confirmed that populated A
+and B cells are text and the 4,117 populated observation rows use numeric
+ROCK cells. The file remains private. Import accepts XLSX. To use a legacy
+XLSB, preserve the original and prepare a reviewed values-only XLSX copy
+cropped to A:AD with the four original header rows. Reconcile numeric ROCK
+codes against the project catalogue. The source workbook's extra columns,
+formulas and placeholders require review before conversion.
 
-Automated tests exercise actual XLSX archives, including deflated edited
-workbooks, malformed headers, duplicate and ambiguous matches, precision and
-type errors, tectonic row groups, stale revisions, partial completion and
-restart recovery. The tests preserve a linked original photo and measurement,
-J5 and historical Q/RMR89/GSI/JCond76 snapshots. Direct XLSB import, a native
-Excel resave of the owner workbook and on-device Files-provider acceptance
-remain unverified.
+Automated tests use actual XLSX archives and cover the 100 + 20 / 5 revision
+scenario, exact Data XML, DXF point query and missing XY, typed legacy rows,
+fault grouping, numerical and structural diagnostics, stale resolution,
+restart persistence, recovery and duplicate-free replay. Native Excel
+resaving of the reference, physical-device Files acceptance and full
+regression remain outside this verification.
 
-Stage 4c verification on 2026-11-11
-
-- SwiftPM ran 89 targeted tests across regulatory export, Exchange import and
-  export, Files coordination, preview coordination and the ledger. All passed.
-- Xcode 26.6 `build-for-testing` succeeded for the generic iOS Simulator
-  destination with signing disabled. The app, unit test and UI test targets compiled.
-- The full regression suite and physical-device walkthrough were outside this run.
+SwiftPM passed 128 focused tests across Excel import and export, file and
+preview coordination, the import ledger, plan management and offline backup.
+Xcode 26.6 `build-for-testing` compiled the app and test targets for the
+generic iOS Simulator destination with signing disabled.

@@ -148,9 +148,11 @@ revisions remain in the journal and are available through FieldForge Exchange
 within its documented scope. Complete backup also includes the original
 attachment bytes and independent measurement journal.
 
-Stage 4c accepts reviewed changes to ROCK, A45 and A1 through the journal's
-Excel import screen. See the [A:AD import contract](regulatory-excel-stage-4c.md)
-for the optional companion file, explicit legacy matching and conflict policy.
+The regulatory workbook is the primary bidirectional mapping exchange.
+A hidden worksheet holds observation UUIDs and revision baselines. The
+[A:AD import contract](regulatory-excel-stage-4c.md) describes supported
+source fields, assisted creation and matching, plan assignment and conflict
+resolution. The Data-only compatibility setting retains the single-sheet layout.
 
 ## Persistence
 

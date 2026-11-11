@@ -74,6 +74,17 @@ enum MappingImportApply {
         if let duplicate = journal.importLedger?.entries.first(where: { $0.reservesSource(against: operation) }) {
             return .duplicateSourceRecord(operationID: duplicate.operation.id)
         }
+        if operation.kind == .create, operation.source.kind == .regulatoryData,
+           let note = operation.note, let assignment = try? ExchangeBaseline.decode(RegulatoryDataProposal.Assignment.self, note),
+           let chainage = assignment.resolvedChainage,
+           let pending = journal.importLedger?.entries.first(where: { entry in
+               guard entry.outcome == .pending, entry.operation.id != operation.id,
+                     entry.operation.source.kind == .regulatoryData, entry.operation.kind == .create,
+                     entry.operation.target.context == operation.target.context,
+                     let note = entry.operation.note,
+                     let other = try? ExchangeBaseline.decode(RegulatoryDataProposal.Assignment.self, note) else { return false }
+               return chainage == other.resolvedChainage
+           }) { return .duplicateSourceRecord(operationID: pending.operation.id) }
         guard journal.validContext(operation.target.context) else { return .ownershipChanged }
         let observation = current.observation(id: operation.target.observationID)
         if let observation, MappingImportTarget(observation) != operation.target { return .ownershipChanged }
@@ -121,9 +132,15 @@ enum MappingImportApply {
             next.appendCorrection(id: operation.id, snapshot: proposal, now: correction.date,
                                   author: correction.author, reason: correction.reason)
         } else {
-            guard operation.source.kind != .regulatoryData, proposal.measurementIDs.isEmpty,
+            guard proposal.measurementIDs.isEmpty,
                   proposal.geology?.jointSets.contains(where: { !$0.identifier.isRoutine }) != true else {
                 return .rejected(.protectedEvidence)
+            }
+            if operation.source.kind == .regulatoryData {
+                guard operation.graphFingerprint != nil,
+                      RegulatoryDataImport.preservesEvidence(proposal, from: nil, in: current) else {
+                    return .rejected(.protectedEvidence)
+                }
             }
             next.observations.append(proposal)
         }

@@ -34,6 +34,7 @@ final class MappingCommittedSnapshot: Sendable {
         plansByID = Dictionary(journal.plans.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
+    func plan(id: UUID) -> MappingPlanReference? { plansByID[id] }
     func observation(id: UUID) -> MappingObservation? { observationOffsets[id].map { effectiveObservations[$0] } }
     func observationCount(projectID: UUID?) -> Int { projectID.flatMap { projectOffsets[$0]?.count } ?? 0 }
     func observations(projectID: UUID?) -> [MappingObservation] {

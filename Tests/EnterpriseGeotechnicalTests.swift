@@ -389,7 +389,7 @@ import XCTest
         XCTAssertEqual(w.journal.history(for: original.id), [revision])
         XCTAssertEqual(revision.snapshot.geology?.jointSets.last, original.geology?.jointSets.last)
 
-        let files = try MappingExportFiles.write(export, format: .enterpriseGeotechnical)
+        let files = try MappingExportFiles.write(export, format: .enterpriseGeotechnical, includeRegulatoryIdentity: false)
         defer { files.cleanup() }
         let workbook = try XCTUnwrap(files.urls.first)
         if let fixture = ProcessInfo.processInfo.environment["FF_ENTERPRISE_FIXTURE_DIR"] {

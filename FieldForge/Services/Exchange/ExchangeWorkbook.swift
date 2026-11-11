@@ -103,7 +103,9 @@ struct ExchangeWorkbook: Sendable {
             switch name {
             case "sheet":
                 guard ancestors == ["workbook", "sheets"], let name = a["name"], sheetPaths[name] == nil,
-                      a["state"] == nil || a["state"] == "visible",
+                      (regulatory && name == RegulatoryDataManifest.sheetName
+                       ? a["state"] == "hidden" || a["state"] == "veryHidden"
+                       : a["state"] == nil || a["state"] == "visible"),
                       let id = a["r:id"], let rel = relationships[id], rel.type == d + "worksheet",
                       let sheetID = a["sheetId"], sheetIDs.insert(sheetID).inserted,
                       !sheetPaths.values.contains(rel.target) else { throw fail("Скрытый лист или неоднозначная идентичность листа XLSX.") }
@@ -163,7 +165,9 @@ struct ExchangeWorkbook: Sendable {
             }
         }
         guard sheetPaths.count <= 32, Set(sheetPaths.values) == Set(relationships.values.filter { $0.type == d + "worksheet" }.map(\.target)) else { throw fail("Неучтённые листы XLSX.") }
-        if regulatory, sheetOrder != ["Data"] { throw fail("Требуется один видимый лист Data.") }
+        if regulatory, Set(sheetOrder) != ["Data"], Set(sheetOrder) != ["Data", RegulatoryDataManifest.sheetName] {
+            throw fail("Требуется видимый лист Data. Допускается скрытый лист идентификаторов FieldForge.")
+        }
         var identifier: UUID?
         var seenIdentifier = false
         if regulatory, let core = root.values.first(where: { $0.type.hasSuffix("/core-properties") }) {
@@ -211,12 +215,13 @@ struct ExchangeWorkbook: Sendable {
         var regulatoryRows: [Int: [Int: DataCell]] = [:]
         var output: [String: Sheet] = [:], totalCells = 0, totalRows = 0
         for (sheet, path) in sheetPaths.sorted(by: { $0.key < $1.key }) {
+            let regulatoryData = regulatory && sheet == "Data"
             var rows: [Int: [Int: String]] = [:], rowNumbers = Set<Int>(), currentRow: Int?, currentColumn: Int?, cellType = "", cellText = "", cellValue = "", seenValue = false, seenInline = false
             var cellIssue: String?
             var hasFormula = false
             var merges = Set<String>()
             try xml(path, namespace: Self.spreadsheet, start: { name, a, ancestors in
-                if regulatory {
+                if regulatoryData {
                     if name == "f", currentColumn != nil, ancestors.last == "c" {
                         hasFormula = true
                         cellIssue = "Формулы и их сохранённые результаты не поддерживаются."
@@ -241,7 +246,7 @@ struct ExchangeWorkbook: Sendable {
                     totalCells += 1; guard totalCells <= limits.cells else { throw fail("Превышен предел ячеек XLSX.") }
                     currentColumn = column; cellType = a["t"] ?? ""; cellText = ""; cellValue = ""; seenValue = false; seenInline = false
                     cellIssue = nil; hasFormula = false
-                    if regulatory {
+                    if regulatoryData {
                         let style = a["s"].flatMap(Int.init) ?? (a["s"] == nil ? 0 : -1)
                         if a["cm"] != nil || a["vm"] != nil || !["", "n", "s", "inlineStr"].contains(cellType) {
                             cellIssue = "Неподдерживаемый тип Excel (дата, логическое значение или ошибка)."
@@ -249,7 +254,7 @@ struct ExchangeWorkbook: Sendable {
                             cellIssue = "Числовой формат может преобразовать дату, проценты или единицы."
                         }
                     }
-                    guard regulatory || ["", "n", "s", "inlineStr"].contains(cellType) else { throw fail("\(sheet)!\(address): тип ячейки не текстовый; возможна потеря точности или преобразование даты.") }
+                    guard regulatoryData || ["", "n", "s", "inlineStr"].contains(cellType) else { throw fail("\(sheet)!\(address): тип ячейки не текстовый; возможна потеря точности или преобразование даты.") }
                 }
                 if currentColumn != nil {
                     guard ["c", "is", "t", "r", "rPr", "b", "i", "u", "sz", "color", "rFont", "family", "charset", "scheme", "vertAlign", "strike", "v"].contains(name) else { throw fail("\(sheet): неподдерживаемое содержимое ячейки.") }
@@ -257,7 +262,7 @@ struct ExchangeWorkbook: Sendable {
                     if name == "is" { guard !seenInline, ancestors.last == "c" else { throw fail("Неоднозначная строка ячейки.") }; seenInline = true }
                     if name == "t" {
                         let inline = ["worksheet", "sheetData", "row", "c", "is"]
-                        guard regulatory ? ancestors == inline || ancestors == inline + ["r"] : ancestors.contains("is") else {
+                        guard regulatoryData ? ancestors == inline || ancestors == inline + ["r"] : ancestors.contains("is") else {
                             throw fail("Строка вне inlineStr.")
                         }
                     }
@@ -269,8 +274,8 @@ struct ExchangeWorkbook: Sendable {
                     guard cellText.utf16.count <= limits.textUTF16 else { throw fail("Слишком длинный текст ячейки.") }
                 }
                 if name == "c", let row = currentRow, let col = currentColumn {
-                    if regulatory, !text.isEmpty { cellIssue = "Неоднозначное содержимое ячейки."; hasFormula = true }
-                    if regulatory, let issue = cellIssue, seenValue || seenInline || !["", "n"].contains(cellType) || hasFormula {
+                    if regulatoryData, !text.isEmpty { cellIssue = "Неоднозначное содержимое ячейки."; hasFormula = true }
+                    if regulatoryData, let issue = cellIssue, seenValue || seenInline || !["", "n"].contains(cellType) || hasFormula {
                         regulatoryRows[row, default: [:]][col] = .invalid(issue)
                         rows[row]?[col] = ""; currentColumn = nil
                         return
@@ -282,19 +287,19 @@ struct ExchangeWorkbook: Sendable {
                     case "inlineStr":
                         guard !seenValue else { throw fail("Неоднозначное текстовое значение.") }; value = try Self.unescape(cellText)
                     default:
-                        if regulatory, seenValue, !seenInline {
+                        if regulatoryData, seenValue, !seenInline {
                             regulatoryRows[row, default: [:]][col] = .number(cellValue)
                             rows[row]?[col] = ""; currentColumn = nil
                             return
                         }
                         guard !seenValue, !seenInline else { throw fail("\(sheet)!\(MappingXLSXExport.column(col + 1))\(row): числовая/датированная ячейка; восстановить точность нельзя. Сохраните исходные значения как текст.") }; value = ""
                     }
-                    if regulatory, !value.isEmpty { regulatoryRows[row, default: [:]][col] = .text(value) }
+                    if regulatoryData, !value.isEmpty { regulatoryRows[row, default: [:]][col] = .text(value) }
                     rows[row]?[col] = value; currentColumn = nil
                 }
                 if name == "row" { currentRow = nil }
             })
-            if regulatory { continue }
+            if regulatoryData { continue }
             guard let header = rows.removeValue(forKey: 1), let max = header.keys.max(), max < 256 else { throw fail("\(sheet): отсутствует заголовок.") }
             let columns = (0...max).map { header[$0] ?? "" }
             guard !columns.contains(""), Set(columns).count == columns.count else { throw fail("\(sheet): пустые или повторные колонки.") }

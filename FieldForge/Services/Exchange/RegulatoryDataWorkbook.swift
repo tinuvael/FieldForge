@@ -1,17 +1,19 @@
 import Foundation
 
-/// Typed cells from the established single-sheet report. The export projection
-/// supplies the headers and read-only baseline values for comparison.
+/// Typed cells from the operational Data sheet. The export projection supplies
+/// the header contract and the exact baseline values for comparison.
 enum RegulatoryDataWorkbook {
     static let columns = EnterpriseGeotechnicalWorkbook.columns
-    static let editable = [5, 6, 8]
-    static let protected = columns.indices.filter { !editable.contains($0) }
-    static let repeated = protected.filter { !(18...20).contains($0) }
+    static let editable = Array(1...13) + Array(15...28)
+    static let protected = [0, 14, 29]
+    static let common = columns.indices.filter { !(18...20).contains($0) }
+    static let fault = 18...20
 
     struct Row: Sendable {
         let number: Int
         let values: [String]
         let issues: [String]
+        var numericRock = false
 
         func location(_ column: Int) -> String { "Data!\(RegulatoryDataWorkbook.address(column, number))" }
     }
@@ -19,11 +21,15 @@ enum RegulatoryDataWorkbook {
     struct Read: Sendable {
         let documentID: UUID?
         let rows: [Row]
+        let manifest: RegulatoryDataManifest?
 
         init(bytes: Data, limits: ExchangeLimits) throws {
             let archive = try ExchangeArchive(data: bytes, limits: limits)
             let workbook = try ExchangeWorkbook(parts: archive.parts, limits: limits, regulatory: true)
             documentID = workbook.documentID
+            manifest = try workbook.sheets[RegulatoryDataManifest.sheetName].map {
+                try RegulatoryDataManifest.read(sheet: $0, documentID: workbook.documentID, rowLimit: limits.rows)
+            }
             let data = workbook.dataRows
             var headerIssues: [String] = []
             for (offset, header) in EnterpriseGeotechnicalWorkbook.headerRows.enumerated() {
@@ -48,6 +54,7 @@ enum RegulatoryDataWorkbook {
                 // Empty and all-dash report placeholders do not represent observations.
                 if cells.allSatisfy({ $0.key < columns.count && $0.value == .text("-") }) { return nil }
                 var issues: [String] = []
+                var numericRock = false
                 var values = Array(repeating: "", count: columns.count)
                 for (column, cell) in cells.sorted(by: { $0.key < $1.key }) {
                     let location = "Data!\(address(column, number))"
@@ -59,13 +66,14 @@ enum RegulatoryDataWorkbook {
                     case .text("-"): break
                     case .text(let value) where isText || editable.contains(column) && value == ExchangeObservationProposal.clear:
                         values[column] = value
-                    case .number(let raw) where !isText:
+                    case .number(let raw) where !isText || column == 5:
                         do {
                             guard let value = try ExchangeObservationProposal.number(raw, field: location, required: true),
                                   value == 0 || abs(value) >= Double.leastNormalMagnitude else {
                                 throw ExchangeImportError("Значение вне числового диапазона Excel.")
                             }
                             values[column] = decimal(value)
+                            if column == 5 { numericRock = true }
                         } catch {
                             issues.append("\(location): невозможно прочитать число без потери точности.")
                         }
@@ -74,10 +82,7 @@ enum RegulatoryDataWorkbook {
                         issues.append("\(location): \(isText ? "требуется текстовая ячейка, включая ведущие нули" : "требуется числовая ячейка Excel").")
                     }
                 }
-                if values[0].isEmpty || values[1].isEmpty {
-                    issues.append("Data!A\(number):B\(number): укажите выработку и пикет для сопоставления.")
-                }
-                return Row(number: number, values: values, issues: issues)
+                return Row(number: number, values: values, issues: issues, numericRock: numericRock)
             }
         }
     }
@@ -101,7 +106,12 @@ enum RegulatoryDataWorkbook {
         return text.hasSuffix(".0") ? String(text.dropLast(2)) : text
     }
 
-    static func signature(_ row: [String]) throws -> String {
-        try MappingImportLedger.fingerprint(repeated.map { row[$0] })
+    static func identity(_ rows: [Row]) throws -> String {
+        try MappingImportLedger.fingerprint(rows.map { $0.values + [$0.numericRock ? "numeric-rock" : "text-rock"] }.sorted { $0.lexicographicallyPrecedes($1) })
+    }
+
+    static func legacySignature(_ row: [String]) throws -> String {
+        let oldProtected = columns.indices.filter { ![5, 6, 8].contains($0) && !fault.contains($0) }
+        return try MappingImportLedger.fingerprint(oldProtected.map { row[$0] })
     }
 }

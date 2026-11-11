@@ -13,9 +13,11 @@ struct MappingExportView: View {
     @State private var firstDay = Date()
     @State private var lastDay = Date()
     @State private var timeZoneID = TimeZone.current.identifier
-    @State private var format: MappingExportFormat = .xlsx
+    @State private var format: MappingExportFormat = .enterpriseGeotechnical
+    @State private var allRegulatoryDates = true
+    @State private var dataSheetOnly = false
     @State private var showTechnicalSheets = false
-    @State private var includeRegulatoryManifest = false
+
     @State private var preview: MappingCSVExport?
     @State private var photoPreview: PhotoPackageExport?
     @State private var confirmIncomplete = false
@@ -30,8 +32,11 @@ struct MappingExportView: View {
         _projectID = State(initialValue: projectID ?? committed.journal.projects.first?.id)
     }
     private var selection: MappingExportSelection? {
-        projectID.map { MappingExportSelection(projectID: $0, horizonID: horizonID, excavationID: excavationID,
-            firstDay: firstDay, lastDay: lastDay, timeZoneID: timeZoneID) }
+        guard let projectID else { return nil }
+        let dates = format == .enterpriseGeotechnical && allRegulatoryDates
+            ? committed.observations(projectID: projectID).map(\.observedAt) : []
+        return MappingExportSelection(projectID: projectID, horizonID: horizonID, excavationID: excavationID,
+            firstDay: dates.min() ?? firstDay, lastDay: dates.max() ?? lastDay, timeZoneID: timeZoneID)
     }
     private var zone: TimeZone { TimeZone(identifier: timeZoneID) ?? .gmt }
     private var calendar: Calendar { var c = Calendar(identifier: .gregorian); c.timeZone = zone; return c }
@@ -51,10 +56,13 @@ struct MappingExportView: View {
                         Text($0.name).tag(Optional($0.id))
                     }
                 }
-                DatePicker("Дата от", selection: $firstDay, displayedComponents: .date)
-                    .accessibilityIdentifier("mappingExportFirstDay")
-                DatePicker("Дата до включительно", selection: $lastDay, displayedComponents: .date)
-                    .accessibilityIdentifier("mappingExportLastDay")
+                if format == .enterpriseGeotechnical { Toggle("Все даты", isOn: $allRegulatoryDates) }
+                if format != .enterpriseGeotechnical || !allRegulatoryDates {
+                    DatePicker("Дата от", selection: $firstDay, displayedComponents: .date)
+                        .accessibilityIdentifier("mappingExportFirstDay")
+                    DatePicker("Дата до включительно", selection: $lastDay, displayedComponents: .date)
+                        .accessibilityIdentifier("mappingExportLastDay")
+                }
             }.disabled(busy || sharing)
             Section {
                 Picker("Выгрузка", selection: $format) {
@@ -73,7 +81,7 @@ struct MappingExportView: View {
                         ForEach(MappingExportFormat.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                     }.accessibilityIdentifier("mappingExportFormat")
                     if format == .enterpriseGeotechnical {
-                        Toggle("Добавить файл сопоставления для импорта", isOn: $includeRegulatoryManifest)
+                        Toggle("Совместимость · только лист Data", isOn: $dataSheetOnly)
                     } else {
                         Toggle("Показывать технические листы Excel", isOn: $showTechnicalSheets)
                     }
@@ -123,7 +131,7 @@ struct MappingExportView: View {
                         Text("Импорт предложений доступен в журнале. Сохраните базовые UUID, версии, отпечатки и source_records. Оригиналы фото и DXF не включены; сохраняйте отдельную резервную копию ZIP.")
                     } else if format == .enterpriseGeotechnical {
                         Text("Лист Data (A–AD). Для актуального наблюдения формируется строка на каждую тектоническую структуру. Если структур нет, формируется одна строка с пустыми полями разлома. SD — среднее положительных сохранённых расстояний J1–J4.")
-                        Text("Для возврата правок ROCK, A45 и A1 можно сохранить отдельный файл сопоставления. В нём записаны UUID и версии выгруженных наблюдений.")
+                        Text("Добавляйте и исправляйте строки на листе Data. Скрытый лист хранит UUID и версии. Для повторного импорта сохраните его в книге.")
                         Text("При расхождении RQD в Q и RMR поле RQD остаётся пустым. Координаты и азимуты выгружаются в исходных единицах и системах отсчёта. История, сведения о системе координат и типе севера доступны в журнале и Excel Exchange.")
                     } else if format == .photoPackage {
                         Text("ZIP: оригиналы, FieldForge-Mapping.xlsx с реестром photo_register и manifest.json. Файлы проверяются по размеру и SHA-256. Путь и статус каждого оригинала указаны в реестре.")
@@ -261,8 +269,8 @@ struct MappingExportView: View {
         guard !busy, !sharing else { return }
         let format = format
         let showTechnicalSheets = showTechnicalSheets
+        let includeIdentity = !dataSheetOnly
         let photos = photoPreview
-        let manifestSnapshot = format == .enterpriseGeotechnical && includeRegulatoryManifest ? committed : nil
         busy = true; errorMessage = nil
         operation = Task { @MainActor in
             let worker = Task.detached(priority: .userInitiated) {
@@ -270,9 +278,8 @@ struct MappingExportView: View {
                     guard let photos else { throw MappingError.invalid("Обновите предпросмотр фотографий.") }
                     return try photos.write(allowIncomplete: allowIncomplete)
                 }
-                let manifest = try manifestSnapshot.map { try RegulatoryDataManifest(export: preview, committed: $0) }
                 return try MappingExportFiles.write(preview, format: format, showTechnicalSheets: showTechnicalSheets,
-                    regulatoryManifest: manifest)
+                    includeRegulatoryIdentity: includeIdentity)
             }
             defer { busy = false }
             do {

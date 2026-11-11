@@ -5,10 +5,11 @@ struct MappingExchangeImportView: View {
     @EnvironmentObject private var mapping: MappingModel
     @StateObject private var coordinator = MappingExchangePreviewCoordinator()
     @State private var picker = false
-    @State private var choosingManifest = false
-    @State private var kind: MappingImportSource.Kind = .exchange
-    @State private var manifestURL: URL?
-    @State private var matches: [String: UUID] = [:]
+    @State private var kind: MappingImportSource.Kind = .regulatoryData
+    @State private var review = RegulatoryDataImport.Review()
+    @State private var assignment = RegulatoryDataProposal.Assignment()
+    @State private var observationDate = Date()
+    @State private var draftPickets: [String: String] = [:]
     @State private var selectedURL: URL?
     @State private var selection = MappingExchangeImport.Selection()
     @State private var confirming = false
@@ -24,25 +25,9 @@ struct MappingExchangeImportView: View {
                     Text("FieldForge Exchange").tag(MappingImportSource.Kind.exchange)
                     Text("Регламент · Data A:AD").tag(MappingImportSource.Kind.regulatoryData)
                 }.disabled(applying)
-                Button("Выбрать книгу Excel…", systemImage: "doc.badge.plus") {
-                    choosingManifest = false; picker = true
-                }
-                    .accessibilityIdentifier("exchangeSelectWorkbook")
-                    .disabled(applying)
+                Button("Выбрать книгу Excel…", systemImage: "doc.badge.plus") { picker = true }
+                    .accessibilityIdentifier("exchangeSelectWorkbook").disabled(applying)
                 if let selectedURL { LabeledContent("Файл", value: selectedURL.lastPathComponent) }
-                if kind == .regulatoryData, let selectedURL {
-                    Button("Выбрать файл сопоставления…") { choosingManifest = true; picker = true }
-                        .disabled(applying)
-                    if let manifestURL {
-                        LabeledContent("Сопоставление", value: manifestURL.lastPathComponent)
-                        Button("Сопоставить вручную") {
-                            self.manifestURL = nil; matches = [:]; prepare(selectedURL)
-                        }.disabled(applying)
-                    } else {
-                        Text("Для каждой группы строк выберите наблюдение и проверьте значения журнала.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
                 if state.busy {
                     ProgressView("Проверка книги…")
                     let operationID = coordinator.operationID
@@ -56,6 +41,9 @@ struct MappingExchangeImportView: View {
                         .foregroundStyle(.orange)
                 }
             }
+            if kind == .regulatoryData, selectedURL != nil, let workflow = mapping.workflow {
+                assignmentSection(workflow.journal)
+            }
             if let report {
                 reportSection(report)
                 if let selectedURL {
@@ -67,17 +55,12 @@ struct MappingExchangeImportView: View {
         }
         .navigationTitle("Импорт Excel")
         .navigationBarBackButtonHidden(applying)
-        .fileImporter(isPresented: $picker, allowedContentTypes: [choosingManifest ? .json : (UTType(filenameExtension: "xlsx") ?? .data)]) { result in
+        .fileImporter(isPresented: $picker, allowedContentTypes: [UTType(filenameExtension: "xlsx") ?? .data]) { result in
             guard coordinator.isActive, !applying else { return }
             switch result {
             case .success(let url):
-                matches = [:]
-                if choosingManifest {
-                    manifestURL = url
-                    if let selectedURL { prepare(selectedURL) }
-                } else {
-                    manifestURL = nil; selectedURL = url; prepare(url)
-                }
+                review = .init(); draftPickets = [:]
+                selectedURL = url; prepare(url)
             case .failure(let error): coordinator.selectionFailed(error)
             }
         }
@@ -90,10 +73,16 @@ struct MappingExchangeImportView: View {
         }
         .onChange(of: kind) { _, _ in
             coordinator.clear()
-            selectedURL = nil; manifestURL = nil; matches = [:]
+            selectedURL = nil; review = .init(); draftPickets = [:]
             selection = .init(); report = nil; applyError = nil
         }
-        .onAppear { coordinator.activate(generation: mapping.workflow?.committed.generationID) }
+        .onAppear {
+            coordinator.activate(generation: mapping.workflow?.committed.generationID)
+            if assignment.projectID == nil {
+                assignment.projectID = mapping.workflow?.context.projectID
+                assignment.horizonID = mapping.workflow?.context.horizonID
+            }
+        }
         .task(id: state.publicationID) {
             guard let id = state.publicationID else { return }
             let storage = mapping.storage
@@ -140,14 +129,7 @@ struct MappingExchangeImportView: View {
                     ForEach(records) { record in
                         DisclosureGroup {
                             Text(record.reason)
-                            if !record.candidates.isEmpty {
-                                Picker("Наблюдение", selection: match(record)) {
-                                    Text("Выберите наблюдение").tag(UUID?.none)
-                                    ForEach(record.candidates) { candidate in
-                                        Text(candidate.label).tag(Optional(candidate.id))
-                                    }
-                                }.disabled(!canChoose)
-                            }
+                            if kind == .regulatoryData { regulatoryControls(record).disabled(!canChoose) }
                             ForEach(record.visibleChanges) { change in
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(verbatim: change.title).font(.subheadline.bold())
@@ -183,10 +165,17 @@ struct MappingExchangeImportView: View {
         }
         if preview.records.contains(where: { $0.canApply || $0.classification == .conflict || $0.receipt?.outcome == .pending }) {
             Section {
+                if kind == .regulatoryData, preview.records.contains(where: \.canApply) {
+                    Button("Отметить все готовые наблюдения") {
+                        selection.accepted = Set(preview.records.filter(\.canApply).map(\.id))
+                        selection.rejectedPending.subtract(selection.accepted)
+                    }.disabled(!canChoose)
+                }
                 Button("Проверить выбор и подтвердить", systemImage: "checkmark.circle") { confirming = true }
                     .disabled(!canConfirm(preview, stale: stale))
-                Text("Изменения сохраняются только после подтверждения. Для конфликта с журналом нужна новая выгрузка.")
-                    .font(.caption).foregroundStyle(.secondary)
+                if kind == .exchange {
+                    Text("Для конфликта с журналом нужна новая выгрузка.").font(.caption).foregroundStyle(.secondary)
+                }
             }
         }
     }
@@ -237,16 +226,135 @@ struct MappingExchangeImportView: View {
         })
     }
 
-    private func match(_ record: MappingExchangePreview.Record) -> Binding<UUID?> {
-        Binding(get: { matches[record.id] }, set: { id in
-            matches[record.id] = id
-            if let selectedURL { prepare(selectedURL) }
-        })
+    private func assignmentSection(_ journal: MappingJournal) -> some View {
+        Section {
+            DisclosureGroup("Контекст новых строк и координат") {
+                Picker("Проект", selection: $assignment.projectID) {
+                    Text("Выберите проект").tag(UUID?.none)
+                    ForEach(journal.projects) { Text($0.name).tag(Optional($0.id)) }
+                }
+                Picker("Горизонт", selection: $assignment.horizonID) {
+                    Text("Выберите горизонт").tag(UUID?.none)
+                    ForEach(journal.horizons.filter { $0.projectID == assignment.projectID }) {
+                        Text($0.displayName).tag(Optional($0.id))
+                    }
+                }
+                Picker("Выработка", selection: $assignment.excavationID) {
+                    Text("По названию в столбце ID").tag(UUID?.none)
+                    ForEach(journal.excavations.filter {
+                        $0.projectID == assignment.projectID && $0.horizonIDs.contains(where: { $0 == assignment.horizonID })
+                    }) { Text($0.name).tag(Optional($0.id)) }
+                }
+                DatePicker("Дата и время наблюдения", selection: $observationDate)
+                LabeledContent("Часовой пояс", value: assignment.zoneID)
+                Picker("Система пикетажа", selection: $assignment.convention) {
+                    Text("Выберите систему").tag(PicketConvention?.none)
+                    Text("ПК 10 м").tag(Optional(PicketConvention.tenMeters))
+                    Text("Километры + метры").tag(Optional(PicketConvention.legacyMeters))
+                }
+                TextField("Начало и направление отсчёта", text: $assignment.chainageOrigin)
+                Picker("Координаты X/Y из Excel", selection: $assignment.planID) {
+                    Text("Система XY пока неизвестна").tag(UUID?.none)
+                    ForEach(journal.plans.filter {
+                        $0.horizonID == assignment.horizonID && !$0.isDeleted && $0.file?.units != PlanUnits.unknown && $0.file != nil
+                    }) { plan in
+                        if let file = plan.file {
+                            Text("\(file.originalFilename) · \(plan.version) · \(file.units.label)").tag(Optional(plan.id))
+                        }
+                    }
+                }
+                Picker("Север для новых азимутов", selection: $assignment.north) {
+                    Text("Неизвестен").tag(GeographicReference.unknown)
+                    Text("Сеточный").tag(GeographicReference.gridNorth)
+                    Text("Истинный").tag(GeographicReference.trueNorth)
+                    Text("Магнитный").tag(GeographicReference.magneticNorth)
+                }
+                Toggle("Азимут вертикальных плоскостей — условная сторона падения", isOn: $assignment.verticalSide)
+                Button("Применить параметры к строкам без отдельного контекста") {
+                    review.assignment = declaredAssignment
+                    recheck()
+                }
+            }
+            .onChange(of: assignment.projectID) { _, _ in
+                assignment.horizonID = nil; assignment.excavationID = nil; assignment.planID = nil
+            }
+            .onChange(of: assignment.horizonID) { _, _ in assignment.excavationID = nil; assignment.planID = nil }
+        }.disabled(applying || coordinator.state.busy)
+    }
+
+    private var declaredAssignment: RegulatoryDataProposal.Assignment {
+        var value = assignment
+        value.observedAt = observationDate
+        return value
+    }
+
+    @ViewBuilder private func regulatoryControls(_ record: MappingExchangePreview.Record) -> some View {
+        if let key = record.reviewID, let actions = record.regulatoryActions {
+            if !record.candidates.isEmpty {
+                Picker("Наблюдение в журнале", selection: Binding(get: { review.matches[key] }, set: { id in
+                    review.matches[key] = id
+                    review.createSeparately.remove(key)
+                    recheck()
+                })) {
+                    Text("Выберите наблюдение").tag(UUID?.none)
+                    ForEach(record.candidates) { candidate in Text(candidate.label).tag(Optional(candidate.id)) }
+                }
+            }
+            if let rock = actions.rockKey {
+                Picker("ROCK \(rock.numericValue) · код для проекта", selection: Binding(get: { review.rockCodes[rock] }, set: { code in
+                    review.rockCodes[rock] = code
+                    recheck()
+                })) {
+                    Text("Выберите точный код").tag(String?.none)
+                    ForEach(actions.rockChoices) { choice in
+                        Text([choice.code, choice.name].compactMap { $0 }.joined(separator: " · ")).tag(Optional(choice.code))
+                    }
+                }
+            }
+            if actions.canCreateSeparately {
+                Button("Создать отдельное наблюдение") { review.createSeparately.insert(key); recheck() }
+            }
+            if actions.canFindExisting {
+                Button("Найти другое наблюдение") { review.findExisting.insert(key); recheck() }
+            }
+            if actions.canGroup {
+                Button("Один объект с несколькими разломами") { review.groupFaults.insert(key); recheck() }
+            }
+            if actions.canSplit {
+                Button("Разделить на отдельные наблюдения") { review.splitFaults.insert(key); recheck() }
+            }
+            if actions.canResolveConflict, let graph = record.graphFingerprint {
+                Button("Использовать правки Excel поверх текущей версии") { review.takeExcelChanges[key] = graph; recheck() }
+            }
+            if actions.canPreservePrecision {
+                Button("Сохранить точные числа журнала") { review.preservePrecision.insert(key); recheck() }
+            }
+            if actions.canAcknowledgeDerived {
+                Button("Продолжить с сохранёнными SD и GSI") { review.acknowledgeDerived.insert(key); recheck() }
+            }
+            if actions.canConfirmFaultOrder {
+                Button("Подтвердить исходный порядок строк разломов") { review.faultOrder.insert(key); recheck() }
+            }
+            if actions.needsPicket {
+                TextField("Пикет", text: Binding(get: { draftPickets[key] ?? "" }, set: { draftPickets[key] = $0 }))
+                Button("Применить пикет") { review.pickets[key] = draftPickets[key]; recheck() }
+            }
+            if record.matchedID == nil && record.receipt == nil {
+                Button("Использовать текущий контекст только для этих строк") {
+                    review.assignments[key] = declaredAssignment
+                    recheck()
+                }
+            }
+        }
+    }
+
+    private func recheck() {
+        if let selectedURL { prepare(selectedURL) }
     }
 
     private func prepare(_ url: URL) {
         selection = .init(); report = nil; applyError = nil
-        coordinator.prepare(url, work: .init(storage: mapping.storage, kind: kind, manifestURL: manifestURL, matches: matches))
+        coordinator.prepare(url, work: .init(storage: mapping.storage, kind: kind, regulatoryReview: review))
     }
 
     private func canConfirm(_ preview: MappingExchangePreview?, stale: Bool) -> Bool {

@@ -16,12 +16,14 @@ enum MappingXLSXExport {
 
     static func write(_ snapshot: MappingCSVExport, to url: URL,
                       photoPackageStatus: String? = nil,
-                      showTechnicalSheets: Bool = false, enterprise: Bool = false,
+                      showTechnicalSheets: Bool = false, enterprise: Bool = false, includeRegulatoryIdentity: Bool = true,
                       append: @escaping (Data, FileHandle) throws -> Void = { try $1.write(contentsOf: $0) }) throws {
         try Task.checkCancellation()
         if enterprise {
             guard let table = snapshot.enterpriseReport?.table else { throw StorageError.invalidRecord }
-            try writeWorkbook([table], to: url, exportID: snapshot.id, snapshotAt: snapshot.snapshotAt,
+            var sheets = [table]
+            if includeRegulatoryIdentity, let identity = snapshot.regulatoryIdentity { sheets.append(try identity.sheet()) }
+            try writeWorkbook(sheets, to: url, exportID: snapshot.id, snapshotAt: snapshot.snapshotAt,
                 timeZoneID: snapshot.selection.timeZoneID, summaryIndex: -1,
                 numericSheetCount: 1, technicalVisible: true, regulatory: true, textOnly: false,
                 width: { _, column in RegulatoryLayout.width(column) }, append: append)
@@ -92,7 +94,7 @@ enum MappingXLSXExport {
         """)
         try part("xl/workbook.xml", """
         <workbook xmlns="\(main)" xmlns:r="\(relationships)"><bookViews><workbookView activeTab="0"/></bookViews><sheets>
-        \(sheets.enumerated().map { "<sheet name=\"\($0.element.name)\" sheetId=\"\($0.offset + 1)\" r:id=\"rId\($0.offset + 1)\"\($0.offset > summaryIndex && !technicalVisible ? " state=\"hidden\"" : "")/>" }.joined())
+        \(sheets.enumerated().map { "<sheet name=\"\($0.element.name)\" sheetId=\"\($0.offset + 1)\" r:id=\"rId\($0.offset + 1)\"\(($0.offset > summaryIndex && !technicalVisible || regulatory && $0.offset > 0) ? " state=\"hidden\"" : "")/>" }.joined())
         </sheets></workbook>
         """)
         try part("xl/_rels/workbook.xml.rels", """
@@ -104,7 +106,8 @@ enum MappingXLSXExport {
             .replacingOccurrences(of: "</cellXfs>", with: "<xf numFmtId=\"49\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\" applyAlignment=\"1\"><alignment vertical=\"top\" wrapText=\"1\"/></xf><xf numFmtId=\"49\" fontId=\"0\" fillId=\"3\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"1\" applyAlignment=\"1\"><alignment vertical=\"top\" wrapText=\"1\"/></xf></cellXfs>") : styles)
         for (index, table) in sheets.enumerated() {
             try Task.checkCancellation()
-            let headers = regulatory ? EnterpriseGeotechnicalWorkbook.headerRows : [table.columns]
+            let regulatoryData = regulatory && index == 0
+            let headers = regulatoryData ? EnterpriseGeotechnicalWorkbook.headerRows : [table.columns]
             let firstDataRow = headers.count + 1
             guard !table.columns.isEmpty, table.columns.count <= 16_384,
                   table.rows.count <= 1_048_576 - headers.count else {
@@ -115,7 +118,7 @@ enum MappingXLSXExport {
                 try emit(declaration + """
                 <worksheet xmlns="\(main)"><dimension ref="A1:\(last)"/>
                 <sheetViews><sheetView workbookViewId="0"><pane ySplit="\(headers.count)" topLeftCell="A\(firstDataRow)" activePane="bottomLeft" state="frozen"/><selection pane="bottomLeft" activeCell="A\(firstDataRow)" sqref="A\(firstDataRow)"/></sheetView></sheetViews>
-                <sheetFormatPr defaultRowHeight="\(regulatory ? "15" : "30")"/><cols>
+                <sheetFormatPr defaultRowHeight="\(regulatoryData ? "15" : "30")"/><cols>
                 """)
                 for i in table.columns.indices {
                     let value = width(index, i)
@@ -125,11 +128,11 @@ enum MappingXLSXExport {
                 try emit("</cols><sheetData>")
                 for (i, header) in headers.enumerated() {
                     let row = i + 1
-                    let height = regulatory ? RegulatoryLayout.headerHeights[i] : "36"
+                    let height = regulatoryData ? RegulatoryLayout.headerHeights[i] : "36"
                     try emit("<row r=\"\(row)\" ht=\"\(height)\" customHeight=\"1\">")
                     for (j, name) in header.enumerated() {
-                        let style = regulatory ? RegulatoryLayout.headerStyle(row: i, column: j) : 1
-                        let value: MappingCSVExport.Cell = regulatory && name.isEmpty ? .empty : .text(name)
+                        let style = regulatoryData ? RegulatoryLayout.headerStyle(row: i, column: j) : 1
+                        let value: MappingCSVExport.Cell = regulatoryData && name.isEmpty ? .empty : .text(name)
                         try emit(cell(value, reference: column(j + 1) + String(row), style: style))
                     }
                     try emit("</row>")
@@ -139,7 +142,7 @@ enum MappingXLSXExport {
                     guard row.count == table.columns.count else { throw StorageError.invalidRecord }
                     let r = i + firstDataRow
                     let height: String
-                    if regulatory {
+                    if regulatoryData {
                         height = "14.1"
                     } else if index < numericSheetCount || (textOnly && ["Формат", "Колонки"].contains(table.name)) {
                         let lines = row.enumerated().map { column, value -> Int in
@@ -152,7 +155,7 @@ enum MappingXLSXExport {
                     try emit("<row r=\"\(r)\" ht=\"\(height)\" customHeight=\"1\">")
                     for (j, value) in row.enumerated() {
                         let reference = column(j + 1) + String(r)
-                        if regulatory {
+                        if regulatoryData {
                             try emit(cell(value, reference: reference, style: RegulatoryLayout.dataStyle(column: j), fieldNumeric: true))
                         } else if index < numericSheetCount {
                             // Civil dates in the selected zone; exact UTC remains on raw sheets.
@@ -173,7 +176,7 @@ enum MappingXLSXExport {
                 }
                 try emit("</sheetData>")
                 if index != summaryIndex { try emit("<autoFilter ref=\"A\(headers.count):\(last)\"/>") }
-                if regulatory {
+                if regulatoryData {
                     let merges = EnterpriseGeotechnicalWorkbook.merges
                     try emit("<mergeCells count=\"\(merges.count)\">" + merges.map { "<mergeCell ref=\"\($0)\"/>" }.joined() + "</mergeCells>")
                     try emit(RegulatoryLayout.printSetup)

@@ -81,7 +81,7 @@ enum MappingExchangeImport {
 
         func result(for outcome: MappingImportOutcome) -> Result {
             switch outcome {
-            case .applied: result(.applied)
+            case .applied: result(.applied, record.regulatoryActions == nil ? "" : record.reason)
             case .skipped: result(.skipped)
             case .pending: result(.pending, "Выберите ту же книгу, чтобы продолжить или отклонить строку.")
             case .rejected(let conflict): result(.rejected, conflict.exchangeMessage ?? record.reason)
@@ -142,11 +142,12 @@ enum MappingExchangeImport {
         guard let proposed = record.proposed, record.graphFingerprint != nil else { throw StorageError.invalidRecord }
         let kind: MappingImportOperation.Kind = record.classification == .new ? .create : .update
         let date = pending?.correction?.date ?? pending?.creationDate ?? now
-        let proposal = try finalized(proposed, previous: record.previous, date: date)
+        let proposal = try finalized(proposed, previous: record.previous, date: date, regulatory: source.kind == .regulatoryData)
         let correction = kind == .update ? MappingImportOperation.Correction(date: date,
             author: record.correctionAuthor, reason: record.correctionReason) : nil
         let op = try operation(kind, for: record, target: MappingImportTarget(proposal), source: source,
-            proposal: proposal, correction: correction)
+            proposal: proposal, correction: correction, note: pending == nil ? record.importNote : pending?.note,
+            pendingID: pending?.id)
         guard pending == nil || pending == op else {
             throw ExchangeImportError("Не удалось восстановить исходное предложение. Отклоните незавершённую строку или выберите исходный файл.")
         }
@@ -155,29 +156,36 @@ enum MappingExchangeImport {
 
     private static func operation(_ kind: MappingImportOperation.Kind, for record: MappingExchangePreview.Record,
                                   target: MappingImportTarget, source: MappingImportSource, proposal: MappingObservation? = nil,
-                                  correction: MappingImportOperation.Correction? = nil, note: String? = nil) throws -> MappingImportOperation {
+                                  correction: MappingImportOperation.Correction? = nil, note: String? = nil,
+                                  pendingID: UUID? = nil) throws -> MappingImportOperation {
         // Decision-specific identity lets a skipped row be selected in a later confirmation.
         // A terminal rejection of an approved mutation is retained for this exact file.
         let format = source.kind == .exchange ? "exchange-stage-4b" : "regulatory-data-stage-4c"
-        let key = try MappingExchangeExport.json([format, source.documentID, source.fingerprint, record.id, kind.rawValue])
+        var identity = [format, source.documentID, source.fingerprint, record.id, kind.rawValue]
+        if source.kind == .regulatoryData && kind == .update {
+            identity.append(record.baseline?.revisionID?.uuidString ?? "")
+            identity.append(record.graphFingerprint ?? "")
+        }
+        let key = try MappingExchangeExport.json(identity)
         var bytes = Array(SHA256.hash(data: Data(key.utf8)).prefix(16))
         bytes[6] = (bytes[6] & 0x0f) | 0x80
         bytes[8] = (bytes[8] & 0x3f) | 0x80
         let id = UUID(uuid: (bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
                              bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]))
-        return try MappingImportOperation(id: id, source: source, sourceRecordID: record.id, target: target, kind: kind,
+        return try MappingImportOperation(id: pendingID ?? id, source: source, sourceRecordID: record.id, target: target, kind: kind,
             baseline: kind == .update ? record.baseline : nil, proposal: proposal,
             graphFingerprint: proposal == nil ? nil : record.graphFingerprint, correction: correction, note: note)
     }
 
-    private static func finalized(_ point: MappingObservation, previous: MappingObservation?, date: Date) throws -> MappingObservation {
+    private static func finalized(_ point: MappingObservation, previous: MappingObservation?, date: Date, regulatory: Bool) throws -> MappingObservation {
         let geology: MappingGeology?
         if let current = point.geology {
             let oldSets = Dictionary(uniqueKeysWithValues: (previous?.geology?.jointSets ?? []).map { ($0.id, $0) })
             let sets = try current.jointSets.map { set -> InterpretedJointSet in
-                guard let old = oldSets[set.id], old != set else { return set }
-                guard old.revision < Int.max else { throw StorageError.invalidRecord }
-                return InterpretedJointSet(id: set.id, identifier: set.identifier, revision: old.revision + 1,
+                let old = oldSets[set.id]
+                guard old != set, old != nil || regulatory else { return set }
+                guard (old?.revision ?? 0) < Int.max else { throw StorageError.invalidRecord }
+                return InterpretedJointSet(id: set.id, identifier: set.identifier, revision: (old?.revision ?? 0) + 1,
                     interpretedAt: date, author: set.author, method: set.method, representative: set.representative,
                     measurementIDs: set.measurementIDs, spacingMeters: set.spacingMeters, persistenceMeters: set.persistenceMeters,
                     apertureMillimeters: set.apertureMillimeters, roughness: set.roughness, infill: set.infill,
@@ -186,11 +194,21 @@ enum MappingExchangeImport {
             geology = MappingGeology(start: current.start, end: current.end, position: current.position,
                 jointSets: sets, tectonicStructures: current.tectonicStructures)
         } else { geology = nil }
+        var ratings = point.ratings
+        if regulatory, let assessment = ratings?.bartonQ, assessment != previous?.ratings?.bartonQ {
+            ratings = MappingRatings(bartonQ: try BartonQAssessment(input: assessment.input, now: date, method: assessment.method),
+                rmr89: ratings?.rmr89, gsi: ratings?.gsi, regulatory: ratings?.regulatory)
+        }
+        if regulatory, let assessment = ratings?.rmr89, assessment != previous?.ratings?.rmr89 {
+            ratings = MappingRatings(bartonQ: ratings?.bartonQ,
+                rmr89: try RMR89Assessment(input: assessment.input, now: date, method: assessment.method),
+                gsi: ratings?.gsi, regulatory: ratings?.regulatory)
+        }
         return MappingObservation(id: point.id, projectID: point.projectID, horizonID: point.horizonID, excavationID: point.excavationID,
             picket: point.picket, chainageMeters: point.chainageMeters, chainageOriginAndDirection: point.chainageOriginAndDirection,
             observedAt: point.observedAt, observedTimeZoneID: point.observedTimeZoneID, observedUTCOffsetSeconds: point.observedUTCOffsetSeconds,
             createdAt: previous?.createdAt ?? date, updatedAt: previous?.updatedAt ?? date, coordinates: point.coordinates,
-            measurementIDs: point.measurementIDs, notes: point.notes, geology: geology, ratings: point.ratings,
+            measurementIDs: point.measurementIDs, notes: point.notes, geology: geology, ratings: ratings,
             picketConvention: point.picketConvention, rock: point.rock)
     }
 }

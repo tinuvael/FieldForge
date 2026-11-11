@@ -34,6 +34,9 @@ struct MappingExchangePreview: Sendable {
         var receipt: MappingImportLedger.Entry?
         var candidates: [MatchCandidate] = []
         var matchedID: UUID?
+        var reviewID: String?
+        var regulatoryActions: RegulatoryDataImport.Actions?
+        var importNote: String?
         var target: MappingImportTarget? { (proposed ?? previous).map(MappingImportTarget.init) }
         var canRejectPending: Bool { receipt?.outcome == .pending }
         var canRejectConflict: Bool { classification == .conflict && receipt == nil && target != nil }
@@ -377,7 +380,7 @@ extension MappingExchangePreview.Record {
                 }
                 return display("Система отсчёта пикетов", before: convention(change.before), after: convention(change.after))
             default:
-                return isProposal ? display(change.field, before: change.before, after: change.after) : []
+                return isProposal || change.sheet == "Data" ? display(change.field, before: change.before, after: change.after) : []
             }
         }
     }

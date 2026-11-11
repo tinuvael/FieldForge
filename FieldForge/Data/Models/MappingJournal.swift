@@ -242,13 +242,15 @@ struct MappingJournal: Codable, Equatable, Sendable {
         if let c = o.coordinates {
             guard ([c.x, c.y, c.z].contains(where: { $0 != nil }) || c.zOrigin == .manualOverride),
                   [c.x, c.y, c.z].allSatisfy({ $0?.isFinite ?? true }),
-                  !c.crs.isEmpty, !c.axes.isEmpty, ["m", "mm", "drawing"].contains(c.units), ["manual", "plan", "manualInPlan"].contains(c.source), !c.provenance.isEmpty else {
+                  !c.crs.isEmpty, !c.axes.isEmpty, ["m", "mm", "drawing"].contains(c.units), ["manual", "plan", "manualInPlan", "regulatoryExcel"].contains(c.source), !c.provenance.isEmpty else {
                 throw StorageError.invalidRecord
             }
             if let planID = c.planID {
                 guard ["plan", "manualInPlan"].contains(c.source), let plan = context.plans[planID], !plan.isDeleted,
                       plan.horizonID == o.horizonID, let file = plan.file, (c.source != "plan" || (c.x != nil && c.y != nil)),
                       c.units == file.units.coordinateUnits, c.crs == file.crs, c.axes == file.axes else { throw StorageError.invalidRecord }
+            } else if c.source == "regulatoryExcel" {
+                guard ["m", "drawing"].contains(c.units) else { throw StorageError.invalidRecord }
             } else if c.source != "manual" || c.units != "m" { throw StorageError.invalidRecord }
             if c.zOrigin == .horizonDefault {
                 guard c.zHorizonID == o.horizonID, let elevation = c.zHorizonElevation,

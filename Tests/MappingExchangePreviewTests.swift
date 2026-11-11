@@ -889,16 +889,12 @@ import zlib
 }
 
 extension MappingExchangePreviewTests {
-    private func regulatoryExport(_ journal: MappingJournal) throws -> (Data, Data) {
+    private func regulatoryExport(_ journal: MappingJournal, identity: Bool = true, token: UUID? = nil) throws -> Data {
         let snapshot = try MappingCSVExport.prepare(journal: journal,
             selection: .init(projectID: id(1), firstDay: time, lastDay: time, timeZoneID: "UTC"),
-            now: time, id: id(99), includeEnterprise: true)
-        let manifest = try RegulatoryDataManifest(export: snapshot, committed: .init(journal))
-        let plain = try MappingExportFiles.write(snapshot, format: .enterpriseGeotechnical)
-        let bundled = try MappingExportFiles.write(snapshot, format: .enterpriseGeotechnical, regulatoryManifest: manifest)
-        let workbook = try Data(contentsOf: plain.urls[0])
-        XCTAssertEqual(workbook, try Data(contentsOf: bundled.urls[0]))
-        return (workbook, try Data(contentsOf: bundled.urls[1]))
+            now: time, id: token ?? id(99), includeEnterprise: true)
+        let files = try MappingExportFiles.write(snapshot, format: .enterpriseGeotechnical, includeRegulatoryIdentity: identity)
+        return try Data(contentsOf: files.urls[0])
     }
 
     private func editData(_ data: Data, _ transform: (String) throws -> String) throws -> Data {
@@ -948,7 +944,7 @@ extension MappingExchangePreviewTests {
         try files.stage(photoBytes, for: photoOp)
         try files.promote(photoOp)
         try files.complete(photoOp)
-        let (workbook, manifest) = try regulatoryExport(journal)
+        let workbook = try regulatoryExport(journal)
         let original = try XCTUnwrap(before.observation(id: id(7)))
         let read = try RegulatoryDataWorkbook.Read(bytes: workbook, limits: .init())
         XCTAssertEqual(read.rows[0].values.count, 30)
@@ -963,7 +959,7 @@ extension MappingExchangePreviewTests {
         let edited = try editData(workbook) {
             try cells($0, ["F5": " t=\"inlineStr\"><is><t>004.20</t></is></c>", "G5": "><v>3</v></c>", "I5": "><v>12</v></c>"])
         }
-        let preview = try RegulatoryDataImport.prepare(bytes: edited, manifestBytes: manifest, committed: before)
+        let preview = try RegulatoryDataImport.prepare(bytes: edited, committed: before)
         let proposal = try XCTUnwrap(preview.records.first)
         XCTAssertEqual(proposal.classification, .correction, proposal.reason)
         XCTAssertEqual(proposal.target?.observationID, original.id)
@@ -985,11 +981,11 @@ extension MappingExchangePreviewTests {
         XCTAssertEqual(updated.ratings?.gsi, original.ratings?.gsi)
         XCTAssertEqual(updated.geology?.jointSets.last?.identifier, .J5)
         XCTAssertEqual(updated.geology, original.geology)
-        let (reexport, _) = try regulatoryExport(after.journal)
+        let reexport = try regulatoryExport(after.journal)
         let final = try RegulatoryDataWorkbook.Read(bytes: reexport, limits: .init()).rows[0].values
         XCTAssertEqual([final[5], final[6], final[8]], ["004.20", "3", "12"])
         XCTAssertEqual(RegulatoryDataWorkbook.protected.map { final[$0] }, RegulatoryDataWorkbook.protected.map { read.rows[0].values[$0] })
-        let retry = try RegulatoryDataImport.prepare(bytes: edited, manifestBytes: manifest, committed: after)
+        let retry = try RegulatoryDataImport.prepare(bytes: edited, committed: after)
         let replay = try MappingExchangeImport.Batch(preview: retry, bytes: edited, selection: selection, now: time.addingTimeInterval(1))
         let (stable, repeated) = try await owner.applyExchange(replay)
         XCTAssertEqual(repeated.count(.alreadyApplied), 1)
@@ -999,7 +995,7 @@ extension MappingExchangePreviewTests {
     func testRegulatoryStructuralAndCellDiagnostics() throws {
         let journal = try fixture(includeRegulatory: true)
         let committed = MappingCommittedSnapshot(journal)
-        let (book, manifest) = try regulatoryExport(journal)
+        let book = try regulatoryExport(journal)
         for edit in [["AD4": "/>"], ["A4": " t=\"inlineStr\"><is><t>PK</t></is></c>", "B4": " t=\"inlineStr\"><is><t>ID</t></is></c>"],
                      ["B4": " t=\"inlineStr\"><is><t>ID</t></is></c>"]] {
             let malformed = try editData(book) { try cells($0, edit) }
@@ -1012,7 +1008,7 @@ extension MappingExchangePreviewTests {
             ("O5", "><v>0.25</v></c>"), ("C5", "><v>123456789.123457</v></c>")
         ] {
             let edited = try editData(book) { try cells($0, [address: body]) }
-            let preview = try RegulatoryDataImport.prepare(bytes: edited, manifestBytes: manifest, committed: committed)
+            let preview = try RegulatoryDataImport.prepare(bytes: edited, committed: committed)
             let record = try XCTUnwrap(preview.records.first)
             XCTAssertFalse(record.canApply)
             XCTAssertTrue(record.reason.contains("Data!\(address)"), record.reason)
@@ -1025,9 +1021,7 @@ extension MappingExchangePreviewTests {
         let preview = try RegulatoryDataImport.prepare(bytes: duplicate, committed: committed)
         XCTAssertEqual(preview.rowsProcessed, 2)
         XCTAssertEqual(preview.count(.duplicate), 1)
-        let withManifest = try RegulatoryDataImport.prepare(bytes: duplicate, manifestBytes: manifest, committed: committed)
-        XCTAssertEqual(withManifest.count(.duplicate), 2)
-        XCTAssertFalse(withManifest.records.contains(where: \.canApply))
+        XCTAssertFalse(preview.records.contains(where: \.canApply))
     }
 
     func testRegulatoryLegacyRequiresExplicitMatchAndClearingIsExplicit() throws {
@@ -1038,7 +1032,7 @@ extension MappingExchangePreviewTests {
         ]))
         try ambiguous.validate()
         let current = MappingCommittedSnapshot(ambiguous)
-        let (book, manifest) = try regulatoryExport(journal)
+        let book = try regulatoryExport(journal, identity: false)
         var package = try ExchangeArchive(data: book, limits: .init()).parts
         let core = "docProps/core.xml"
         let metadata = String(decoding: try XCTUnwrap(package[core]), as: UTF8.self)
@@ -1052,18 +1046,12 @@ extension MappingExchangePreviewTests {
         XCTAssertEqual(record.classification, .ambiguous)
         XCTAssertEqual(Set(record.candidates.map(\.id)), [id(7), id(70)])
         XCTAssertNil(record.proposed)
-        let wrong = try RegulatoryDataImport.prepare(bytes: edited, matches: [record.id: id(70)], committed: current)
-        XCTAssertEqual(wrong.count(.unsupported), 1)
+        let wrong = try RegulatoryDataImport.prepare(bytes: edited, matches: [record.id: id(71)], committed: current)
+        XCTAssertEqual(wrong.count(.ambiguous), 1)
         let correct = try RegulatoryDataImport.prepare(bytes: edited, matches: [record.id: id(7)], committed: current)
         let proposal = try XCTUnwrap(correct.records[0].proposed, correct.records[0].reason)
         XCTAssertNil(proposal.ratings?.regulatory?.wallAlteration)
         XCTAssertEqual(proposal.ratings?.regulatory?.strength, .below1)
-        let bound = try RegulatoryDataImport.prepare(bytes: edited, manifestBytes: manifest, committed: current)
-        XCTAssertEqual(bound.count(.ambiguous), 1)
-        XCTAssertEqual(bound.records.first?.candidates.map(\.id), [id(7)])
-        let explicitlyBound = try RegulatoryDataImport.prepare(bytes: edited, manifestBytes: manifest,
-            matches: [record.id: id(7)], committed: current)
-        XCTAssertEqual(explicitlyBound.count(.correction), 1)
     }
 
     func testRegulatoryFaultRowsRequireOneConsistentObservationProposal() throws {
@@ -1076,28 +1064,28 @@ extension MappingExchangePreviewTests {
         correction.fields.tectonicStructures.append(fault)
         _ = try workflow.saveCorrection(correction, now: time.addingTimeInterval(5))
         let current = MappingCommittedSnapshot(workflow.journal)
-        let (book, manifest) = try regulatoryExport(workflow.journal)
+        let book = try regulatoryExport(workflow.journal)
         let consistent = try editData(book) { try cells($0, ["I5": "><v>4</v></c>", "I6": "><v>4</v></c>"]) }
-        let accepted = try RegulatoryDataImport.prepare(bytes: consistent, manifestBytes: manifest, committed: current)
+        let accepted = try RegulatoryDataImport.prepare(bytes: consistent, committed: current)
         XCTAssertEqual(accepted.rowsProcessed, 2)
         XCTAssertEqual(accepted.count(.correction), 1)
         XCTAssertEqual(accepted.records.first?.proposed?.geology?.tectonicStructures.count, 2)
         let divergent = try editData(consistent) { try cells($0, ["I6": "><v>7</v></c>"]) }
-        let refused = try RegulatoryDataImport.prepare(bytes: divergent, manifestBytes: manifest, committed: current)
+        let refused = try RegulatoryDataImport.prepare(bytes: divergent, committed: current)
         XCTAssertEqual(refused.count(.invalid), 1)
         let missing = try editData(consistent) {
             $0.replacingOccurrences(of: #"<row r="6"[^>]*>.*?</row>"#, with: "", options: .regularExpression)
         }
-        let incomplete = try RegulatoryDataImport.prepare(bytes: missing, manifestBytes: manifest, committed: current)
-        XCTAssertEqual(incomplete.count(.unsupported), 1)
+        let incomplete = try RegulatoryDataImport.prepare(bytes: missing, committed: current)
+        XCTAssertEqual(incomplete.count(.invalid), 1)
     }
 
     func testRegulatoryStaleManifestAndApplyTimeRevisionConflict() async throws {
         let journal = try fixture()
         let (_, owner, before) = try await makeOwner(journal)
-        let (book, manifest) = try regulatoryExport(journal)
+        let book = try regulatoryExport(journal)
         let edited = try editData(book) { try cells($0, ["I5": "><v>7</v></c>"]) }
-        let p = try RegulatoryDataImport.prepare(bytes: edited, manifestBytes: manifest, committed: before)
+        let p = try RegulatoryDataImport.prepare(bytes: edited, committed: before)
         let selection = MappingExchangeImport.Selection(accepted: Set(p.records.map(\.id)))
         let batch = try MappingExchangeImport.Batch(preview: p, bytes: edited, selection: selection, now: time)
         XCTAssertThrowsError(try MappingExchangeImport.Batch(preview: p, bytes: book, selection: selection, now: time))
@@ -1106,19 +1094,32 @@ extension MappingExchangePreviewTests {
         let local = try MappingExchangeImport.Batch(preview: exchangePreview, bytes: exchange,
             selection: .init(accepted: [id(7).uuidString]), now: time.addingTimeInterval(10))
         let (newer, _) = try await owner.applyExchange(local)
-        let stale = try RegulatoryDataImport.prepare(bytes: edited, manifestBytes: manifest, committed: newer)
+        let stale = try RegulatoryDataImport.prepare(bytes: edited, committed: newer)
         XCTAssertEqual(stale.count(.conflict), 1)
         let (after, report) = try await owner.applyExchange(batch)
         XCTAssertEqual(report.count(.rejected), 1)
         XCTAssertEqual(after.journal.revisions, newer.journal.revisions)
+        let conflict = try XCTUnwrap(stale.records.first)
+        XCTAssertTrue(conflict.regulatoryActions?.canResolveConflict == true)
+        XCTAssertEqual(conflict.visibleChanges.first?.after, "7")
+        var decisions = RegulatoryDataImport.Review()
+        decisions.takeExcelChanges[try XCTUnwrap(conflict.reviewID)] = try XCTUnwrap(conflict.graphFingerprint)
+        let resolved = try RegulatoryDataImport.prepare(bytes: edited, review: decisions, committed: after)
+        XCTAssertEqual(resolved.count(.correction), 1)
+        XCTAssertEqual(resolved.records[0].proposed?.notes, "Новое полевое наблюдение")
+        let approved = try MappingExchangeImport.Batch(preview: resolved, bytes: edited,
+            selection: .init(accepted: [resolved.records[0].id]), now: time.addingTimeInterval(20))
+        let (final, result) = try await owner.applyExchange(approved)
+        XCTAssertEqual(result.count(.applied), 1)
+        XCTAssertEqual(final.journal.revisions.count, newer.journal.revisions.count + 1)
     }
 
     func testRegulatoryPartialFailureAndPendingRecoveryUseOneLedger() async throws {
         let journal = try threePoints(fixture())
         let (root, owner, before) = try await makeOwner(journal)
-        let (book, manifest) = try regulatoryExport(journal)
+        let book = try regulatoryExport(journal)
         let edited = try editData(book) { try cells($0, ["I5": "><v>2</v></c>", "I6": "><v>4</v></c>", "I7": "><v>5</v></c>"]) }
-        let p = try RegulatoryDataImport.prepare(bytes: edited, manifestBytes: manifest, committed: before)
+        let p = try RegulatoryDataImport.prepare(bytes: edited, committed: before)
         XCTAssertEqual(p.count(.correction), 2)
         XCTAssertEqual(p.count(.invalid), 1)
         let selection = MappingExchangeImport.Selection(accepted: Set(p.records.map(\.id)))
@@ -1138,7 +1139,7 @@ extension MappingExchangePreviewTests {
         let recovery = try await reopened.importRecovery()
         XCTAssertEqual(recovery.count, 1)
         XCTAssertNil(recovery[0].conflict)
-        let checked = try RegulatoryDataImport.prepare(bytes: edited, manifestBytes: manifest, committed: workflow.committed)
+        let checked = try RegulatoryDataImport.prepare(bytes: edited, committed: workflow.committed)
         let retry = try MappingExchangeImport.Batch(preview: checked, bytes: edited, selection: selection, now: time.addingTimeInterval(99))
         let (done, results) = try await reopened.applyExchange(retry)
         XCTAssertFalse(results.interrupted)
@@ -1147,5 +1148,183 @@ extension MappingExchangePreviewTests {
         XCTAssertEqual(results.count(.rejected), 1)
         XCTAssertEqual(done.latestRevisions[id(60)]?.correctedAt, time)
         XCTAssertNil(done.latestRevisions[id(61)])
+    }
+}
+
+extension MappingExchangePreviewTests {
+    private func appendDataRows(_ bytes: Data, rows: [[String: MappingCSVExport.Cell]], start: Int) throws -> Data {
+        try editData(bytes) { xml in
+            let newRows = try rows.enumerated().map { offset, row in
+                let number = start + offset
+                let contents = try row.sorted { $0.key < $1.key }.map { column, value in
+                    try MappingXLSXExport.cell(value, reference: "\(column)\(number)", style: 0, fieldNumeric: true)
+                }.joined()
+                return "<row r=\"\(number)\">" + contents + "</row>"
+            }.joined()
+            let last = start + rows.count - 1
+            return xml.replacingOccurrences(of: "</sheetData>", with: newRows + "</sheetData>")
+                .replacingOccurrences(of: #"(<(?:dimension|autoFilter) ref="[A-Z0-9]+:AD)[0-9]+"#, with: "$1" + "LASTROW", options: .regularExpression)
+                .replacingOccurrences(of: "LASTROW", with: String(last))
+        }
+    }
+
+    private func assignmentForData(plan: UUID? = nil) -> RegulatoryDataProposal.Assignment {
+        .init(projectID: id(1), horizonID: id(3), observedAt: time, zoneID: "UTC", convention: .tenMeters,
+              chainageOrigin: "От устья на север", planID: plan, north: .gridNorth)
+    }
+
+    private func operationalJournal() throws -> (MappingJournal, MappingPlanReference, MappingPlanReference) {
+        var journal = MappingJournal()
+        journal.projects = [.init(id: id(1), name: "Шахта",
+            lithologies: [.init(code: "001.20", name: "Туф")])]
+        journal.horizons = [.init(id: id(3), projectID: id(1), name: "Основной", elevationMeters: nil, elevationDatum: "mine"),
+                            .init(id: id(4), projectID: id(1), name: "Другой", elevationMeters: nil, elevationDatum: "mine")]
+        journal.excavations = [.init(id: id(5), projectID: id(1), name: "Штрек", horizonIDs: [id(3)]),
+                               .init(id: id(6), projectID: id(1), name: "Штрек", horizonIDs: [id(4)])]
+        let dxf = DXFFixtures.drawing("0\nLINE\n10\n0\n20\n0\n30\n0\n11\n1000\n21\n0\n31\n0\n")
+        let file = ManagedPlanFile(originalFilename: "horizon.dxf", sha256: ManagedPlanStore.digest(dxf), byteCount: dxf.count,
+            importedAt: time, units: .meters, crs: "Mine grid", axes: "WCS XYZ", unitDeclaration: "userConfirmedAtImport", insertionUnits: nil)
+        let plan = MappingPlanReference(id: id(40), horizonID: id(3), attachmentID: id(41), version: "A", file: file)
+        let other = MappingPlanReference(id: id(42), horizonID: id(4), attachmentID: id(43), version: "B", file: file)
+        journal.plans = [plan, other]
+        for index in 0..<100 {
+            journal.observations.append(MappingObservation(id: id(1000 + index), projectID: id(1), horizonID: id(3),
+                excavationID: id(5), picket: "ПК \(index)", chainageMeters: Double(index * 10),
+                chainageOriginAndDirection: "От устья на север", observedAt: time, observedTimeZoneID: "UTC", observedUTCOffsetSeconds: 0,
+                createdAt: time, updatedAt: time, coordinates: nil, measurementIDs: [], notes: "", geology: nil, picketConvention: .tenMeters))
+        }
+        try journal.validate()
+        return (journal, plan, other)
+    }
+
+    func testRegulatoryOperationalWorkbookAdds20Revises5AndResumesAfterRestart() async throws {
+        let (journal, plan, otherPlan) = try operationalJournal()
+        let (root, owner, before) = try await makeOwner(journal)
+        let book = try regulatoryExport(journal)
+        let legacy = try regulatoryExport(journal, identity: false)
+        let dataPart = "xl/worksheets/sheet1.xml"
+        let package = try ExchangeArchive(data: book, limits: .init()).parts
+        XCTAssertEqual(package[dataPart], try ExchangeArchive(data: legacy, limits: .init()).parts[dataPart])
+        XCTAssertTrue(String(decoding: try XCTUnwrap(package["xl/workbook.xml"]), as: UTF8.self).contains("state=\"hidden\""))
+        let source = try RegulatoryDataWorkbook.Read(bytes: book, limits: .init())
+        XCTAssertEqual(source.rows.count, 100)
+        XCTAssertEqual(source.manifest?.bindings.count, 100)
+        let edited = try editData(book) { xml in
+            try cells(xml, [
+                "B5": " t=\"inlineStr\"><is><t>ПК 0+5</t></is></c>", "F6": " t=\"inlineStr\"><is><t>001.20</t></is></c>",
+                "J7": "><v>120</v></c>", "K8": "><v>75</v></c>", "V9": "><v>40</v></c>", "W9": "><v>112</v></c>"
+            ])
+        }
+        var rows: [[String: MappingCSVExport.Cell]] = (100..<120).map { index in
+            ["A": .text("Штрек"), "B": .text("ПК \(index)"), "C": .number(Double(index)), "D": .number(25),
+             "E": .number(-120), "F": .text("001.20"), "G": .integer(0), "H": .number(1),
+             "I": .integer(7), "J": .number(125), "K": .number(80), "L": .number(9), "M": .number(3), "N": .number(2),
+             "P": .integer(4), "Q": .integer(12), "R": .integer(4), "S": .number(45), "T": .number(110),
+             "U": .number(0.35), "V": .number(40), "W": .number(120)]
+        }
+        rows[19].removeValue(forKey: "D")
+        let expanded = try appendDataRows(edited, rows: rows, start: 105)
+        var review = RegulatoryDataImport.Review()
+        review.assignment = assignmentForData(plan: plan.id)
+        let uncertain = try RegulatoryDataImport.prepare(bytes: expanded, review: review, committed: before)
+        let editedPicket = try XCTUnwrap(uncertain.records.first)
+        XCTAssertEqual(editedPicket.classification, .ambiguous)
+        review.matches[try XCTUnwrap(editedPicket.reviewID)] = id(1000)
+        let preview = try RegulatoryDataImport.prepare(bytes: expanded, review: review, committed: before)
+        XCTAssertEqual(preview.rowsProcessed, 120)
+        XCTAssertEqual(preview.count(.new), 20, preview.records.filter { $0.classification == .invalid }.map(\.reason).joined(separator: "\n"))
+        XCTAssertEqual(preview.count(.correction), 5)
+        XCTAssertEqual(preview.count(.unchanged), 95)
+        let eligible = preview.records.filter(\.canApply)
+        let selection = MappingExchangeImport.Selection(accepted: Set(eligible.map(\.id)))
+        let interruptedID = try XCTUnwrap(eligible.filter { $0.classification == .new }[1].target?.observationID)
+        let date = time.addingTimeInterval(30)
+        let batch = try MappingExchangeImport.Batch(preview: preview, bytes: expanded, selection: selection, now: date)
+        let (partial, firstReport) = try await owner.applyExchange(batch) { op, checkpoint in
+            if op.target.observationID == interruptedID, case .afterIntent = checkpoint { throw Interrupted.simulated }
+        }
+        XCTAssertEqual(partial.effectiveObservations.count, 101)
+        XCTAssertEqual(firstReport.count(.pending), 1)
+        XCTAssertEqual(partial.journal.revisions.count, 5)
+        let reopened = MappingStorageOwner()
+        let reopenedFile = root.appendingPathComponent("mapping.json")
+        let reopenedWorkflow = try await reopened.open { FileMappingStore(url: reopenedFile) }
+        let pending = try await reopened.importRecovery()
+        XCTAssertEqual(pending.first?.operation.target.observationID, interruptedID)
+        let withoutAssignment = try RegulatoryDataImport.prepare(bytes: expanded, committed: reopenedWorkflow.committed)
+        XCTAssertEqual(withoutAssignment.records.first { $0.target?.observationID == interruptedID }?.canApply, true)
+        let rechecked = try RegulatoryDataImport.prepare(bytes: expanded, review: review, committed: reopenedWorkflow.committed)
+        let retry = try MappingExchangeImport.Batch(preview: rechecked, bytes: expanded,
+            selection: .init(accepted: Set(rechecked.records.filter(\.canApply).map(\.id))), now: date.addingTimeInterval(60))
+        let (consolidated, report) = try await reopened.applyExchange(retry)
+        XCTAssertFalse(report.interrupted)
+        XCTAssertEqual(consolidated.effectiveObservations.count, 120)
+        XCTAssertEqual(consolidated.journal.revisions.count, 5)
+        XCTAssertEqual(consolidated.journal.observations.prefix(100), journal.observations[...])
+        let created = Array(consolidated.journal.observations.dropFirst(100))
+        XCTAssertTrue(created.allSatisfy { $0.projectID == id(1) && $0.horizonID == id(3) && $0.excavationID == id(5) })
+        XCTAssertEqual(consolidated.points(on: plan, excavationID: id(5)).count, 19)
+        XCTAssertTrue(consolidated.points(on: otherPlan, excavationID: nil).isEmpty)
+        XCTAssertEqual(consolidated.journal.plans, [plan, otherPlan])
+        XCTAssertEqual(created[0].ratings?.rmr89?.input.jcond76?.rating, 12)
+        XCTAssertEqual(created[0].ratings?.bartonQ?.input.rqdSource, .externalReport)
+        XCTAssertNil(created[0].ratings?.bartonQ?.evaluation.result)
+        XCTAssertEqual(created[0].geology?.tectonicStructures.first?.thicknessMeters, 0.35)
+        XCTAssertEqual(created[0].geology?.jointSets.first?.representative.reference, .gridNorth)
+        let reexport = try regulatoryExport(consolidated.journal, token: id(98))
+        let verified = try RegulatoryDataImport.prepare(bytes: reexport, committed: consolidated)
+        XCTAssertEqual(verified.count(.unchanged), 120)
+        XCTAssertFalse(verified.records.contains(where: \.canApply))
+        let repeatSource = try RegulatoryDataImport.prepare(bytes: expanded, committed: consolidated)
+        let replay = try MappingExchangeImport.Batch(preview: repeatSource, bytes: expanded, selection: .init(), now: date)
+        let (stable, repeated) = try await reopened.applyExchange(replay)
+        XCTAssertEqual(repeated.count(.alreadyApplied), 25)
+        XCTAssertEqual(stable.journal, consolidated.journal)
+        let disk = try FileMappingStore(url: reopenedFile).load()
+        XCTAssertEqual(disk, consolidated.journal)
+    }
+
+    func testRegulatoryLegacyCreationGroupsFaultsAndRetainsUnboundCoordinates() async throws {
+        var (journal, plan, _) = try operationalJournal()
+        journal.observations = []
+        journal.projects[0].lithologies?.append(.init(code: "1.2", name: "Другой код"))
+        let (_, owner, before) = try await makeOwner(journal)
+        let legacy = try regulatoryExport(journal, identity: false)
+        let added = try appendDataRows(legacy, rows: [
+            ["A": .text("Штрек"), "B": .text("2+5"), "C": .number(12), "D": .number(30), "F": .number(1.2), "S": .number(40), "T": .number(0)],
+            ["A": .text("Штрек"), "B": .text("2+5"), "C": .number(12), "D": .number(30), "F": .number(1.2), "S": .number(65), "T": .number(140)]
+        ], start: 5)
+        XCTAssertNil(try RegulatoryDataWorkbook.Read(bytes: added, limits: .init()).manifest)
+        var review = RegulatoryDataImport.Review()
+        review.assignment = assignmentForData()
+        let first = try RegulatoryDataImport.prepare(bytes: added, review: review, committed: before)
+        let ambiguous = try XCTUnwrap(first.records.first)
+        XCTAssertEqual(ambiguous.classification, .ambiguous)
+        XCTAssertTrue(ambiguous.regulatoryActions?.canGroup == true)
+        review.groupFaults.insert(try XCTUnwrap(ambiguous.reviewID))
+        let catalogue = try RegulatoryDataImport.prepare(bytes: added, review: review, committed: before)
+        let rock = try XCTUnwrap(catalogue.records.first?.regulatoryActions)
+        XCTAssertEqual(Set(rock.rockChoices.map(\.code)), ["001.20", "1.2"])
+        review.rockCodes[try XCTUnwrap(rock.rockKey)] = "001.20"
+        let prepared = try RegulatoryDataImport.prepare(bytes: added, review: review, committed: before)
+        let proposed = try XCTUnwrap(prepared.records.first)
+        XCTAssertEqual(proposed.classification, .new, proposed.reason)
+        XCTAssertEqual(proposed.proposed?.chainageMeters, 25)
+        XCTAssertEqual(proposed.proposed?.geology?.tectonicStructures.count, 2)
+        XCTAssertTrue(proposed.reason.contains("подтвердите систему XY"))
+        let batch = try MappingExchangeImport.Batch(preview: prepared, bytes: added, selection: .init(accepted: [proposed.id]), now: time)
+        let (after, report) = try await owner.applyExchange(batch)
+        XCTAssertEqual(report.count(.applied), 1)
+        XCTAssertEqual(after.effectiveObservations.count, 1)
+        XCTAssertEqual(after.effectiveObservations.first?.coordinates?.x, 12)
+        XCTAssertEqual(after.effectiveObservations.first?.rock?.code, "001.20")
+        XCTAssertTrue(after.points(on: plan, excavationID: nil).isEmpty)
+        let resaved = try editData(added) { $0 + "\n" }
+        let ambiguousReplay = try RegulatoryDataImport.prepare(bytes: resaved, review: review, committed: after)
+        XCTAssertEqual(ambiguousReplay.count(.ambiguous), 1)
+        XCTAssertFalse(ambiguousReplay.records.contains(where: \.canApply))
+        review.matches[try XCTUnwrap(ambiguousReplay.records[0].reviewID)] = after.effectiveObservations[0].id
+        let reviewedReplay = try RegulatoryDataImport.prepare(bytes: resaved, review: review, committed: after)
+        XCTAssertEqual(reviewedReplay.count(.unchanged), 1)
     }
 }

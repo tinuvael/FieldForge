@@ -1,5 +1,10 @@
 # Regulatory Excel, RMR editions, joint sets and import audit
 
+The [operational Stage 4c contract](regulatory-excel-stage-4c.md) supersedes this
+historical audit's import gates and single-sheet-only decision. Data A:AD keeps
+its established layout. The primary XLSX carries identity in a hidden sheet,
+and a Data-only compatibility export remains available.
+
 > Stage 3a implements the [routine J1–J4 workflow and field category selections](enterprise-geotechnical.md#regulatory-field-categories-stage-3a). The decision register below records the earlier audit state.
 
 Status: Stage 1 specification, 2026-11-07. Audited application revision:
