@@ -18,7 +18,32 @@ enum RegulatoryDataWorkbook {
         func location(_ column: Int) -> String { "Data!\(RegulatoryDataWorkbook.address(column, number))" }
     }
 
+    // These labels identify the audited Excel conversion for diagnostics only.
+    // The extended layout has no writable projection until its identity is mapped.
+    private static let productionMarkers = [
+        "AI3": "№ точки наблюдения", "AJ3": "Примечание", "AE4": "Q'", "AH4": "RMR76",
+        "BI1": "Ошибки в пополнении БД по картированию выработок", "CP3": "Проверка угла и азимута 4 системы"
+    ]
+
+    static let productionMerges = Set(EnterpriseGeotechnicalWorkbook.merges.filter { $0 != "A1:AD1" } + [
+        "A1:AJ1", "AD2:AH2", "BI1:CP1", "BV2:CD2", "BJ2:BL2", "BM2:BO2", "BP2:BT2"
+    ])
+
+    static func matchesProductionLayout(_ rows: [Int: [Int: ExchangeWorkbook.DataCell]], extraColumns: Set<Int>) -> Bool {
+        let ranges = [("AE1", "BB1"), ("BI1", "BT1"), ("BV1", "CD1"), ("CF1", "CP1")]
+        let populated = ranges.compactMap { start, end -> ClosedRange<Int>? in
+            guard let first = ExchangeWorkbook.address(start)?.0, let last = ExchangeWorkbook.address(end)?.0 else { return nil }
+            return first...last
+        }
+        return extraColumns.allSatisfy { column in populated.contains { $0.contains(column) } } && productionMarkers.allSatisfy { marker in
+            guard let (column, row) = ExchangeWorkbook.address(marker.key) else { return false }
+            return rows[row]?[column] == .text(marker.value)
+        }
+    }
+
     struct Read: Sendable {
+        let productionLayout: Bool
+        let worksheetRowCount: Int
         let documentID: UUID?
         let rows: [Row]
         let manifest: RegulatoryDataManifest?
@@ -26,6 +51,8 @@ enum RegulatoryDataWorkbook {
         init(bytes: Data, limits: ExchangeLimits) throws {
             let archive = try ExchangeArchive(data: bytes, limits: limits, regulatory: true)
             let workbook = try ExchangeWorkbook(regulatoryArchive: archive, limits: limits)
+            productionLayout = workbook.productionLayout
+            worksheetRowCount = workbook.dataSheetRowCount
             documentID = workbook.documentID
             manifest = try workbook.sheets[RegulatoryDataManifest.sheetName].map {
                 try RegulatoryDataManifest.read(sheet: $0, documentID: workbook.documentID, rowLimit: limits.rows)
@@ -41,7 +68,7 @@ enum RegulatoryDataWorkbook {
                         headerIssues.append("\(address(column, number)): \(expected.isEmpty ? "требуется пустая ячейка" : "ожидается «\(expected)»")")
                     }
                 }
-                if data[number]?.keys.contains(where: { $0 >= columns.count }) == true {
+                if !productionLayout, data[number]?.keys.contains(where: { $0 >= columns.count }) == true {
                     headerIssues.append("строка \(number): данные за пределами A:AD")
                 }
             }

@@ -11,13 +11,15 @@ struct ExchangeWorkbook: Sendable {
     }
     let sheets: [String: Sheet]
     let dataRows: [Int: [Int: DataCell]]
+    let dataSheetRowCount: Int
+    let productionLayout: Bool
     let documentID: UUID?
     static let spreadsheet = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
     static let relationships = "http://schemas.openxmlformats.org/package/2006/relationships"
     static let documentRelationships = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/"
 
     init(parts: [String: Data], limits: ExchangeLimits = .init()) throws {
-        try self.init(paths: Set(parts.keys), limits: limits, regulatory: false) { path, _ in
+        try self.init(paths: Set(parts.keys), limits: limits, streamDataSheet: nil) { path, _ in
             guard let data = parts[path] else { throw ExchangeImportError("Отсутствует часть XLSX: \(path)") }
             return data
         }
@@ -25,13 +27,16 @@ struct ExchangeWorkbook: Sendable {
 
     init(regulatoryArchive archive: ExchangeArchive, limits: ExchangeLimits) throws {
         var reader = archive
-        try self.init(paths: archive.paths, limits: limits, regulatory: true) { path, worksheet in
+        try self.init(paths: archive.paths, limits: limits,
+                      streamDataSheet: { try reader.streamDataSheet($0) }) { path, worksheet in
             try reader.read(path, worksheet: worksheet)
         }
     }
 
-    private init(paths: Set<String>, limits: ExchangeLimits, regulatory: Bool,
+    private init(paths: Set<String>, limits: ExchangeLimits,
+                 streamDataSheet: ((String) throws -> ExchangeWorksheetStream)?,
                  load: @escaping (String, String?) throws -> Data) throws {
+        let regulatory = streamDataSheet != nil
         func fail(_ s: String) -> ExchangeImportError { ExchangeImportError(s) }
         let d = Self.documentRelationships
         let officeType = "application/vnd.openxmlformats-officedocument."
@@ -64,8 +69,15 @@ struct ExchangeWorkbook: Sendable {
         func xml(_ path: String, namespace: String, root: String? = nil, worksheet: String? = nil,
                  additionalElements: [String: Set<String>] = [:],
                  start: @escaping ExchangeXML.Start = { _, _, _ in }, end: @escaping ExchangeXML.End = { _, _, _ in }) throws {
-            try ExchangeXML.read(load(path, worksheet), namespace: namespace, root: root, limits: limits,
-                                 additionalElements: additionalElements, start: start, end: end)
+            if worksheet == "Data", let streamDataSheet {
+                var sheetLimits = limits
+                sheetLimits.xmlElements = limits.dataSheetElements
+                try ExchangeXML.read(streamDataSheet(path), namespace: namespace, root: root, limits: sheetLimits,
+                                     additionalElements: additionalElements, start: start, end: end)
+            } else {
+                try ExchangeXML.read(load(path, worksheet), namespace: namespace, root: root, limits: limits,
+                                     additionalElements: additionalElements, start: start, end: end)
+            }
         }
         struct Rel { let type: String; let target: String }
         func rels(_ path: String, base: String, allowed: Set<String>, parent: String? = nil) throws -> [String: Rel] {
@@ -281,7 +293,7 @@ struct ExchangeWorkbook: Sendable {
                 "http://schemas.microsoft.com/office/spreadsheetml/2010/11/main": ["timelineStyles"]
             ], start: { name, attrs, stack in
                 if name == "numFmt", stack == ["styleSheet", "numFmts"] {
-                    guard let id = attrs["numFmtId"].flatMap(Int.init), id >= 164,
+                    guard let id = attrs["numFmtId"].flatMap(Int.init), (0...65_535).contains(id),
                           let code = attrs["formatCode"], customFormats.updateValue(code, forKey: id) == nil else {
                         throw fail("Некорректный числовой формат Excel.")
                     }
@@ -292,9 +304,12 @@ struct ExchangeWorkbook: Sendable {
                 if name == "xf", stack == ["styleSheet", "cellXfs"] {
                     guard let id = attrs["numFmtId"].flatMap(Int.init) else { throw fail("Неизвестный формат ячейки.") }
                     func isPlain(_ id: Int) -> Bool {
-                        let code = customFormats[id] ?? ""
-                        return [0, 1, 2, 3, 4, 11, 48].contains(id) ||
-                            code.range(of: #"^0+(?:[.]0+)?$"#, options: .regularExpression) != nil
+                        if let code = customFormats[id] {
+                            // Excel conversions can supply an explicit format for
+                            // a built-in ID. Validate the explicit format first.
+                            return code.range(of: #"^0+(?:[.]0+)?$"#, options: .regularExpression) != nil
+                        }
+                        return [0, 1, 2, 3, 4, 11, 48].contains(id)
                     }
                     let inherited = attrs["xfId"].flatMap(Int.init)
                     let safeParent = inherited.map { parentFormats.indices.contains($0) && isPlain(parentFormats[$0]) } ?? (attrs["xfId"] == nil)
@@ -305,7 +320,9 @@ struct ExchangeWorkbook: Sendable {
             return result
         }
         var regulatoryRows: [Int: [Int: DataCell]] = [:]
-        var output: [String: Sheet] = [:], totalCells = 0, totalRows = 0
+        var dataSheetRowCount = 0
+        var productionLayout = false
+        var output: [String: Sheet] = [:], otherCells = 0, dataCells = 0, totalRows = 0
         for (sheet, path) in sheetPaths.sorted(by: { $0.key < $1.key }) {
             let regulatoryData = regulatory && sheet == "Data"
             if regulatory {
@@ -328,6 +345,12 @@ struct ExchangeWorkbook: Sendable {
             var styleIndex = 0
             var hasFormula = false
             var merges = Set<String>()
+            var hasConditionalFormatting = false
+            var firstExtraCell: String?
+            var extraColumns = Set<Int>()
+            var derivedPlaceholders = Set<Int>()
+            var retainedDataCells = 0
+            let reportColumns = RegulatoryDataWorkbook.columns.count
             try xml(path, namespace: Self.spreadsheet, root: "worksheet", worksheet: regulatory ? sheet : nil, start: { name, a, ancestors in
                 if regulatoryData {
                     if name == "f", currentColumn != nil, ancestors.last == "c" {
@@ -337,8 +360,11 @@ struct ExchangeWorkbook: Sendable {
                     }
                     if name == "mergeCells", ancestors == ["worksheet"] { return }
                     if name == "mergeCell", ancestors == ["worksheet", "mergeCells"],
-                       let ref = a["ref"], EnterpriseGeotechnicalWorkbook.merges.contains(ref),
-                       merges.insert(ref).inserted { return }
+                       let ref = a["ref"], merges.insert(ref).inserted { return }
+                    if name == "conditionalFormatting", ancestors == ["worksheet"] {
+                        hasConditionalFormatting = true
+                        return
+                    }
                 }
                 if ["f", "hyperlinks", "oleObjects", "controls", "extLst", "tableParts", "drawing", "legacyDrawing",
                     "mergeCells", "mergeCell", "dataValidations", "conditionalFormatting"].contains(name) {
@@ -351,15 +377,22 @@ struct ExchangeWorkbook: Sendable {
                     totalRows += 1
                     guard totalRows <= limits.rows else { throw fail("Превышен предел строк XLSX.") }
                     currentRow = n
+                    if regulatoryData { dataSheetRowCount += 1 }
                     seenColumns.removeAll(keepingCapacity: true)
                     if !regulatoryData { rows[n] = [:] }
                 }
                 if name == "c" {
                     guard ancestors == ["worksheet", "sheetData", "row"], let row = currentRow, let address = a["r"], let (column, number) = Self.address(address), number == row, seenColumns.insert(column).inserted else { throw fail("\(sheet): повторная или неверная ячейка.") }
-                    totalCells += 1; guard totalCells <= limits.cells else { throw fail("Превышен предел ячеек XLSX.") }
+                    if regulatoryData {
+                        dataCells += 1
+                        guard dataCells <= limits.dataSheetCells else { throw fail("Превышен предел ячеек листа Data.") }
+                    } else {
+                        otherCells += 1
+                        guard otherCells <= limits.cells else { throw fail("Превышен предел ячеек XLSX.") }
+                    }
                     currentColumn = column; cellType = a["t"] ?? ""; cellText = ""; cellValue = ""; seenValue = false; seenInline = false
                     cellIssue = nil; hasFormula = false
-                    if regulatoryData {
+                    if regulatoryData, column < reportColumns {
                         styleIndex = a["s"].flatMap(Int.init) ?? (a["s"] == nil ? 0 : -1)
                         if a["cm"] != nil || a["vm"] != nil || !["", "n", "s", "inlineStr"].contains(cellType) {
                             cellIssue = "Неподдерживаемый тип Excel (дата, логическое значение или ошибка)."
@@ -379,16 +412,35 @@ struct ExchangeWorkbook: Sendable {
                     }
                 }
             }, end: { name, text, _ in
-                if currentColumn != nil {
-                    if name == "t" { cellText += text }
-                    if name == "v" { cellValue += text }
+                if let column = currentColumn, let row = currentRow {
+                    if !regulatoryData || column < reportColumns || row <= 4 {
+                        if name == "t" { cellText += text }
+                        if name == "v" { cellValue += text }
+                    }
                     guard cellText.utf16.count <= limits.textUTF16 else { throw fail("Слишком длинный текст ячейки.") }
                 }
                 if name == "c", let row = currentRow, let col = currentColumn {
                     if regulatoryData {
                         if !text.isEmpty { cellIssue = "Неоднозначное содержимое ячейки."; hasFormula = true }
-                        if col >= RegulatoryDataWorkbook.columns.count, hasFormula || seenValue || !cellText.isEmpty || cellIssue != nil {
-                            throw fail("Неподдерживаемая схема листа Data: Data!\(RegulatoryDataWorkbook.address(col, row)) содержит данные за пределами A:AD.")
+                        if col >= reportColumns {
+                            let populated = hasFormula || seenValue || seenInline || !["", "n"].contains(cellType)
+                            if populated {
+                                if firstExtraCell == nil { firstExtraCell = RegulatoryDataWorkbook.address(col, row) }
+                                extraColumns.insert(col)
+                            }
+                            if row > 4 {
+                                currentColumn = nil
+                                return
+                            }
+                        }
+                        if hasFormula || seenValue || seenInline || cellIssue != nil {
+                            retainedDataCells += 1
+                            guard retainedDataCells <= limits.dataSheetRetainedCells else {
+                                throw fail("Превышен предел значимых ячеек листа Data.")
+                            }
+                        }
+                        if row > 4, col == reportColumns - 1, hasFormula, cellType == "str", cellValue == "-" {
+                            derivedPlaceholders.insert(row)
                         }
                     }
                     if regulatoryData, let issue = cellIssue, seenValue || seenInline || !["", "n"].contains(cellType) || hasFormula {
@@ -417,7 +469,9 @@ struct ExchangeWorkbook: Sendable {
                         guard !seenValue, !seenInline else { throw fail("\(sheet)!\(MappingXLSXExport.column(col + 1))\(row): числовая/датированная ячейка; восстановить точность нельзя. Сохраните исходные значения как текст.") }; value = ""
                     }
                     if regulatoryData {
-                        if !value.isEmpty { regulatoryRows[row, default: [:]][col] = .text(value) }
+                        if !value.isEmpty, row <= 4 || value != "-" {
+                            regulatoryRows[row, default: [:]][col] = .text(value)
+                        }
                     } else {
                         rows[row]?[col] = value
                     }
@@ -433,7 +487,9 @@ struct ExchangeWorkbook: Sendable {
                         guard strings.indices.contains(index) else { throw fail("Некорректный индекс shared strings.") }
                         let value = strings[index]
                         if regulatoryData {
-                            if !value.isEmpty { regulatoryRows[row, default: [:]][column] = .text(value) }
+                            if !value.isEmpty, row <= 4 || value != "-" {
+                                regulatoryRows[row, default: [:]][column] = .text(value)
+                            }
                         } else {
                             rows[row]?[column] = value
                         }
@@ -449,7 +505,27 @@ struct ExchangeWorkbook: Sendable {
                     }
                 }
             }
-            if regulatoryData { continue }
+            if regulatoryData {
+                let canonicalMerges = Set(EnterpriseGeotechnicalWorkbook.merges)
+                if let firstExtraCell {
+                    guard RegulatoryDataWorkbook.matchesProductionLayout(regulatoryRows, extraColumns: extraColumns),
+                          merges.isSubset(of: RegulatoryDataWorkbook.productionMerges) else {
+                        throw fail("Неподдерживаемая схема листа Data: Data!\(firstExtraCell) содержит данные за пределами A:AD.")
+                    }
+                    productionLayout = true
+                    // In this layout the known GSI formula fills template rows with
+                    // cached dashes. A lone placeholder formula is not a candidate.
+                    for row in derivedPlaceholders {
+                        try Task.checkCancellation()
+                        if let cells = regulatoryRows[row], cells.count == 1, cells[reportColumns - 1] != nil {
+                            regulatoryRows.removeValue(forKey: row)
+                        }
+                    }
+                } else if hasConditionalFormatting || !merges.isSubset(of: canonicalMerges) {
+                    throw fail("Неподдерживаемая схема листа Data: дополнительные объединения или условное форматирование.")
+                }
+                continue
+            }
             guard let header = rows.removeValue(forKey: 1), let max = header.keys.max(), max < 256 else { throw fail("\(sheet): отсутствует заголовок.") }
             let columns = (0...max).map { header[$0] ?? "" }
             guard !columns.contains(""), Set(columns).count == columns.count else { throw fail("\(sheet): пустые или повторные колонки.") }
@@ -471,13 +547,29 @@ struct ExchangeWorkbook: Sendable {
         }
         sheets = output
         dataRows = regulatoryRows
+        self.dataSheetRowCount = dataSheetRowCount
+        self.productionLayout = productionLayout
         documentID = identifier
     }
     static func address(_ s: String) -> (Int, Int)? {
-        let a = Array(s.utf8); var p = 0, c = 0
-        while p < a.count, (65...90).contains(a[p]) { c = c * 26 + Int(a[p] - 64); p += 1; if c > 16_384 { return nil } }
-        guard c > 0, p < a.count, let row = Int(String(decoding: a[p...], as: UTF8.self)), row > 0, row <= 1_048_576 else { return nil }
-        return (c - 1, row)
+        var column = 0
+        var row = 0
+        var readingRow = false
+        for byte in s.utf8 {
+            switch byte {
+            case 65...90 where !readingRow:
+                column = column * 26 + Int(byte - 64)
+                guard column <= 16_384 else { return nil }
+            case 48...57:
+                readingRow = true
+                row = row * 10 + Int(byte - 48)
+                guard row <= 1_048_576 else { return nil }
+            default:
+                return nil
+            }
+        }
+        guard column > 0, row > 0 else { return nil }
+        return (column - 1, row)
     }
     /// ST_Xstring decoding once, including surrogate pairs and protected literal escapes.
     static func unescape(_ text: String) throws -> String {
@@ -511,7 +603,24 @@ private final class ExchangeXML: NSObject, XMLParserDelegate {
         guard data.count <= limits.partBytes, !forbidden.contains(where: { data.range(of: Data($0.utf8)) != nil }) else {
             throw ExchangeImportError("DTD, сущности и кодировки кроме UTF-8 запрещены.")
         }
-        let prefix = data.prefix(1024)
+        try validatePrefix(data.prefix(1024))
+        try parse(XMLParser(data: data), namespace: namespace, root: root, limits: limits,
+                  additionalElements: additionalElements, start: start, end: end)
+    }
+
+    static func read(_ stream: ExchangeWorksheetStream, namespace: String?, root: String?, limits: ExchangeLimits,
+                     additionalElements: [String: Set<String>], start: @escaping Start, end: @escaping End) throws {
+        try validatePrefix(stream.preparePrefix())
+        do {
+            try parse(XMLParser(stream: stream), namespace: namespace, root: root, limits: limits,
+                      additionalElements: additionalElements, start: start, end: end)
+        } catch {
+            throw stream.streamError ?? error
+        }
+        try stream.verifyCompletion()
+    }
+
+    private static func validatePrefix(_ prefix: Data) throws {
         let declaration = prefix.starts(with: [0xEF, 0xBB, 0xBF]) ? prefix.dropFirst(3) : prefix
         let whitespace: Set<UInt8> = [9, 10, 13, 32]
         guard declaration.first(where: { !whitespace.contains($0) }) == 0x3C else {
@@ -524,8 +633,12 @@ private final class ExchangeXML: NSObject, XMLParserDelegate {
                 throw ExchangeImportError("Некорректная декларация XML или кодировка кроме UTF-8.")
             }
         }
+    }
+
+    private static func parse(_ parser: XMLParser, namespace: String?, root: String?, limits: ExchangeLimits,
+                              additionalElements: [String: Set<String>], start: @escaping Start, end: @escaping End) throws {
         let delegate = ExchangeXML(namespace: namespace, root: root, limits: limits, additionalElements: additionalElements, start: start, end: end)
-        let parser = XMLParser(data: data); parser.shouldProcessNamespaces = true
+        parser.shouldProcessNamespaces = true
         parser.shouldResolveExternalEntities = false; parser.shouldReportNamespacePrefixes = true; parser.delegate = delegate
         guard parser.parse(), delegate.error == nil, parser.parserError == nil, delegate.elements > 0, delegate.stack.isEmpty else { throw delegate.error ?? ExchangeImportError("Некорректный XML XLSX.") }
     }
@@ -547,6 +660,7 @@ private final class ExchangeXML: NSObject, XMLParserDelegate {
     func parser(_ parser: XMLParser, foundCharacters text: String) {
         checked(parser) {
             guard let last = texts.indices.last else { return }
+            guard text.utf16.count <= limits.textUTF16 else { throw ExchangeImportError("Превышен предел текста XML.") }
             if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !["t", "v"].contains(stack[last]) { return }
             guard texts[last].utf16.count + text.utf16.count <= limits.textUTF16 else { throw ExchangeImportError("Превышен предел текста XML.") }
             texts[last] += text
@@ -558,6 +672,18 @@ private final class ExchangeXML: NSObject, XMLParserDelegate {
     func parser(_ parser: XMLParser, didStartMappingPrefix prefix: String, toURI namespaceURI: String) {
         if prefix == "r", namespaceURI != String(ExchangeWorkbook.documentRelationships.dropLast()) {
             error = ExchangeImportError("Подмена пространства имён связи XLSX."); parser.abortParsing()
+        }
+    }
+    func parser(_ parser: XMLParser, foundComment comment: String) {
+        checked(parser) {
+            guard comment.utf16.count <= limits.textUTF16 else { throw ExchangeImportError("Превышен предел текста XML.") }
+        }
+    }
+    func parser(_ parser: XMLParser, foundProcessingInstructionWithTarget target: String, data: String?) {
+        checked(parser) {
+            guard target.utf16.count + (data?.utf16.count ?? 0) <= limits.textUTF16 else {
+                throw ExchangeImportError("Превышен предел текста XML.")
+            }
         }
     }
     func parser(_ parser: XMLParser, foundCDATA CDATABlock: Data) { error = ExchangeImportError("CDATA в XLSX не поддерживается."); parser.abortParsing() }

@@ -15,6 +15,10 @@ struct ExchangeLimits: Sendable {
     // Regulatory packages can carry large parts that are never inflated.
     var regulatoryDeclaredBytes = 256 * 1024 * 1024
     var expandedBytes = 128 * 1024 * 1024
+    var dataSheetBytes = 112 * 1024 * 1024
+    var dataSheetCells = 2_000_000
+    var dataSheetRetainedCells = 650_000
+    var dataSheetElements = 6_000_000
     var compressionRatio = 1000
     var xmlDepth = 48
     var xmlElements = 2_000_000
@@ -140,17 +144,28 @@ struct ExchangeArchive {
         return parts
     }
 
-    mutating func read(_ path: String, worksheet: String? = nil) throws -> Data {
+    private mutating func reserve(_ path: String, maximum: Int, worksheet: String?) throws -> Entry {
         try Task.checkCancellation()
         guard let entry = entries[path] else { throw ExchangeImportError("Отсутствует часть XLSX: \(path)") }
-        guard entry.size <= limits.partBytes else {
+        guard entry.size <= maximum else {
             let part = worksheet.map { "Обязательный лист «\($0)»" } ?? "Часть XLSX «\(path)»"
-            throw ExchangeImportError("\(part) превышает предел распаковки: \(entry.size) байт при максимуме \(limits.partBytes).")
+            throw ExchangeImportError("\(part) превышает предел распаковки: \(entry.size) байт при максимуме \(maximum).")
         }
         guard expanded <= limits.expandedBytes - entry.size else {
             throw ExchangeImportError("Суммарный размер распаковываемых частей XLSX превышает предел \(limits.expandedBytes) байт.")
         }
         expanded += entry.size
+        return entry
+    }
+
+    mutating func streamDataSheet(_ path: String) throws -> ExchangeWorksheetStream {
+        let entry = try reserve(path, maximum: limits.dataSheetBytes, worksheet: "Data")
+        return try ExchangeWorksheetStream(data: data, path: path, payload: entry.payload,
+                                           size: entry.size, crc: entry.crc, deflated: entry.method == 8)
+    }
+
+    mutating func read(_ path: String, worksheet: String? = nil) throws -> Data {
+        let entry = try reserve(path, maximum: limits.partBytes, worksheet: worksheet)
         let decoded = entry.method == 0 ? Data(data[entry.payload]) : try inflatePart(entry, path: path)
         let crc = decoded.withUnsafeBytes { crc32(0, $0.bindMemory(to: Bytef.self).baseAddress, uInt(decoded.count)) }
         guard UInt32(crc) == entry.crc else { throw Self.bad("CRC-32 части XLSX «\(path)» не совпадает.") }
@@ -192,6 +207,156 @@ struct ExchangeArchive {
         ExchangeImportError(reason)
     }
 }
+/// A synchronous, single-use stream for Foundation's SAX parser. The compressed
+/// archive remains in its bounded input buffer. Output goes directly to the
+/// parser's buffer, with only the XML prefix and delimiter overlap retained.
+final class ExchangeWorksheetStream: InputStream {
+    private static let chunkBytes = 64 * 1024
+    private static let forbidden = [Data("<!DOCTYPE".utf8), Data("<!ENTITY".utf8)]
+    private let data: Data
+    private let path: String
+    private let payload: Range<Int>
+    private let size: Int
+    private let expectedCRC: UInt32
+    private let deflated: Bool
+    private var inflater = z_stream()
+    private var expanded = 0
+    private var crc: uLong = 0
+    private var prefix: [UInt8] = []
+    private var prefixOffset = 0
+    private var overlap: [UInt8] = []
+    private var finished = false
+    private var failure: Error?
+    private var status: Stream.Status = .notOpen
+
+    init(data: Data, path: String, payload: Range<Int>, size: Int, crc: UInt32, deflated: Bool) throws {
+        self.data = data
+        self.path = path
+        self.payload = payload
+        self.size = size
+        self.expectedCRC = crc
+        self.deflated = deflated
+        super.init(data: Data())
+        if deflated {
+            guard inflateInit2_(&inflater, -MAX_WBITS, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size)) == Z_OK else {
+                throw invalidPayload
+            }
+        }
+    }
+
+    deinit { if deflated { inflateEnd(&inflater) } }
+
+    /// Load only the declaration, before giving the XML parser any bytes.
+    func preparePrefix() throws -> Data {
+        var bytes = [UInt8](repeating: 0, count: 1024)
+        let count = try bytes.withUnsafeMutableBufferPointer { buffer in
+            var offset = 0
+            while offset < buffer.count, !finished {
+                offset += try decode(into: buffer.baseAddress! + offset, capacity: buffer.count - offset)
+            }
+            return offset
+        }
+        prefix = Array(bytes.prefix(count))
+        return Data(prefix)
+    }
+
+    override var streamStatus: Stream.Status { status }
+    override var streamError: Error? { failure }
+    override var hasBytesAvailable: Bool { status == .open && (prefixOffset < prefix.count || !finished) }
+    override func open() { status = .open }
+    override func close() { status = .closed }
+
+    override func read(_ buffer: UnsafeMutablePointer<UInt8>, maxLength len: Int) -> Int {
+        guard len > 0 else { return 0 }
+        do {
+            try Task.checkCancellation()
+            if prefixOffset < prefix.count {
+                let count = min(len, prefix.count - prefixOffset)
+                prefix.withUnsafeBufferPointer { buffer.update(from: $0.baseAddress! + prefixOffset, count: count) }
+                prefixOffset += count
+                return count
+            }
+            if finished {
+                status = .atEnd
+                return 0
+            }
+            return try decode(into: buffer, capacity: len)
+        } catch {
+            failure = error
+            status = .error
+            return -1
+        }
+    }
+
+    func verifyCompletion() throws {
+        if let failure { throw failure }
+        guard finished, prefixOffset == prefix.count else { throw invalidPayload }
+    }
+
+    private var invalidPayload: ExchangeImportError {
+        ExchangeImportError("Некорректный поток DEFLATE или размер распаковки части XLSX «\(path)».")
+    }
+
+    private func decode(into output: UnsafeMutablePointer<UInt8>, capacity: Int) throws -> Int {
+        let count: Int
+        let end: Bool
+        if deflated {
+            // Keep one byte beyond the declared output as an overrun sentinel.
+            let length = min(capacity, Self.chunkBytes, size - expanded + 1)
+            (count, end) = try data.withUnsafeBytes { (input: UnsafeRawBufferPointer) in
+                let base = input.bindMemory(to: Bytef.self).baseAddress! + payload.lowerBound
+                while true {
+                    try Task.checkCancellation()
+                    let offset = Int(inflater.total_in)
+                    inflater.next_in = UnsafeMutablePointer(mutating: base + offset)
+                    inflater.avail_in = uInt(min(Self.chunkBytes, payload.count - offset))
+                    inflater.next_out = output
+                    inflater.avail_out = uInt(length)
+                    let status = inflate(&inflater, Z_NO_FLUSH)
+                    let written = length - Int(inflater.avail_out)
+                    guard written <= size - expanded else { throw invalidPayload }
+                    if status == Z_STREAM_END {
+                        guard inflater.total_in == payload.count, inflater.total_out == size else { throw invalidPayload }
+                        return (written, true)
+                    }
+                    guard status == Z_OK, written > 0 || inflater.total_in > offset else { throw invalidPayload }
+                    if written > 0 { return (written, false) }
+                }
+            }
+        } else {
+            count = min(capacity, Self.chunkBytes, size - expanded)
+            data.withUnsafeBytes {
+                output.update(from: $0.bindMemory(to: UInt8.self).baseAddress! + payload.lowerBound + expanded, count: count)
+            }
+            end = expanded + count == size
+        }
+        if count > 0 {
+            try validateXMLBytes(output, count: count)
+            crc = crc32(crc, output, uInt(count))
+            expanded += count
+        }
+        if end {
+            guard UInt32(crc) == expectedCRC else { throw ExchangeImportError("CRC-32 части XLSX «\(path)» не совпадает.") }
+            finished = true
+        }
+        return count
+    }
+
+    private func validateXMLBytes(_ bytes: UnsafePointer<UInt8>, count: Int) throws {
+        let buffer = UnsafeBufferPointer(start: bytes, count: count)
+        // A forbidden token can cross either the declaration or a decode boundary.
+        let boundary = Data(overlap + buffer.prefix(8))
+        guard memchr(bytes, 0, count) == nil,
+              !Self.forbidden.contains(where: { token in
+                  boundary.range(of: token) != nil || token.withUnsafeBytes {
+                      memmem(bytes, count, $0.baseAddress!, $0.count) != nil
+                  }
+              }) else { throw ExchangeImportError("DTD, сущности и кодировки кроме UTF-8 запрещены.") }
+        if count >= 8 { overlap = Array(buffer.suffix(8)) }
+        else { overlap = Array((overlap + buffer).suffix(8)) }
+    }
+}
+
 private extension Data {
     func le(_ index: Int, _ count: Int) -> Int {
         guard index >= 0, index + count <= self.count else { return -1 }

@@ -1085,11 +1085,11 @@ extension MappingExchangePreviewTests {
         XCTAssertNotNil(parsed.manifest)
         XCTAssertEqual(try RegulatoryDataImport.prepare(bytes: bytes, committed: .init(journal), limits: limits).count(.unchanged), 1)
 
-        limits.partBytes = try XCTUnwrap(parts[dataPath]).count - 1
+        limits.dataSheetBytes = try XCTUnwrap(parts[dataPath]).count - 1
         XCTAssertThrowsError(try RegulatoryDataWorkbook.Read(bytes: bytes, limits: limits)) {
             XCTAssertTrue($0.localizedDescription.contains("Обязательный лист «Data»"), $0.localizedDescription)
         }
-        limits.partBytes = 128 * 1024
+        limits.dataSheetBytes = 128 * 1024
         limits.expandedBytes = try XCTUnwrap(parts[dataPath]).count
         XCTAssertThrowsError(try RegulatoryDataWorkbook.Read(bytes: bytes, limits: limits)) {
             XCTAssertTrue($0.localizedDescription.contains("Суммарный размер распаковываемых частей"), $0.localizedDescription)
@@ -1097,6 +1097,17 @@ extension MappingExchangePreviewTests {
         limits.regulatoryDeclaredBytes = 192 * 1024
         XCTAssertThrowsError(try RegulatoryDataWorkbook.Read(bytes: bytes, limits: limits)) {
             XCTAssertTrue($0.localizedDescription.contains("Суммарный заявленный размер"), $0.localizedDescription)
+        }
+
+        var cellLimits = ExchangeLimits()
+        cellLimits.dataSheetCells = 100
+        XCTAssertThrowsError(try RegulatoryDataWorkbook.Read(bytes: bytes, limits: cellLimits)) {
+            XCTAssertTrue($0.localizedDescription.contains("предел ячеек листа Data"), $0.localizedDescription)
+        }
+        cellLimits = .init()
+        cellLimits.dataSheetRetainedCells = 20
+        XCTAssertThrowsError(try RegulatoryDataWorkbook.Read(bytes: bytes, limits: cellLimits)) {
+            XCTAssertTrue($0.localizedDescription.contains("предел значимых ячеек листа Data"), $0.localizedDescription)
         }
     }
 
@@ -1142,6 +1153,105 @@ extension MappingExchangePreviewTests {
         await operation.task.value
         XCTAssertNil(coordinator.state.preview)
         XCTAssertTrue(try XCTUnwrap(coordinator.state.message).contains("требуется видимый лист Data"))
+    }
+
+    func testRegulatoryStreamsWorksheetAboveBufferedPartLimit() throws {
+        let journal = try fixture()
+        let book = try regulatoryExport(journal)
+        var parts = try archiveParts(book)
+        let path = "xl/worksheets/sheet1.xml"
+        let source = try XCTUnwrap(parts[path])
+        let closing = try XCTUnwrap(source.range(of: Data("</worksheet>".utf8)))
+        // A deterministic low-entropy pattern with enough variation to keep the
+        // compression ratio below the security threshold.
+        let alphabet = Array("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".utf8)
+        var state: UInt32 = 42
+        let comment = Data("<!--".utf8) + Data((0..<16_384).map { _ in
+            state = state &* 1_664_525 &+ 1_013_904_223
+            return alphabet[Int(state >> 16) % alphabet.count]
+        }) + Data("-->".utf8)
+        var worksheet = Data(source[..<closing.lowerBound])
+        for _ in 0..<2_100 { worksheet.append(comment) }
+        worksheet.append(source[closing.lowerBound...])
+        let limits = ExchangeLimits()
+        XCTAssertGreaterThan(worksheet.count, limits.partBytes)
+        parts[path] = worksheet
+        let bytes = try zip(parts.sorted { $0.key < $1.key }, deflated: true)
+        let preview = try RegulatoryDataImport.prepare(bytes: bytes, committed: .init(journal))
+        XCTAssertEqual(preview.rowsProcessed, 1)
+        XCTAssertEqual(preview.count(.unchanged), 1)
+        XCTAssertFalse(preview.workbookBlocked)
+    }
+
+    func testProductionLayoutShowsBlockedCandidateAndExclusionsBeforeAnyWrite() throws {
+        let journal = try fixture()
+        let book = try regulatoryExport(journal, identity: false)
+        let production = try editData(book) { xml in
+            var result = try cells(xml, ["B5": #" t="inlineStr"><is><t>-</t></is></c>"#,
+                                         "AD5": #" t="str"><f>1+1</f><v>-</v></c>"#])
+            let headers = [
+                (1, #"<c r="BI1" t="inlineStr"><is><t>Ошибки в пополнении БД по картированию выработок</t></is></c>"#),
+                (3, #"<c r="AI3" t="inlineStr"><is><t>№ точки наблюдения</t></is></c><c r="AJ3" t="inlineStr"><is><t>Примечание</t></is></c><c r="CP3" t="inlineStr"><is><t>Проверка угла и азимута 4 системы</t></is></c>"#),
+                (4, #"<c r="AE4" t="inlineStr"><is><t>Q'</t></is></c><c r="AH4" t="inlineStr"><is><t>RMR76</t></is></c>"#)
+            ]
+            for (row, cells) in headers {
+                let range = try XCTUnwrap(result.range(of: #"<row r="\#(row)"[^>]*>.*?</row>"#, options: .regularExpression))
+                result.replaceSubrange(range, with: result[range].replacingOccurrences(of: "</row>", with: cells + "</row>"))
+            }
+            let placeholder = #"<row r="6"><c r="A6" t="inlineStr"><is><t>-</t></is></c><c r="AD6" t="str"><f>1+1</f><v>-</v></c><c r="AI6"><v>2</v></c></row>"#
+            return result.replacingOccurrences(of: "A1:AD1", with: "A1:AJ1")
+                .replacingOccurrences(of: "</sheetData>", with: placeholder + "</sheetData>")
+                .replacingOccurrences(of: "</worksheet>", with: #"<conditionalFormatting sqref="A5"><cfRule type="expression" priority="1"><formula>1+1</formula></cfRule></conditionalFormatting></worksheet>"#)
+        }
+        let committed = MappingCommittedSnapshot(journal)
+        let preview = try RegulatoryDataImport.prepare(bytes: production, committed: committed)
+        XCTAssertTrue(preview.workbookBlocked)
+        XCTAssertEqual(preview.worksheetRowsScanned, 6)
+        XCTAssertEqual(preview.rowsProcessed, 1)
+        XCTAssertEqual(preview.count(.unsupported), 1)
+        XCTAssertEqual(preview.records.first?.location, "Data!A5:AD5")
+        XCTAssertFalse(preview.records.contains(where: \.canApply))
+        XCTAssertTrue(preview.workbookBlockReasons.contains { $0.contains("Data!A3:A4") })
+        XCTAssertTrue(preview.workbookBlockReasons.contains { $0.contains("AE:AH") && $0.contains("BI:CP") })
+        XCTAssertThrowsError(try MappingExchangeImport.Batch(preview: preview, bytes: production,
+            selection: .init(accepted: Set(preview.records.map(\.id))), now: time))
+        XCTAssertEqual(committed.journal, journal)
+    }
+
+    func testWorksheetStreamRejectsSplitDTDAndCorruptFinalCRC() throws {
+        let journal = try fixture()
+        let book = try regulatoryExport(journal)
+        let malicious = try editData(book) { xml in
+            let root = try XCTUnwrap(xml.range(of: "<worksheet"))
+            return String(repeating: " ", count: 1020) + "<!DOCTYPE worksheet>" + xml[root.lowerBound...]
+        }
+        XCTAssertThrowsError(try RegulatoryDataWorkbook.Read(bytes: malicious, limits: .init())) {
+            XCTAssertTrue($0.localizedDescription.contains("DTD"), $0.localizedDescription)
+        }
+
+        // The archive directory is consistent. The CRC still has to be checked
+        // at the end of the decoded stream, beyond the XML prefix.
+        let xml = Data(("<worksheet><!--" + String(repeating: "x", count: 95_000) + "--></worksheet>").utf8)
+        var invalid = try zip([("data.xml", xml)], deflated: true)
+        let central = try XCTUnwrap(invalid.range(of: Data([0x50, 0x4b, 0x01, 0x02]))).lowerBound
+        invalid[14] ^= 1
+        invalid[central + 16] ^= 1
+        var archive = try ExchangeArchive(data: invalid, limits: .init(), regulatory: true)
+        let stream = try archive.streamDataSheet("data.xml")
+        _ = try stream.preparePrefix()
+        stream.open()
+        defer { stream.close() }
+        var buffer = [UInt8](repeating: 0, count: 32_768)
+        var count = 0
+        while true {
+            let read = stream.read(&buffer, maxLength: buffer.count)
+            if read <= 0 { break }
+            count += read
+        }
+        XCTAssertGreaterThan(count, 32_768)
+        XCTAssertThrowsError(try stream.verifyCompletion()) {
+            XCTAssertTrue($0.localizedDescription.contains("CRC-32"), $0.localizedDescription)
+        }
     }
 
     func testSelectiveZIPRejectsSkippedEntryRatioAndRequiredPartOverrun() throws {

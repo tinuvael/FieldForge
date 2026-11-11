@@ -65,6 +65,9 @@ enum RegulatoryDataImport {
         let documentID = workbook.documentID ?? manifest?.workbookID
         let source = MappingImportSource(kind: .regulatoryData,
             documentID: documentID?.uuidString ?? ExchangeBaseline.hash(bytes), bytes: bytes)
+        if workbook.productionLayout {
+            return productionPreview(workbook, source: source, committed: committed)
+        }
         let scope = reviewDocumentID(source)
         var review = review.documentID == nil || review.documentID == scope ? review : Review()
         review.matches.merge(matches) { _, explicit in explicit }
@@ -195,6 +198,26 @@ enum RegulatoryDataImport {
         preview.source = source
         preview.rowsProcessed = workbook.rows.count
         return preview
+    }
+
+    private static func productionPreview(_ workbook: RegulatoryDataWorkbook.Read, source: MappingImportSource,
+                                          committed: MappingCommittedSnapshot) -> Preview {
+        let reasons = [
+            "Data!A3:A4 «Место картирования» (ID) содержит идентификаторы источника. Для импорта нужна проверенная привязка каждой строки к выработке.",
+            "Data!B3:B4 «Пикетаж» (PK) требует подтверждённого пикета. Для координат C:E и азимутов требуется подтверждение системы координат и направления севера.",
+            "Data!AD (GSI) содержит расчётные формулы. Data!O (SD) содержит сводное расстояние между трещинами. Эти поля требуют исходных данных для записи в журнал.",
+            "В исходной книге остаются AE:AH (Q′, Q, RMR89, RMR76), AI (номер точки), AJ (примечание), AK:BB (вспомогательные оценки и входы), BI:CP (формулы проверки)."
+        ]
+        let records = workbook.rows.map { row in
+            Record(id: "Data/\(row.number)", classification: .unsupported,
+                   reason: (["Требуется привязка исходного ID к выработке и пикету."] + row.issues).joined(separator: "\n"),
+                   changes: [], proposed: nil, location: "Data!A\(row.number):AD\(row.number)")
+        }
+        return Preview(source: source, rowsProcessed: workbook.rows.count, workbookBlocked: true,
+                       workbookBlockReasons: reasons, worksheetRowsScanned: workbook.worksheetRowCount,
+                       workbookID: workbook.documentID ?? UUID(), generationID: committed.generationID,
+                       exportedAt: .distantPast, projectName: "", metadata: [:], records: records,
+                       proposalDigest: source.fingerprint)
     }
 
     private static func rowKey(_ rows: [Row]) throws -> String {

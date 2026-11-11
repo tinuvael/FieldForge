@@ -120,7 +120,12 @@ struct MappingExchangeImportView: View {
             if kind == .regulatoryData {
                 LabeledContent("Сопоставлено наблюдений", value: String(Set(preview.records.compactMap(\.matchedID)).count))
             }
-            LabeledContent("Проверено строк наблюдений", value: String(preview.rowsProcessed))
+            if let scanned = preview.worksheetRowsScanned {
+                LabeledContent("Прочитано строк листа Data", value: String(scanned))
+                LabeledContent("Строки для проверки", value: String(preview.rowsProcessed))
+            } else {
+                LabeledContent("Проверено строк наблюдений", value: String(preview.rowsProcessed))
+            }
             ForEach(categories, id: \.self) { category in
                 LabeledContent(category.title, value: String(preview.count(category)))
             }
@@ -132,8 +137,14 @@ struct MappingExchangeImportView: View {
                 }
             }
             if preview.workbookBlocked {
-                Text("Защищённые данные книги изменены. Исправьте ошибки или выгрузите новую книгу.")
-                    .foregroundStyle(.orange)
+                if preview.workbookBlockReasons.isEmpty {
+                    Text("Защищённые данные книги изменены. Исправьте ошибки или выгрузите новую книгу.")
+                        .foregroundStyle(.orange)
+                } else {
+                    ForEach(preview.workbookBlockReasons, id: \.self) { reason in
+                        Text(reason).foregroundStyle(.orange)
+                    }
+                }
             }
         }
         ForEach(categories, id: \.self) { category in

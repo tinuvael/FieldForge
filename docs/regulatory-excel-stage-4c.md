@@ -77,11 +77,16 @@ extents, sizes and declared ratios even for skipped entries. It accepts
 STORE and raw DEFLATE, with bounded decoding and CRC-32 verification for
 parts it reads. XML and CRC validation cover the consumed parts.
 Regulatory limits are 32 MiB compressed, 256 MiB declared uncompressed,
-32 MiB per decoded part, 128 MiB cumulatively decoded, and 1,000:1 per entry.
-The higher declared-size ceiling accommodates skipped Excel parts. The
-decoded byte limits and the existing XML, row and cell limits still apply.
-Preview errors identify the failed size or ratio check, the oversized
-required sheet, invalid package structure or an incompatible Data layout.
+128 MiB cumulatively decoded, and 1,000:1 per entry. Supporting parts have
+a 32 MiB buffered limit. The required `Data` sheet uses incremental
+STORE/DEFLATE decoding with 64 KiB chunks and SAX parsing, with a separate
+112 MiB output ceiling. The streaming path checks the exact length, end
+of DEFLATE stream and CRC before publishing a preview. It rejects DTDs and
+entity declarations across chunk boundaries and checks cancellation while
+reading and parsing. Data is limited to 2 million scanned cells, 650,000
+retained cell values or references, 6 million XML elements, and the
+existing limits of 100,000 rows, depth 48 and 32,767 UTF-16 code units per
+cell text. The 100 MB expanded worksheet never becomes a single buffer.
 
 ### Production workbook diagnosis
 
@@ -95,16 +100,35 @@ bytes. Its highest compression ratio is 11.90:1, well within the 1,000:1 limit.
 The 27,201,205-byte calculation chain also contributed to the old total.
 
 The workbook links `Data` to `sheet1.xml`. The worksheet declares
-`A1:CP19999`, with 19,998 row elements. The regulatory headers start in
-A:AD. The sheet also contains populated fields through CP, including
-Q/RMR results, observation numbers, notes and formula-based checks.
-The `kart` sheet is a formula-based projection with a different column
-order. Import supports the documented four-header `Data!A:AD` contract.
-The production preview reports the oversized `Data` sheet. A read-only
-diagnostic with a larger local limit also confirmed that `Data!BI1` fails
-the A:AD check. The extended layout requires a reviewed mapping. Any prepared import copy
-must preserve the original workbook and account for all populated source
-fields, including values with unconfirmed meaning or provenance.
+`A1:CP19999` and contains 19,998 row elements and 1,724,884 cell elements.
+The populated mapping candidates are rows 5–15. Later template rows have
+dash placeholders in the mapping fields and calculated or auxiliary
+content elsewhere. The `kart` sheet is a formula projection in a different
+column order. Its NAME and PK columns reference Data A and B.
+
+The reader recognizes the extended layout using the four A:AD header rows
+and the additional headers at AE4, AH4, AI3, AJ3, BI1 and CP3. It produces a
+read-only preview listing the candidate rows and the reasons confirmation
+is blocked. Other extended layouts are rejected. The ordinary
+four-header A:AD contract still goes through reconciliation and approval.
+
+| Source cells / labels | Verified structure and treatment |
+| --- | --- |
+| A3 «Место картирования», A4 `ID`, A5:A15 | The owner confirmed these are source observation IDs. A:AD import expects an excavation name at A. Each source ID needs an explicit excavation and picket mapping before any match or creation. |
+| B3 «Пикетаж», B4 `PK`, B5:B15 | All 11 candidates contain `-`. Confirm picket, convention and chainage context for each source row. |
+| C3 «Координаты точек замеров», C4:E4 `X`, `Y`, `Z` | Six candidate triples use Excel text and five use numeric cells. Confirm units, axes, coordinate frame and horizon before assigning any DXF revision. The row numbers and coordinates establish no identity. |
+| F4:N4, P4:R4, S4:AC4 | Headers match the regulatory lithology, input categories, tectonic and joint fields. Any eventual import uses the existing code and category validation and explicit azimuth north reference. |
+| O3 «Расстояние между трещинами, м», O4 `SD` | Ten source rows have a spacing summary. The summary cannot supply original spacing per joint set. |
+| AD3:AD4 `GSI` and AE4:AH4 `Q'`, `Q`, `RMR89`, `RMR76` | Source formulas and cached assessments remain in the original workbook. Six candidate rows have numeric GSI caches. A cache provides no saved assessment provenance. |
+| AI3 «№ точки наблюдения» and AJ3 «Примечание» | AI is populated even on template rows. Its relationship to persistent observation identity is unverified. AJ contains dash placeholders for the 11 candidates. Both columns remain in the source. |
+| AK4:BB4 | Auxiliary ratings, inputs and calculations remain in the source. `AT4 RMR76` includes a literal value among formulas, `AW4 благоприятность трещин` contains literal inputs with unconfirmed scoring provenance, and BB4 has no label. |
+| BI1 «Ошибки в пополнении БД по картированию выработок» through CP | Worksheet validation formulas, booleans and cached errors remain in the source. Conditional formats are parsed as display markup. |
+
+To prepare a writable import, provide a reviewed mapping from each source
+observation ID to project, horizon, excavation and picket, including the
+existing observation UUID when known. Confirm the frame and units for DXF
+placement and the azimuth north reference. Source assessments, excluded
+fields and their provenance stay available in the original workbook.
 
 ## Exact A:AD column policy
 
@@ -238,3 +262,19 @@ Office archives, invalid ZIP and XML, worksheet and package limits, preview
 diagnostics, and duplicate-free application and replay of 20 new observations
 and five revisions. Xcode 26.6 built the app for the generic iOS Simulator
 destination. Full regression and physical-device import were outside this run.
+
+The PR #82 streaming follow-up passed 80 focused SwiftPM tests with one
+opt-in fixture skipped. The generic iOS Simulator build succeeded on
+Xcode 26.6. Tests cover a valid worksheet above 32 MiB, CRC failure at the
+end of a stream, a DTD token crossing a chunk boundary, size and cell
+budgets, and refusal of a blocked preview before storage. Supported A:AD
+imports still verify explicit DXF context, 20 creations, five revisions,
+and duplicate-free replay through the durable ledger.
+
+The production workbook was previewed with an empty in-memory journal.
+The parser read 19,998 worksheet rows and the preview identified 11
+candidate observations at rows 5–15. It reported zero matched, new, or
+conflicting records because identity validation stopped reconciliation.
+All 11 candidates were blocked and batch creation was refused. The
+macOS debug probe used approximately 63 MiB of peak resident memory.
+Full regression and physical-device verification were outside this run.
