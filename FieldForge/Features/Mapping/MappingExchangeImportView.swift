@@ -436,6 +436,13 @@ private struct RegulatorySourceImportSection: View {
     @State private var selectedSources: Set<String> = []
     @State private var confirm = false
 
+    init(input: RegulatorySourceImport.Input, notices: [String], url: URL) {
+        self.input = input; self.notices = notices; self.url = url
+        _review = State(initialValue: RegulatorySourceImport.Review(projectID: input.suggestedProjectID,
+            dataset: input.suggestedDataset ?? "", frame: input.suggestedFrame ?? .init(),
+            frameConfirmed: input.suggestedFrame != nil))
+    }
+
     private var snapshot: MappingCommittedSnapshot? { mapping.workflow?.committed }
     private var horizons: [MappingHorizon] {
         snapshot?.journal.horizons.filter { $0.projectID == review.projectID } ?? []

@@ -209,6 +209,9 @@ enum MappingXLSXExport {
         }
         switch value {
         case .text(let string): return try text(string)
+        case .rawNumber(let raw):
+            guard RegulatoryDataWorkbook.sourceNumber(raw) != nil else { throw StorageError.invalidRecord }
+            return prefix + " t=\"n\"><v>\(raw)</v></c>"
         case .timestamp(let date): return try date.map { try text(MappingCSVExport.iso($0)) } ?? (prefix + "/>")
         case .number(let number):
             guard let number else { return prefix + "/>" }

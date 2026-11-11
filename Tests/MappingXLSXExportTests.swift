@@ -70,6 +70,7 @@ import FoundationXML
                     let actual = try XCTUnwrap(reader.cells[MappingXLSXExport.column(c + 1) + String(r + 2)])
                     switch value {
                     case .text(let text): XCTAssertEqual(actual.type, "inlineStr"); XCTAssertEqual(actual.value, text)
+                    case .rawNumber(let raw): XCTAssertEqual(actual.type, "n"); XCTAssertEqual(actual.value, raw)
                     case .number(let number):
                         if let number {
                             XCTAssertEqual(Double(actual.value), number)
@@ -269,6 +270,7 @@ import FoundationXML
             expected[table.name] = ["columns": table.columns, "rows": table.rows.map { row in row.map { value -> [String: Any] in
                 switch value {
                 case .text(let s): return ["type": "s", "value": s]
+                case .rawNumber(let raw): return ["type": "n", "value": Double(raw) ?? 0]
                 case .number(let n):
                     guard let n else { return ["type": "blank"] }; let cell = try! MappingXLSXExport.numericText(n)
                     return ["type": cell.isText ? "s" : "n", "value": cell.isText ? cell.value as Any : n as Any]

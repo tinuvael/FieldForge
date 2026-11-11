@@ -67,4 +67,21 @@ final class MappingCommittedSnapshot: Sendable {
             return result
         }
     }
+
+    /// Source-backed XY is drawable only when the original coordinate frame was
+    /// confirmed and exactly matches the selected DXF frame and its horizon datum.
+    func sourcePoints(on plan: MappingPlanReference) -> [RegulatorySourceObservation] {
+        guard plansByID[plan.id] == plan, !plan.isDeleted, !plan.isArchived,
+              let file = plan.file, let horizon = horizons[plan.horizonID] else { return [] }
+        return (journal.regulatorySourceObservations ?? []).filter { record in
+            guard record.key.projectID == horizon.projectID, let version = record.latest,
+                  version.destination.horizonID == horizon.id,
+                  let x = Double(version.cells[2]), x.isFinite,
+                  let y = Double(version.cells[3]), y.isFinite,
+                  version.frame.crs == file.crs, version.frame.axes == file.axes,
+                  version.frame.xyUnits == file.units.coordinateUnits,
+                  version.frame.verticalDatum == horizon.elevationDatum else { return false }
+            return true
+        }
+    }
 }

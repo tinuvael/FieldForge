@@ -1929,6 +1929,12 @@ extension MappingExchangePreviewTests {
         let original = try XCTUnwrap(saved.regulatorySourceObservations)
         XCTAssertEqual(original.map { $0.latest?.xyz[2] }, [400, 320, 350])
         XCTAssertTrue(original.allSatisfy { $0.latest?.cells[1].isEmpty == true })
+        XCTAssertEqual(MappingCommittedSnapshot(saved).sourcePoints(on: firstPlan).map(\.id), [original[0].id])
+        XCTAssertEqual(MappingCommittedSnapshot(saved).sourcePoints(on: secondPlan).map(\.id), [original[1].id])
+        let dataProjection = try EnterpriseGeotechnicalWorkbook.prepare(points: [], journal: saved, sourceRecords: original)
+        XCTAssertEqual(dataProjection.table.rows.count, 3)
+        XCTAssertEqual(dataProjection.table.rows[0][0].csv, MappingCSVExport.Cell.text("P1").csv)
+        XCTAssertEqual(dataProjection.table.rows[0][4].csv, MappingCSVExport.Cell.text(try XCTUnwrap(original[0].latest?.cells[4])).csv)
         let reassigned = try RegulatorySourceImport.assigning([original[2].id],
             destination: .init(projectID: project.id, horizonID: second.id), journal: saved, now: time.addingTimeInterval(1))
         try reassigned.validate()
@@ -1989,5 +1995,56 @@ extension MappingExchangePreviewTests {
         XCTAssertEqual(reopened, saved.journal)
         XCTAssertEqual(reopened.regulatorySourceObservations?.first?.latest?.xyz[2], 400.1234)
         XCTAssertThrowsError(try RegulatorySourceImport.applying(plan, to: saved.committed))
+    }
+
+    func testActualProductionWorkbookImportsAndReplaysElevenSourceRows() throws {
+        let url = URL(fileURLWithPath: "/Users/evgeniiemshanov/Downloads/БД_ПГР.xlsx")
+        guard FileManager.default.fileExists(atPath: url.path) else { throw XCTSkip("Локальная рабочая книга не установлена.") }
+        let bytes = try Data(contentsOf: url, options: .mappedIfSafe)
+        let base = try fixture()
+        let baseSnapshot = MappingCommittedSnapshot(base)
+        let preview = try RegulatoryDataImport.prepare(bytes: bytes, committed: baseSnapshot)
+        let input = try XCTUnwrap(preview.productionInput)
+        XCTAssertEqual(input.rows.count, 11)
+        let review = RegulatorySourceImport.Review(projectID: id(1), dataset: "production-db-pgr", frameConfirmed: true)
+        let plan = try RegulatorySourceImport.prepare(input, review: review, snapshot: baseSnapshot)
+        XCTAssertEqual(plan.count(.new), 11)
+        XCTAssertEqual(plan.count(.invalid), 0)
+        let saved = try RegulatorySourceImport.applying(plan, to: baseSnapshot)
+        try saved.validate()
+        let records = try XCTUnwrap(saved.regulatorySourceObservations)
+        XCTAssertEqual(records.count, 11)
+        XCTAssertEqual(Set(records.map(\.id)).count, 11)
+        XCTAssertTrue(records.allSatisfy { $0.latest?.destination.horizonID == nil && $0.latest?.destination.excavationID == nil })
+        let replay = try RegulatorySourceImport.prepare(input, review: review, snapshot: MappingCommittedSnapshot(saved))
+        XCTAssertEqual(replay.count(.unchanged), 11)
+        XCTAssertEqual(replay.count(.new), 0)
+
+        var sourceOnlyJournal = saved
+        sourceOnlyJournal.observations = []
+        sourceOnlyJournal.revisions = []
+        sourceOnlyJournal.measurements = []
+        let export = try MappingCSVExport.prepare(journal: sourceOnlyJournal,
+            selection: .init(projectID: id(1), firstDay: time, lastDay: time, timeZoneID: "UTC"),
+            now: time, includeEnterprise: true)
+        let files = try MappingExportFiles.write(export, format: .enterpriseGeotechnical)
+        defer { files.cleanup() }
+        let exportedPreview = try RegulatoryDataImport.prepare(bytes: Data(contentsOf: try XCTUnwrap(files.urls.first)),
+            committed: MappingCommittedSnapshot(saved))
+        let exportedInput = try XCTUnwrap(exportedPreview.productionInput)
+        XCTAssertEqual(exportedInput.suggestedProjectID, id(1))
+        XCTAssertEqual(exportedInput.suggestedDataset, "production-db-pgr")
+        let exportedReview = RegulatorySourceImport.Review(projectID: exportedInput.suggestedProjectID,
+            dataset: try XCTUnwrap(exportedInput.suggestedDataset), frame: try XCTUnwrap(exportedInput.suggestedFrame), frameConfirmed: true)
+        let exportReplay = try RegulatorySourceImport.prepare(exportedInput, review: exportedReview,
+            snapshot: MappingCommittedSnapshot(saved))
+        let sourceByID = Dictionary(uniqueKeysWithValues: records.map { ($0.key.sourceID, $0.latest!.cells) })
+        let changedColumns = exportedInput.rows.compactMap { row -> String? in
+            guard let original = sourceByID[row.values[0]] else { return "unknown-source" }
+            let indexes = original.indices.filter { original[$0] != row.values[$0] }
+            return indexes.isEmpty ? nil : "row\(row.number):" + indexes.map(String.init).joined(separator: ",")
+        }
+        XCTAssertEqual(exportReplay.count(.unchanged), 11, "Changed A:AD columns: \(changedColumns)")
+        XCTAssertEqual(exportReplay.count(.new), 0)
     }
 }

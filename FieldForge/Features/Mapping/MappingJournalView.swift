@@ -15,6 +15,15 @@ struct MappingJournalView: View {
         effective.endDate = datesEnabled ? throughDate : nil
         return effective.apply(mapping.workflow?.observations ?? [], projectID: projectID)
     }
+    private var sourceObservations: [RegulatorySourceObservation] {
+        let search = query.picket.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (mapping.workflow?.journal.regulatorySourceObservations ?? []).filter { record in
+            guard record.key.projectID == projectID, let version = record.latest else { return false }
+            return (query.horizonID == nil || version.destination.horizonID == query.horizonID) &&
+                (query.excavationID == nil || version.destination.excavationID == query.excavationID) &&
+                (search.isEmpty || record.key.sourceID.localizedCaseInsensitiveContains(search) || version.cells[1].localizedCaseInsensitiveContains(search))
+        }.sorted { $0.key.sourceID.localizedStandardCompare($1.key.sourceID) == .orderedAscending }
+    }
     private var horizons: [MappingHorizon] { mapping.workflow?.horizons ?? [] }
     private var excavations: [MappingExcavation] {
         (mapping.workflow?.journal.excavations ?? []).filter {
@@ -23,7 +32,9 @@ struct MappingJournalView: View {
     }
     var body: some View {
         let observations = self.observations
-        let sourceCount = mapping.workflow?.journal.regulatorySourceObservations?.filter { $0.key.projectID == projectID }.count ?? 0
+        let sources = sourceObservations
+        let totalProjectRecords = (mapping.workflow?.committed.observationCount(projectID: projectID) ?? 0)
+            + (mapping.workflow?.journal.regulatorySourceObservations?.filter { $0.key.projectID == projectID }.count ?? 0)
         List {
             Section {
                 Text(projectID.flatMap { mapping.workflow?.committed.projects[$0]?.name } ?? "Выберите проект в картировании")
@@ -45,17 +56,15 @@ struct MappingJournalView: View {
                     query = MappingJournalQuery(); datesEnabled = false
                 }.accessibilityIdentifier("journalClearFilters")
             }
-            if let projectID, sourceCount > 0 {
-                Section {
+            Section("Наблюдения: \(observations.count + sources.count) из \(totalProjectRecords)") {
+                if let projectID, (mapping.workflow?.journal.regulatorySourceObservations?.contains { $0.key.projectID == projectID } ?? false) {
                     NavigationLink {
                         RegulatorySourceJournalView(projectID: projectID)
                     } label: {
-                        LabeledContent("Наблюдения из Excel", value: String(sourceCount))
+                        Label("Назначить контекст исходным строкам Excel", systemImage: "mappin.and.ellipse")
                     }
                 }
-            }
-            Section("Наблюдения: \(observations.count) из \(mapping.workflow?.committed.observationCount(projectID: projectID) ?? 0)") {
-                if observations.isEmpty { Text("Нет наблюдений по выбранным условиям").accessibilityIdentifier("journalEmpty") }
+                if observations.isEmpty && sources.isEmpty { Text("Нет наблюдений по выбранным условиям").accessibilityIdentifier("journalEmpty") }
                 ForEach(observations) { record in
                     NavigationLink { MappingObservationDetail(record: record) } label: {
                         VStack(alignment: .leading, spacing: 6) {
@@ -67,6 +76,17 @@ struct MappingJournalView: View {
                             Text("\(MappingDateText.compact(record)) · \(name(horizon: record.horizonID))").font(.caption).foregroundStyle(.secondary)
                         }.padding(.vertical, 4)
                     }.accessibilityIdentifier("journalRecord-\(record.id.uuidString)")
+                }
+                ForEach(sources) { record in
+                    NavigationLink { RegulatorySourceObservationDetail(record: record) } label: {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("Источник · \(record.key.sourceID)").font(.headline)
+                            Text(record.latest.map { $0.cells[1].isEmpty ? "Пикет не указан в источнике" : "Пикет \($0.cells[1])" } ?? "Пикет не указан в источнике")
+                            let destination = record.latest?.destination
+                            Text("\(destination?.horizonID.flatMap { mapping.workflow?.committed.horizons[$0]?.displayName } ?? "Горизонт не назначен") · \(destination?.excavationID.flatMap { mapping.workflow?.committed.excavations[$0]?.name } ?? "Выработка не назначена")")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }.padding(.vertical, 4)
+                    }.accessibilityIdentifier("journalSourceRecord-\(record.id.uuidString)")
                 }
             }
         }.accessibilityIdentifier("journalObservations")
@@ -380,7 +400,7 @@ private struct RegulatorySourceJournalView: View {
     }
 }
 
-private struct RegulatorySourceObservationDetail: View {
+struct RegulatorySourceObservationDetail: View {
     let record: RegulatorySourceObservation
 
     var body: some View {
@@ -398,14 +418,41 @@ private struct RegulatorySourceObservationDetail: View {
                     LabeledContent("Система координат XY", value: version.frame.crs.isEmpty ? "Неизвестна" : version.frame.crs)
                     LabeledContent("Оси XY", value: version.frame.axes.isEmpty ? "Неизвестны" : version.frame.axes)
                     LabeledContent("Единицы XY", value: version.frame.xyUnits.isEmpty ? "Неизвестны" : MappingCoordinateText.xyUnit(version.frame.xyUnits))
-                    ForEach(version.cells.indices.dropFirst(), id: \.self) { column in
-                        if !version.cells[column].isEmpty {
-                            LabeledContent(column == 4 ? "Z, м" : RegulatoryDataWorkbook.columns[column],
-                                           value: version.cells[column])
-                        }
+                    LabeledContent("Z источника, м", value: version.cells[4].isEmpty ? "Не указана" : version.cells[4])
+                }
+                Section("Геологические данные · исходные значения") {
+                    sourceField(version, 5, "Литология (ROCK)")
+                    sourceField(version, 6, "Выветривание (A45)")
+                    sourceField(version, 7, "Обводнённость (JW)")
+                    sourceField(version, 8, "Категория прочности (A1)")
+                    sourceField(version, 9, "UCS, МПа")
+                    sourceField(version, 10, "RQD, %")
+                    sourceField(version, 11, "Системы трещин (JN)")
+                    sourceField(version, 12, "Шероховатость (JR)")
+                    sourceField(version, 13, "Заполнитель (JA)")
+                    sourceField(version, 14, "SD, м · сводное значение источника")
+                    sourceField(version, 15, "Раскрытие трещин (A43)")
+                    sourceField(version, 16, "Свойства трещин (JCON76)")
+                    sourceField(version, 17, "Длина трещин (A42)")
+                    sourceField(version, 18, "Разлом · угол падения")
+                    sourceField(version, 19, "Разлом · азимут падения")
+                    sourceField(version, 20, "Разлом · мощность, м")
+                    ForEach(0..<4, id: \.self) { index in
+                        sourceField(version, 21 + index * 2, "J\(index + 1) · угол падения")
+                        sourceField(version, 22 + index * 2, "J\(index + 1) · азимут (север источника не задан)")
                     }
+                    if !version.cells[29].isEmpty {
+                        LabeledContent("GSI в Excel · формульное поле", value: version.cells[29])
+                        Text("Сохранено как исходная ячейка; не считается независимо измеренным значением.").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Text("Поля доступны только для просмотра. Неизвестные единицы, дата или привязка не восполняются автоматически.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
         }.navigationTitle("Исходное наблюдение")
+    }
+
+    @ViewBuilder private func sourceField(_ version: RegulatorySourceObservation.Version, _ index: Int, _ label: String) -> some View {
+        if !version.cells[index].isEmpty { LabeledContent(label, value: version.cells[index]) }
     }
 }

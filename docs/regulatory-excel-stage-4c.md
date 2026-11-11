@@ -345,3 +345,36 @@ frame metadata, duplicate input, dataset scope, stable reassignment,
 revision replay and transaction rollback. Xcode 26.6 successfully built
 the production preview and source journal for the generic iOS Simulator. Physical-device
 verification and full regression were outside this run.
+
+## Final integration update
+
+Source-backed rows are also listed in the main mapping journal. They retain
+their source ID, raw A:AD cells, confirmed coordinate frame, destination and
+append-only versions; absent field dates, pickets, or excavation assignments
+remain unknown. Context assignment is available from the same journal screen.
+They are not coerced into native observations with invented field metadata.
+
+The regulatory Data export appends selected source-backed A:AD rows after
+native observations without interpreting or rewriting their values. The
+existing hidden identity manifest continues to bind native rows; source rows
+remain identifiable by their source IDs in column A. DXF source markers are
+shown only for the matching assigned horizon when the confirmed source frame
+matches the DXF CRS, axes, XY units, and horizon datum.
+
+Focused regression results for this integration: the source batch test passed
+for two verified inclined DXF horizons, and the local production workbook test
+passed. The latter parsed 11 rows, saved 11 stable IDs with unresolved
+locations, replayed the source with 11 unchanged records, exported the
+source-only Data!A:AD workbook with `_FieldForge` source identity bindings, and
+reimported it with zero new rows and 11 unchanged records. The production test
+took about 53 seconds on this machine.
+
+Remaining limits: imported geological measurements are presented read-only
+with explicit source labels; editing supported geological measurements with
+append-only local edits and conflict handling is not implemented. Source-only
+exports round-trip through the source importer. A workbook mixing native
+mapping rows and source-backed rows is explicitly blocked on import until one
+preview can approve both record types atomically. Supplementary production
+columns AE:CP are not copied into a generated export. No actual project DXF or
+physical-device test was available; simulator compilation is reported
+separately.

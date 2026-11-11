@@ -466,6 +466,7 @@ import XCTest
             expected[table.name] = ["columns": table.columns, "rows": table.rows.map { row in row.map { value -> [String: Any] in
                 switch value {
                 case .text(let text): return ["type": "s", "value": text]
+                case .rawNumber(let raw): return ["type": "n", "value": Double(raw) ?? 0]
                 case .number(let value):
                     guard let value else { return ["type": "blank"] }
                     let encoded = try! MappingXLSXExport.numericText(value)

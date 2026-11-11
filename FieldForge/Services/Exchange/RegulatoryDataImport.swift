@@ -65,6 +65,23 @@ enum RegulatoryDataImport {
         let documentID = workbook.documentID ?? manifest?.workbookID
         let source = MappingImportSource(kind: .regulatoryData,
             documentID: documentID?.uuidString ?? ExchangeBaseline.hash(bytes), bytes: bytes)
+        if let bindings = manifest?.sourceBindings, !bindings.isEmpty {
+            let byRow = Dictionary(uniqueKeysWithValues: bindings.map { ($0.row, $0) })
+            let selected = workbook.rows.filter { byRow[$0.number] != nil }
+            let sourceOnly = manifest?.bindings.isEmpty == true && selected.count == workbook.rows.count &&
+                selected.allSatisfy { byRow[$0.number]?.sourceID == $0.values[0] }
+            guard sourceOnly, let first = bindings.first,
+                  bindings.allSatisfy({ $0.projectID == first.projectID && $0.dataset == first.dataset && $0.frame == first.frame }) else {
+                return .init(source: source, rowsProcessed: workbook.rows.count, workbookBlocked: true,
+                    workbookBlockReasons: ["Книга содержит одновременно исходные строки и обычные наблюдения либо изменённые идентификаторы источников. Разделите типы строк и повторите экспорт."],
+                    worksheetRowsScanned: workbook.worksheetRowCount, workbookID: documentID ?? UUID(),
+                    generationID: committed.generationID, exportedAt: manifest?.exportedAt ?? .distantPast,
+                    projectName: "", metadata: [:], records: [], proposalDigest: source.fingerprint)
+            }
+            let input = RegulatorySourceImport.Input(rows: selected, workbookSHA256: source.fingerprint,
+                suggestedProjectID: first.projectID, suggestedDataset: first.dataset, suggestedFrame: first.frame)
+            return productionPreview(workbook, source: source, committed: committed, input: input)
+        }
         if workbook.productionLayout {
             return productionPreview(workbook, source: source, committed: committed)
         }
@@ -201,7 +218,8 @@ enum RegulatoryDataImport {
     }
 
     private static func productionPreview(_ workbook: RegulatoryDataWorkbook.Read, source: MappingImportSource,
-                                          committed: MappingCommittedSnapshot) -> Preview {
+                                          committed: MappingCommittedSnapshot,
+                                          input: RegulatorySourceImport.Input? = nil) -> Preview {
         let reasons = [
             "Data!A3:A4 «Место картирования» (ID) содержит идентификаторы источника. Они сохраняются отдельно от выработки.",
             "Data!B3:B4 «Пикетаж» (PK) может быть пустым. Укажите метаданные координат C:E для всего набора.",
@@ -210,7 +228,7 @@ enum RegulatoryDataImport {
         ]
         return Preview(source: source, rowsProcessed: workbook.rows.count, workbookBlocked: true,
                        workbookBlockReasons: reasons, worksheetRowsScanned: workbook.worksheetRowCount,
-                       productionInput: .init(rows: workbook.rows, workbookSHA256: source.fingerprint),
+                       productionInput: input ?? .init(rows: workbook.rows, workbookSHA256: source.fingerprint),
                        workbookID: workbook.documentID ?? UUID(), generationID: committed.generationID,
                        exportedAt: .distantPast, projectName: "", metadata: [:], records: [],
                        proposalDigest: source.fingerprint)
@@ -577,7 +595,21 @@ struct RegulatorySourceObservation: Codable, Equatable, Identifiable, Sendable {
 
         var xyz: [Double?] { cells[2...4].map { Double($0) } }
         func sameEvidence(as other: Self) -> Bool {
-            cells == other.cells && frame == other.frame
+            guard cells.count == other.cells.count, frame == other.frame else { return false }
+            return cells.indices.allSatisfy { index in
+                if (2...4).contains(index) { return Self.sameCoordinate(cells[index], other.cells[index]) }
+                return cells[index] == other.cells[index]
+            }
+        }
+
+        private static func sameCoordinate(_ lhs: String, _ rhs: String) -> Bool {
+            if lhs == rhs { return true }
+            if let left = RegulatoryDataWorkbook.sourceNumber(lhs), let right = RegulatoryDataWorkbook.sourceNumber(rhs), left == right {
+                return true
+            }
+            guard let left = Decimal(string: lhs, locale: Locale(identifier: "en_US_POSIX")),
+                  let right = Decimal(string: rhs, locale: Locale(identifier: "en_US_POSIX")) else { return false }
+            return left == right
         }
     }
 
@@ -649,6 +681,9 @@ enum RegulatorySourceImport {
     struct Input: Sendable {
         let rows: [RegulatoryDataWorkbook.Row]
         let workbookSHA256: String
+        var suggestedProjectID: UUID? = nil
+        var suggestedDataset: String? = nil
+        var suggestedFrame: Frame? = nil
     }
 
     struct Review: Sendable {

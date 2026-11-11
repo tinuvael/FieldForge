@@ -54,9 +54,10 @@ enum RegulatoryDataWorkbook {
             self.productionLayout = productionLayout
             worksheetRowCount = workbook.dataSheetRowCount
             documentID = workbook.documentID
-            manifest = try workbook.sheets[RegulatoryDataManifest.sheetName].map {
+            let parsedManifest = try workbook.sheets[RegulatoryDataManifest.sheetName].map {
                 try RegulatoryDataManifest.read(sheet: $0, documentID: workbook.documentID, rowLimit: limits.rows)
             }
+            manifest = parsedManifest
             let data = workbook.dataRows
             var headerIssues: [String] = []
             for (offset, header) in EnterpriseGeotechnicalWorkbook.headerRows.enumerated() {
@@ -78,6 +79,7 @@ enum RegulatoryDataWorkbook {
             rows = try data.keys.filter { $0 > 4 }.sorted().compactMap { number -> Row? in
                 try Task.checkCancellation()
                 let cells = data[number] ?? [:]
+                let sourceBoundRow = parsedManifest?.sourceBindings?.contains { $0.row == number } == true
                 // Empty and all-dash report placeholders do not represent observations.
                 if cells.allSatisfy({ $0.key < columns.count && $0.value == .text("-") }) { return nil }
                 var issues: [String] = []
@@ -93,7 +95,8 @@ enum RegulatoryDataWorkbook {
                     case .text("-"): break
                     case .text(let value) where isText || editable.contains(column) && value == ExchangeObservationProposal.clear:
                         values[column] = value
-                    case .text(let raw) where productionLayout && (2...4).contains(column),
+                    case .text(let raw) where (productionLayout || sourceBoundRow) && (2...4).contains(column),
+                         .number(let raw) where (productionLayout || sourceBoundRow) && (2...4).contains(column),
                          .number(let raw) where productionLayout && (!isText || column == 5):
                         // Retain Excel's exact decimal spelling as source evidence.
                         // Spatial comparisons use the finite numeric interpretation.
@@ -143,6 +146,7 @@ enum RegulatoryDataWorkbook {
         row.map {
             switch $0 {
             case .text(let value): value
+            case .rawNumber(let value): value
             case .number(let value): value.map(decimal) ?? ""
             case .integer(let value): value.map(String.init) ?? ""
             case .empty, .timestamp: ""
