@@ -75,6 +75,7 @@ extension MappingJournal {
             let byID = Dictionary(current.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
             return old.allSatisfy { byID[$0.id] == $0 }
         }
+        guard RegulatorySourceImport.preserves(previous: previous, in: self) else { return false }
         return retains(previous.observations, observations) && retains(previous.measurements, measurements) &&
             retains(previous.revisions, revisions) && retains(previous.photos, photos) &&
             retains(previous.photoAttachments, photoAttachments) && retains(previous.photoRevisions, photoRevisions)
@@ -208,6 +209,9 @@ struct MappingWorkflow {
         // Keep legacy names and identities. Historical observations retain their frozen Z and datum.
         next.horizons[i].elevationMeters = try ElevationInput.meters(elevation)
         next.horizons[i].elevationDatum = try validName(datum)
+        if next.horizons[i].regulatoryElevationRange?.datum != next.horizons[i].elevationDatum {
+            next.horizons[i].regulatoryElevationRange = nil
+        }
         try commit(next)
         if context.horizonID == id { draft.suggestElevation(selectedHorizon) }
     }

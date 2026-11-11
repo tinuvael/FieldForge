@@ -14,6 +14,7 @@ struct ExchangeWorkbook: Sendable {
     let dataSheetRowCount: Int
     let productionLayout: Bool
     let documentID: UUID?
+    static let unsupportedFormula = "Формулы и их сохранённые результаты не поддерживаются."
     static let spreadsheet = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
     static let relationships = "http://schemas.openxmlformats.org/package/2006/relationships"
     static let documentRelationships = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/"
@@ -355,7 +356,7 @@ struct ExchangeWorkbook: Sendable {
                 if regulatoryData {
                     if name == "f", currentColumn != nil, ancestors.last == "c" {
                         hasFormula = true
-                        cellIssue = "Формулы и их сохранённые результаты не поддерживаются."
+                        cellIssue = Self.unsupportedFormula
                         return
                     }
                     if name == "mergeCells", ancestors == ["worksheet"] { return }

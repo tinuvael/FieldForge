@@ -127,7 +127,7 @@ enum OfflineRestore {
         }
         let journal = try JSONDecoder().decode(MappingJournal.self, from: Data(contentsOf: destination(OfflineBackup.mappingPath, root: root, installed: installed)))
         try journal.validate()
-        guard journal.projects.count == manifest.projectCount, journal.observations.count == manifest.observationCount,
+        guard journal.projects.count == manifest.projectCount, journal.totalObservationCount == manifest.observationCount,
               try BackupManifest.attachments(in: journal) == manifest.attachments else { throw StorageError.invalidRecord }
         if manifest.independentJournalPresent {
             let records = try FileMeasurementStore.inspectBackup(Data(contentsOf: destination(OfflineBackup.measurementPath, root: root, installed: installed)))

@@ -65,6 +65,14 @@ extension MappingJournal {
         if plans.contains(where: { $0.id == id && $0.frameConfirmation != nil || $0.frameConfirmation?.previousPlanID == id }) {
             result.append("Подтверждённая связь систем координат ревизий")
         }
+        if (regulatorySourceObservations ?? []).contains(where: { observation in
+            observation.versions.contains { version in
+                if case .geometry(let planID, _, _) = version.resolution { return planID == id }
+                return false
+            }
+        }) {
+            result.append("Привязка исходных наблюдений Excel к геометрии")
+        }
         // Qualified matching metadata can establish compatibility without an explicit edge.
         if let plan = plans.first(where: { $0.id == id && !$0.isDeleted }), plans.contains(where: {
             $0.id != id && !$0.isDeleted && PlanCoordinateCompatibility.compatible(plan, $0, plans: plans)

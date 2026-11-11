@@ -1183,12 +1183,13 @@ extension MappingExchangePreviewTests {
         XCTAssertFalse(preview.workbookBlocked)
     }
 
-    func testProductionLayoutShowsBlockedCandidateAndExclusionsBeforeAnyWrite() throws {
+    func testProductionLayoutExposesSourceCandidateAndExclusionsBeforeAnyWrite() throws {
         let journal = try fixture()
         let book = try regulatoryExport(journal, identity: false)
         let production = try editData(book) { xml in
             var result = try cells(xml, ["B5": #" t="inlineStr"><is><t>-</t></is></c>"#,
-                                         "AD5": #" t="str"><f>1+1</f><v>-</v></c>"#])
+                                         "AD5": #" t="str"><f>1+1</f><v>-</v></c>"#,
+                                         "C5": #"><v>540000.10000000001</v></c>"#])
             let headers = [
                 (1, #"<c r="BI1" t="inlineStr"><is><t>Ошибки в пополнении БД по картированию выработок</t></is></c>"#),
                 (3, #"<c r="AI3" t="inlineStr"><is><t>№ точки наблюдения</t></is></c><c r="AJ3" t="inlineStr"><is><t>Примечание</t></is></c><c r="CP3" t="inlineStr"><is><t>Проверка угла и азимута 4 системы</t></is></c>"#),
@@ -1208,8 +1209,9 @@ extension MappingExchangePreviewTests {
         XCTAssertTrue(preview.workbookBlocked)
         XCTAssertEqual(preview.worksheetRowsScanned, 6)
         XCTAssertEqual(preview.rowsProcessed, 1)
-        XCTAssertEqual(preview.count(.unsupported), 1)
-        XCTAssertEqual(preview.records.first?.location, "Data!A5:AD5")
+        XCTAssertEqual(preview.productionInput?.rows.first?.number, 5)
+        XCTAssertEqual(preview.productionInput?.rows.first?.values[2], "540000.10000000001")
+        XCTAssertEqual(preview.productionInput?.rows.first?.issues, [])
         XCTAssertFalse(preview.records.contains(where: \.canApply))
         XCTAssertTrue(preview.workbookBlockReasons.contains { $0.contains("Data!A3:A4") })
         XCTAssertTrue(preview.workbookBlockReasons.contains { $0.contains("AE:AH") && $0.contains("BI:CP") })
@@ -1865,5 +1867,127 @@ extension MappingExchangePreviewTests {
         let changed = try editData(sorted) { try cells($0, ["I6": "><v>12</v></c>"]) }
         _ = try await publish(changed, using: review, snapshot: latest)
         XCTAssertEqual(screen.state.selection.accepted, [second.id])
+    }
+}
+
+extension MappingExchangePreviewTests {
+    private func sourceRow(_ source: String, row: Int, x: Double = 2.5, y: Double = 1, z: Double) -> RegulatoryDataWorkbook.Row {
+        var values = Array(repeating: "", count: RegulatoryDataWorkbook.columns.count)
+        values[0] = source
+        values[2] = String(x)
+        values[3] = String(y)
+        values[4] = String(z)
+        return .init(number: row, values: values, issues: [])
+    }
+
+    func testSourceBatchReusesVerifiedInclinedDXFAndPreservesUnassignedIdentity() throws {
+        var journal = MappingJournal()
+        let project = MappingProject(id: id(1), name: "Project")
+        let first = MappingHorizon(id: id(2), projectID: project.id, name: "Upper", elevationMeters: 400, elevationDatum: "survey datum")
+        let second = MappingHorizon(id: id(3), projectID: project.id, name: "Lower", elevationMeters: 300, elevationDatum: "survey datum")
+        let upper = MappingExcavation(id: id(4), projectID: project.id, name: "A", horizonIDs: [first.id])
+        let lower = MappingExcavation(id: id(5), projectID: project.id, name: "B", horizonIDs: [second.id])
+        journal.projects = [project]
+        journal.horizons = [first, second]
+        journal.excavations = [upper, lower]
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("FF82-plans-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let files = ManagedPlanStore(root: root)
+        func plan(horizon: MappingHorizon, from: Double, through: Double) throws -> MappingPlanReference {
+            let line = "0\nLINE\n10\n0\n20\n0\n30\n\(from)\n11\n10\n21\n0\n31\n\(through)\n"
+            return try files.stage(data: DXFFixtures.drawing(line, units: 6), filename: "survey.dxf", horizonID: horizon.id,
+                version: horizon.name, units: .meters, crs: "mine grid", axes: "WCS XYZ")
+        }
+        let firstPlan = try plan(horizon: first, from: 390, through: 430)
+        let secondPlan = try plan(horizon: second, from: 290, through: 330)
+        journal.plans = [firstPlan, secondPlan]
+        let snapshot = MappingCommittedSnapshot(journal)
+        let frame = RegulatorySourceImport.Frame(crs: "mine grid", axes: "WCS XYZ", xyUnits: "m", verticalDatum: "survey datum")
+        var review = RegulatorySourceImport.Review(projectID: project.id, dataset: "survey", frame: frame, frameConfirmed: true)
+        review.geometryRules = [
+            firstPlan.id: .init(horizonID: first.id, excavationID: upper.id, frame: frame, maximumXYMeters: 1.5, maximumZMeters: 0),
+            secondPlan.id: .init(horizonID: second.id, excavationID: lower.id, frame: frame, maximumXYMeters: 1.5, maximumZMeters: 0)
+        ]
+        review.ranges = [
+            first.id: .init(minimum: 280, maximum: 440, datum: frame.verticalDatum),
+            second.id: .init(minimum: 280, maximum: 440, datum: frame.verticalDatum)
+        ]
+        let rows = [sourceRow("P1", row: 5, z: 400), sourceRow("P2", row: 6, x: 7.5, z: 320),
+                    sourceRow("P3", row: 7, z: 350)]
+        let input = RegulatorySourceImport.Input(rows: rows, workbookSHA256: String(repeating: "a", count: 64))
+        let plan = try RegulatorySourceImport.prepare(input, review: review, snapshot: snapshot, plans: files, now: time)
+        XCTAssertEqual(plan.count(.new), 3)
+        XCTAssertEqual(plan.changes.map(\.destination.horizonID), [first.id, second.id, nil])
+        XCTAssertEqual(plan.changes.map(\.destination.excavationID), [upper.id, lower.id, nil])
+        var override = review
+        override.assignments["P1"] = .init(projectID: project.id, horizonID: second.id)
+        let corrected = try RegulatorySourceImport.prepare(input, review: override, snapshot: snapshot, plans: files)
+        XCTAssertEqual(corrected.changes.first?.destination.horizonID, second.id)
+        XCTAssertNil(corrected.changes.first?.destination.excavationID)
+        let saved = try RegulatorySourceImport.applying(plan, to: snapshot)
+        try saved.validate()
+        let original = try XCTUnwrap(saved.regulatorySourceObservations)
+        XCTAssertEqual(original.map { $0.latest?.xyz[2] }, [400, 320, 350])
+        XCTAssertTrue(original.allSatisfy { $0.latest?.cells[1].isEmpty == true })
+        let reassigned = try RegulatorySourceImport.assigning([original[2].id],
+            destination: .init(projectID: project.id, horizonID: second.id), journal: saved, now: time.addingTimeInterval(1))
+        try reassigned.validate()
+        let updated = try XCTUnwrap(reassigned.regulatorySourceObservations)
+        XCTAssertEqual(updated.map(\.id), original.map(\.id))
+        XCTAssertEqual(updated[2].versions.first, original[2].latest)
+        XCTAssertEqual(updated[2].latest?.destination.horizonID, second.id)
+        let replay = try RegulatorySourceImport.prepare(input, review: review, snapshot: .init(reassigned), plans: files)
+        XCTAssertEqual(replay.count(.unchanged), 3)
+        XCTAssertFalse(replay.canApply)
+        var anotherDataset = review
+        anotherDataset.dataset = "separate survey"
+        XCTAssertEqual(try RegulatorySourceImport.prepare(input, review: anotherDataset, snapshot: .init(reassigned), plans: files).count(.new), 3)
+
+
+        let edit = RegulatorySourceImport.Input(rows: [rows[0], rows[1], sourceRow("P3", row: 12, z: 351)],
+                                                workbookSHA256: String(repeating: "b", count: 64))
+        let beforeEdit = MappingCommittedSnapshot(reassigned)
+        let edited = try RegulatorySourceImport.prepare(edit, review: review, snapshot: beforeEdit, plans: files)
+        XCTAssertEqual(edited.count(.correction), 1)
+        let revised = try RegulatorySourceImport.applying(edited, to: beforeEdit)
+        XCTAssertEqual(revised.regulatorySourceObservations?.last?.id, original[2].id)
+        XCTAssertEqual(revised.regulatorySourceObservations?.last?.latest?.xyz[2], 351)
+        XCTAssertEqual(revised.regulatorySourceObservations?.last?.latest?.destination.horizonID, second.id)
+        XCTAssertEqual(try RegulatorySourceImport.prepare(input, review: review, snapshot: .init(revised), plans: files).count(.conflict), 1)
+    }
+
+    func testSourceBatchRequiresMetadataConfirmationAndRollsBackAsOneTransaction() async throws {
+        let journal = try fixture()
+        let (root, owner, snapshot) = try await makeOwner(journal)
+        let workflow = try MappingWorkflow(store: FileMappingStore(url: root.appendingPathComponent("mapping.json")))
+        let source = sourceRow("source-1", row: 5, z: 400.1234)
+        let input = RegulatorySourceImport.Input(rows: [source], workbookSHA256: String(repeating: "c", count: 64))
+        var review = RegulatorySourceImport.Review(projectID: id(1), dataset: "survey")
+        XCTAssertThrowsError(try RegulatorySourceImport.prepare(input, review: review, snapshot: snapshot))
+        review.frameConfirmed = true
+        let duplicate = RegulatorySourceImport.Input(rows: [source, sourceRow("source-1", row: 6, z: 402)], workbookSHA256: input.workbookSHA256)
+        let invalid = try RegulatorySourceImport.prepare(duplicate, review: review, snapshot: snapshot)
+        XCTAssertFalse(invalid.canApply)
+        XCTAssertThrowsError(try RegulatorySourceImport.applying(invalid, to: snapshot))
+        let plan = try RegulatorySourceImport.prepare(input, review: review, snapshot: snapshot)
+        XCTAssertEqual(plan.count(.new), 1)
+        XCTAssertNil(plan.changes.first?.destination.horizonID)
+        do {
+            let _: (MappingWorkflow.Snapshot, Bool) = try await owner.transaction(snapshot: workflow.snapshot) { workflow in
+                try workflow.commit(RegulatorySourceImport.applying(plan, to: workflow.committed))
+                throw CancellationError()
+            }
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {}
+        let after = try await owner.exchangeSnapshot()
+        XCTAssertEqual(after.journal, journal)
+        XCTAssertEqual(try FileMappingStore(url: root.appendingPathComponent("mapping.json")).load(), journal)
+        let (saved, _) = try await owner.transaction(snapshot: workflow.snapshot) { workflow in
+            try workflow.commit(RegulatorySourceImport.applying(plan, to: workflow.committed))
+        }
+        let reopened = try FileMappingStore(url: root.appendingPathComponent("mapping.json")).load()
+        XCTAssertEqual(reopened, saved.journal)
+        XCTAssertEqual(reopened.regulatorySourceObservations?.first?.latest?.xyz[2], 400.1234)
+        XCTAssertThrowsError(try RegulatorySourceImport.applying(plan, to: saved.committed))
     }
 }

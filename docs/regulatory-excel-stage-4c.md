@@ -107,28 +107,77 @@ content elsewhere. The `kart` sheet is a formula projection in a different
 column order. Its NAME and PK columns reference Data A and B.
 
 The reader recognizes the extended layout using the four A:AD header rows
-and the additional headers at AE4, AH4, AI3, AJ3, BI1 and CP3. It produces a
-read-only preview listing the candidate rows and the reasons confirmation
-is blocked. Other extended layouts are rejected. The ordinary
-four-header A:AD contract still goes through reconciliation and approval.
+and the additional headers at AE4, AH4, AI3, AJ3, BI1 and CP3. It reports
+supplementary columns and opens batch reconciliation for these source
+records. The ordinary four-header A:AD contract uses its existing
+reconciliation and approval workflow.
 
 | Source cells / labels | Verified structure and treatment |
 | --- | --- |
-| A3 «Место картирования», A4 `ID`, A5:A15 | The owner confirmed these are source observation IDs. A:AD import expects an excavation name at A. Each source ID needs an explicit excavation and picket mapping before any match or creation. |
-| B3 «Пикетаж», B4 `PK`, B5:B15 | All 11 candidates contain `-`. Confirm picket, convention and chainage context for each source row. |
-| C3 «Координаты точек замеров», C4:E4 `X`, `Y`, `Z` | Six candidate triples use Excel text and five use numeric cells. Confirm units, axes, coordinate frame and horizon before assigning any DXF revision. The row numbers and coordinates establish no identity. |
-| F4:N4, P4:R4, S4:AC4 | Headers match the regulatory lithology, input categories, tectonic and joint fields. Any eventual import uses the existing code and category validation and explicit azimuth north reference. |
-| O3 «Расстояние между трещинами, м», O4 `SD` | Ten source rows have a spacing summary. The summary cannot supply original spacing per joint set. |
-| AD3:AD4 `GSI` and AE4:AH4 `Q'`, `Q`, `RMR89`, `RMR76` | Source formulas and cached assessments remain in the original workbook. Six candidate rows have numeric GSI caches. A cache provides no saved assessment provenance. |
-| AI3 «№ точки наблюдения» and AJ3 «Примечание» | AI is populated even on template rows. Its relationship to persistent observation identity is unverified. AJ contains dash placeholders for the 11 candidates. Both columns remain in the source. |
+| A3 «Место картирования», A4 `ID`, A5:A15 | The owner confirmed these are source observation IDs. The source ID is stored independently of the FieldForge observation UUID and any destination. |
+| B3 «Пикетаж», B4 `PK`, B5:B15 | All 11 candidates contain `-`. Imported records may have an empty picket. A populated text picket is retained as supplied. |
+| C3 «Координаты точек замеров», C4:E4 `X`, `Y`, `Z` | Six candidate triples use Excel text and five use numeric cells. Both preserve the source decimal spelling. Spatial comparisons use finite binary64 values, and Z remains absolute elevation in metres. |
+| F4:N4, P4:R4, S4:AC4 | These source inputs are available in the source record detail. Their retention does not validate the source catalogue, rating method or azimuth north reference. |
+| O3 «Расстояние между трещинами, м», O4 `SD` | Ten source rows have a spacing summary. It is stored as a source field. Original spacing per joint set remains unknown. |
+| AD3:AD4 `GSI` and AE4:AH4 `Q'`, `Q`, `RMR89`, `RMR76` | Formula-derived GSI and the supplementary rating columns remain in the source workbook. Their caches do not supply assessment provenance. |
+| AI3 «№ точки наблюдения» and AJ3 «Примечание» | AI is populated even on template rows. Its relationship to persistent identity is unverified. AJ contains dash placeholders for the 11 candidates. Both columns remain in the source. |
 | AK4:BB4 | Auxiliary ratings, inputs and calculations remain in the source. `AT4 RMR76` includes a literal value among formulas, `AW4 благоприятность трещин` contains literal inputs with unconfirmed scoring provenance, and BB4 has no label. |
 | BI1 «Ошибки в пополнении БД по картированию выработок» through CP | Worksheet validation formulas, booleans and cached errors remain in the source. Conditional formats are parsed as display markup. |
 
-To prepare a writable import, provide a reviewed mapping from each source
-observation ID to project, horizon, excavation and picket, including the
-existing observation UUID when known. Confirm the frame and units for DXF
-placement and the azimuth north reference. Source assessments, excluded
-fields and their provenance stay available in the original workbook.
+### Batch import and location resolution
+
+Choose the project and a stable dataset name. Use the same project and
+dataset for later editions of the source, even when the file name or row
+order changes. The scoped key is project UUID, dataset name and exact
+source ID. Confirm XY CRS, axes, units and vertical datum once. Explicitly
+unknown metadata allows import and leaves frame-dependent rules inactive.
+The workbook is read-only and its SHA-256 and source row are recorded with
+each new version. Keep the original XLSX with the supplementary columns.
+
+Resolution uses existing explicit source assignments first. For compatible
+DXF revisions, confirm the plan's actual datum and its association with the
+horizon and, where known, the excavation. Set two project-specific limits
+in metres: maximum horizontal distance to a supported WCS segment and
+maximum difference from the local segment elevation. Both limits require
+explicit values. The reader verifies the managed DXF's hash, CRS, axes,
+units and datum. It reuses the [existing WCS projection and elevation
+index](p2-dxf.md) to compare the imported Z with the segment elevation at
+the observation's XY. Inclined segments therefore use the local elevation.
+Multiple eligible horizons leave the destination unresolved. A unique
+horizon with competing excavation associations leaves excavation blank.
+The import neither converts the coordinate frame nor alters XYZ.
+
+When no verified DXF corresponds, a unique configured elevation range in
+the confirmed datum can supply the horizon. An overlapping range leaves
+the destination unresolved. The profile supplies no verified new horizon
+identifier. A user can create a named horizon through the project editor
+and assign a source group later. Coordinate proximity alone supplies no
+excavation identity.
+
+The preview shows new, matched, revised, conflicting and unresolved
+records and the excluded source fields. Confirmation rechecks the XLSX
+hash and the journal generation. The production batch uses one atomic
+journal save. Duplicate source IDs, incompatible cells, stale previews
+and conflicts block the batch before storage. Replayed evidence is
+unchanged, edited evidence appends a version to the same UUID, and
+resubmitting an older differing version reports a conflict. Changing
+context from **Журнал → Наблюдения из Excel** also appends a version
+without changing the UUID. Use the preview's horizon filter or selected rows for a bulk correction
+before confirmation. In the journal, filter by dataset or horizon and
+select a group to assign it together.
+
+Schema 8 stores these source-backed observations in an optional field
+of the same project journal. Existing schema-8 files and backups decode
+with an empty source collection. New backups include the source records
+and count them in the manifest. The source journal shows retained input
+fields and assignment history. Promotion to field-capture observations,
+linked photography, plan point rendering and export of source records
+through the established A:AD assessment projection require further
+integration. The current journal uses whole-state JSON validation and
+atomic replacement. XLSX decoding is streamed and input limits remain
+bounded. Reconciliation and commit hold a bounded in-memory batch and
+journal snapshot, with phase-level progress and cancellation before
+storage admission.
 
 ## Exact A:AD column policy
 
@@ -271,10 +320,28 @@ budgets, and refusal of a blocked preview before storage. Supported A:AD
 imports still verify explicit DXF context, 20 creations, five revisions,
 and duplicate-free replay through the durable ledger.
 
-The production workbook was previewed with an empty in-memory journal.
-The parser read 19,998 worksheet rows and the preview identified 11
-candidate observations at rows 5–15. It reported zero matched, new, or
-conflicting records because identity validation stopped reconciliation.
-All 11 candidates were blocked and batch creation was refused. The
-macOS debug probe used approximately 63 MiB of peak resident memory.
-Full regression and physical-device verification were outside this run.
+The initial streaming probe read 19,998 worksheet rows and found 11
+candidates at rows 5–15. That version refused writes until a source-backed
+observation type was available. Its macOS debug probe used about 63 MiB of
+peak resident memory.
+
+
+The automatic import probe reconciled the original production XLSX with
+an empty in-memory project. It scanned 19,998 worksheet rows, parsed 11
+source observations, proposed and accepted all 11, and reported zero
+invalid rows, conflicts or initial matches. All 11 UUIDs and source IDs
+were distinct. All destinations remained unresolved because the probe had
+no verified project geometry or elevation ranges. Every picket remained
+empty. Independent ZIP/XML extraction matched the exact decimal spelling
+of all 11 saved Z cells. Replaying the input matched all 11 records as
+unchanged and proposed zero new observations. The journal was serialized,
+decoded and validated in memory. Peak resident memory in the macOS debug
+probe was approximately 63.3 MiB.
+
+131 focused SwiftPM tests passed and one opt-in fixture was skipped.
+The tests cover two explicitly verified DXF excavations on
+different horizons, inclined segment elevation, ambiguous ranges, unknown
+frame metadata, duplicate input, dataset scope, stable reassignment,
+revision replay and transaction rollback. Xcode 26.6 successfully built
+the production preview and source journal for the generic iOS Simulator. Physical-device
+verification and full regression were outside this run.

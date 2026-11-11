@@ -49,6 +49,7 @@ struct MappingExchangePreview: Sendable {
     var workbookBlocked = false
     var workbookBlockReasons: [String] = []
     var worksheetRowsScanned: Int?
+    var productionInput: RegulatorySourceImport.Input?
     let workbookID: UUID
     let generationID: UUID
     let exportedAt: Date

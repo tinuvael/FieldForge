@@ -203,20 +203,16 @@ enum RegulatoryDataImport {
     private static func productionPreview(_ workbook: RegulatoryDataWorkbook.Read, source: MappingImportSource,
                                           committed: MappingCommittedSnapshot) -> Preview {
         let reasons = [
-            "Data!A3:A4 «Место картирования» (ID) содержит идентификаторы источника. Для импорта нужна проверенная привязка каждой строки к выработке.",
-            "Data!B3:B4 «Пикетаж» (PK) требует подтверждённого пикета. Для координат C:E и азимутов требуется подтверждение системы координат и направления севера.",
+            "Data!A3:A4 «Место картирования» (ID) содержит идентификаторы источника. Они сохраняются отдельно от выработки.",
+            "Data!B3:B4 «Пикетаж» (PK) может быть пустым. Укажите метаданные координат C:E для всего набора.",
             "Data!AD (GSI) содержит расчётные формулы. Data!O (SD) содержит сводное расстояние между трещинами. Эти поля требуют исходных данных для записи в журнал.",
             "В исходной книге остаются AE:AH (Q′, Q, RMR89, RMR76), AI (номер точки), AJ (примечание), AK:BB (вспомогательные оценки и входы), BI:CP (формулы проверки)."
         ]
-        let records = workbook.rows.map { row in
-            Record(id: "Data/\(row.number)", classification: .unsupported,
-                   reason: (["Требуется привязка исходного ID к выработке и пикету."] + row.issues).joined(separator: "\n"),
-                   changes: [], proposed: nil, location: "Data!A\(row.number):AD\(row.number)")
-        }
         return Preview(source: source, rowsProcessed: workbook.rows.count, workbookBlocked: true,
                        workbookBlockReasons: reasons, worksheetRowsScanned: workbook.worksheetRowCount,
+                       productionInput: .init(rows: workbook.rows, workbookSHA256: source.fingerprint),
                        workbookID: workbook.documentID ?? UUID(), generationID: committed.generationID,
-                       exportedAt: .distantPast, projectName: "", metadata: [:], records: records,
+                       exportedAt: .distantPast, projectName: "", metadata: [:], records: [],
                        proposalDigest: source.fingerprint)
     }
 
@@ -557,5 +553,360 @@ enum RegulatoryDataImport {
             proposal.observedAt == point.observedAt && proposal.observedTimeZoneID == point.observedTimeZoneID &&
             proposal.observedUTCOffsetSeconds == point.observedUTCOffsetSeconds && proposal.notes == point.notes &&
             proposal.chainageOriginAndDirection == point.chainageOriginAndDirection && proposal.picketConvention == point.picketConvention
+    }
+}
+
+/// Source-backed observations live in the mapping journal. Location is optional
+/// and versioned independently of source identity and field evidence.
+struct RegulatorySourceObservation: Codable, Equatable, Identifiable, Sendable {
+    struct Key: Codable, Hashable, Sendable {
+        let projectID: UUID
+        let dataset: String
+        let sourceID: String
+    }
+
+    struct Version: Codable, Equatable, Sendable {
+        let workbookSHA256: String
+        let sourceRow: Int
+        let cells: [String]
+        let frame: RegulatorySourceImport.Frame
+        var destination: MappingContext
+        var explicitlyAssigned: Bool
+        var resolution: RegulatorySourceImport.Resolution?
+        var savedAt: Date
+
+        var xyz: [Double?] { cells[2...4].map { Double($0) } }
+        func sameEvidence(as other: Self) -> Bool {
+            cells == other.cells && frame == other.frame
+        }
+    }
+
+    let id: UUID
+    let key: Key
+    var versions: [Version]
+    var latest: Version? { versions.last }
+}
+
+enum RegulatorySourceImport {
+    struct Frame: Codable, Equatable, Sendable {
+        var crs = ""
+        var axes = ""
+        var xyUnits = ""
+        var verticalDatum = ""
+
+        var valid: Bool {
+            [crs, axes, verticalDatum].allSatisfy { $0.utf8.count <= 256 } &&
+                ["", "m", "mm", "drawing"].contains(xyUnits)
+        }
+    }
+
+    struct ElevationRange: Codable, Equatable, Sendable {
+        let minimum: Double
+        let maximum: Double
+        let datum: String
+
+        var valid: Bool {
+            minimum.isFinite && maximum.isFinite && minimum <= maximum &&
+                PlanCoordinateCompatibility.known(datum) != nil && datum.utf8.count <= 256
+        }
+
+        func contains(_ z: Double) -> Bool { minimum <= z && z <= maximum }
+    }
+
+    struct GeometryRule: Codable, Equatable, Sendable {
+        let horizonID: UUID
+        let excavationID: UUID?
+        let frame: Frame
+        let maximumXYMeters: Double
+        let maximumZMeters: Double
+
+        var valid: Bool {
+            frame.valid && [frame.crs, frame.axes, frame.verticalDatum].allSatisfy { PlanCoordinateCompatibility.known($0) != nil } &&
+                ["m", "mm"].contains(frame.xyUnits) &&
+                [maximumXYMeters, maximumZMeters].allSatisfy { $0.isFinite && $0 >= 0 }
+        }
+    }
+
+    enum Resolution: Codable, Equatable, Sendable {
+        case elevationRange(ElevationRange)
+        case geometry(planID: UUID, sha256: String, rule: GeometryRule)
+    }
+
+    private struct Geometry {
+        let plan: MappingPlanReference
+        let rule: GeometryRule
+        let factor: Double
+        let index: PlanElevationIndex
+
+        func matches(_ point: PlanPoint, z: Double) -> Bool {
+            index.nearby(point, radius: rule.maximumXYMeters / factor).contains { id in
+                guard let sample = index.segments[id].projection(point) else { return false }
+                return abs(sample.z * factor - z) <= rule.maximumZMeters
+            }
+        }
+    }
+
+    struct Input: Sendable {
+        let rows: [RegulatoryDataWorkbook.Row]
+        let workbookSHA256: String
+    }
+
+    struct Review: Sendable {
+        var projectID: UUID?
+        var dataset = ""
+        var frame = Frame()
+        var frameConfirmed = false
+        var ranges: [UUID: ElevationRange] = [:]
+        var geometryRules: [UUID: GeometryRule] = [:]
+        var assignments: [String: MappingContext] = [:]
+    }
+
+    struct Change: Identifiable, Sendable {
+        var id: Int { row }
+        let sourceID: String
+        let row: Int
+        let kind: MappingExchangePreview.Classification
+        let destination: MappingContext
+        let reason: String
+    }
+
+    struct Plan: Sendable {
+        let generationID: UUID
+        let workbookSHA256: String
+        let changes: [Change]
+        fileprivate let replacements: [UUID: RegulatorySourceObservation]
+        fileprivate let ranges: [UUID: ElevationRange]
+        fileprivate let projectID: UUID
+        fileprivate let geometryRules: [UUID: GeometryRule]
+
+        var canApply: Bool {
+            (!replacements.isEmpty || !ranges.isEmpty || !geometryRules.isEmpty) && !changes.contains { $0.kind == .conflict || $0.kind == .invalid }
+        }
+        func count(_ kind: MappingExchangePreview.Classification) -> Int { changes.filter { $0.kind == kind }.count }
+    }
+
+    static func prepare(_ input: Input, review: Review, snapshot: MappingCommittedSnapshot, plans: ManagedPlanStore? = nil,
+                        now: Date = Date()) throws -> Plan {
+        let dataset = review.dataset.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let projectID = review.projectID, snapshot.projects[projectID] != nil,
+              !dataset.isEmpty, dataset.utf8.count <= 256, review.frameConfirmed, review.frame.valid else {
+            throw ExchangeImportError("Выберите проект, укажите постоянное имя набора данных и подтвердите метаданные координат.")
+        }
+        guard review.assignments.values.allSatisfy({ $0.projectID == projectID && snapshot.journal.validContext($0) }) else {
+            throw ExchangeImportError("Контекст выбранных наблюдений не соответствует проекту.")
+        }
+        for (id, range) in review.ranges {
+            guard let horizon = snapshot.horizons[id], horizon.projectID == projectID, range.valid,
+                  range.datum == horizon.elevationDatum, range.datum == review.frame.verticalDatum else {
+                throw ExchangeImportError("Проверьте границы отметок и совпадение вертикальных датумов.")
+            }
+        }
+        let byKey = Dictionary(uniqueKeysWithValues: (snapshot.journal.regulatorySourceObservations ?? []).map { ($0.key, $0) })
+        let ranges = snapshot.journal.horizons.compactMap { horizon -> (UUID, ElevationRange)? in
+            guard horizon.projectID == projectID,
+                  let range = review.ranges[horizon.id] ?? horizon.regulatoryElevationRange,
+                  range.datum == review.frame.verticalDatum, range.datum == horizon.elevationDatum else { return nil }
+            return (horizon.id, range)
+        }
+        let savedRules = snapshot.projects[projectID]?.regulatoryGeometryRules ?? [:]
+        let rules = savedRules.merging(review.geometryRules) { _, confirmed in confirmed }
+        let geometry = try rules.sorted { $0.key.uuidString < $1.key.uuidString }.compactMap { id, rule -> Geometry? in
+            try Task.checkCancellation()
+            let plan = snapshot.plan(id: id)
+            guard rule.valid, rule.frame == review.frame,
+                  let plan, !plan.isDeleted, !plan.isArchived, plan.horizonID == rule.horizonID,
+                  snapshot.horizons[plan.horizonID]?.projectID == projectID,
+                  snapshot.horizons[plan.horizonID]?.elevationDatum == rule.frame.verticalDatum,
+                  snapshot.journal.validContext(.init(projectID: projectID, horizonID: plan.horizonID, excavationID: rule.excavationID)),
+                  let file = plan.file, file.crs == rule.frame.crs, file.axes == rule.frame.axes,
+                  file.units.coordinateUnits == rule.frame.xyUnits,
+                  let factor = PlanElevationSnap.metersPerUnit(plan),
+                  (rule.maximumXYMeters / factor).isFinite, let plans else {
+                if review.geometryRules[id] != nil {
+                    throw ExchangeImportError("Проверьте ревизию DXF, координатную систему, оси, единицы и подтверждённый датум.")
+                }
+                return nil
+            }
+            let document = try DXFDocument.parse(plans.read(plan))
+            guard document.elevationIndex.segmentCount > 0, document.insertionUnits == file.insertionUnits else {
+                throw ExchangeImportError("DXF не содержит подтверждённых высотных сегментов.")
+            }
+            return Geometry(plan: plan, rule: rule, factor: factor, index: document.elevationIndex)
+        }
+        var changes: [Change] = []
+        var replacements: [UUID: RegulatorySourceObservation] = [:]
+        var seen = Set<String>()
+        for row in input.rows {
+            try Task.checkCancellation()
+            let sourceID = row.values[0]
+            let key = RegulatorySourceObservation.Key(projectID: projectID, dataset: dataset, sourceID: sourceID)
+            let existing = byKey[key]
+            let id = try existing?.id ?? RegulatoryDataProposal.stableID("regulatory-source/" + MappingImportLedger.fingerprint(key))
+            var destination = MappingContext(projectID: projectID)
+            var explicit = false
+            var resolution: Resolution?
+            if let assigned = review.assignments[sourceID] {
+                destination = assigned
+                explicit = true
+            } else if let old = existing?.latest, old.explicitlyAssigned {
+                destination = old.destination
+                explicit = true
+            } else if let z = Double(row.values[4]) {
+                let candidates: [Geometry]
+                if let x = Double(row.values[2]), let y = Double(row.values[3]) {
+                    candidates = geometry.filter { $0.matches(.init(x: x, y: y), z: z) }
+                } else { candidates = [] }
+                if let first = candidates.first {
+                    if candidates.allSatisfy({ $0.plan.horizonID == first.plan.horizonID }) {
+                        destination.horizonID = first.plan.horizonID
+                        if candidates.allSatisfy({ $0.rule.excavationID == first.rule.excavationID }) {
+                            destination.excavationID = first.rule.excavationID
+                        }
+                        resolution = .geometry(planID: first.plan.id, sha256: first.plan.file?.sha256 ?? "", rule: first.rule)
+                    }
+                } else {
+                    var match: (UUID, ElevationRange)?
+                    for candidate in ranges where candidate.1.contains(z) {
+                        if match != nil { match = nil; break }
+                        match = candidate
+                    }
+                    if let match {
+                        destination.horizonID = match.0
+                        resolution = .elevationRange(match.1)
+                    }
+                }
+            }
+            let version = RegulatorySourceObservation.Version(workbookSHA256: input.workbookSHA256, sourceRow: row.number,
+                cells: row.values, frame: review.frame, destination: destination, explicitlyAssigned: explicit, resolution: resolution, savedAt: now)
+            let kind: MappingExchangePreview.Classification
+            let reason: String
+            if !row.issues.isEmpty || sourceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                sourceID.utf8.count > 256 || !seen.insert(sourceID).inserted {
+                kind = .invalid
+                reason = row.issues.isEmpty ? "Требуется уникальный текстовый ID источника." : row.issues.joined(separator: "\n")
+            } else if let existing, let old = existing.latest {
+                if version.sameEvidence(as: old) && version.destination == old.destination &&
+                    version.explicitlyAssigned == old.explicitlyAssigned {
+                    kind = .unchanged
+                    reason = "Источник уже сохранён."
+                } else if !version.sameEvidence(as: old) && existing.versions.dropLast().contains(where: { $0.sameEvidence(as: version) }) {
+                    kind = .conflict
+                    reason = "Источник совпадает с предыдущей версией наблюдения."
+                } else {
+                    kind = .correction
+                    reason = "Будет добавлена версия с сохранением исходного наблюдения."
+                    var revised = existing
+                    revised.versions.append(version)
+                    replacements[id] = revised
+                }
+            } else {
+                kind = .new
+                reason = destination.horizonID == nil ? "Горизонт ожидает назначения." : "Горизонт определён по подтверждённым данным проекта."
+                replacements[id] = .init(id: id, key: key, versions: [version])
+            }
+            changes.append(.init(sourceID: sourceID, row: row.number, kind: kind, destination: destination, reason: reason))
+        }
+        return Plan(generationID: snapshot.generationID, workbookSHA256: input.workbookSHA256, changes: changes,
+                    replacements: replacements,
+                    ranges: review.ranges.filter { snapshot.horizons[$0.key]?.regulatoryElevationRange != $0.value },
+                    projectID: projectID, geometryRules: review.geometryRules.filter { savedRules[$0.key] != $0.value })
+    }
+
+    static func applying(_ plan: Plan, to snapshot: MappingCommittedSnapshot) throws -> MappingJournal {
+        try Task.checkCancellation()
+        guard plan.canApply, plan.generationID == snapshot.generationID else {
+            throw ExchangeImportError("Проверьте книгу снова перед сохранением.")
+        }
+        var next = snapshot.journal
+        let originals = next.regulatorySourceObservations ?? []
+        let originalIDs = Set(originals.map(\.id))
+        next.regulatorySourceObservations = originals.map { plan.replacements[$0.id] ?? $0 } +
+            plan.replacements.values.filter { !originalIDs.contains($0.id) }.sorted { $0.versions[0].sourceRow < $1.versions[0].sourceRow }
+        if !plan.geometryRules.isEmpty, let index = next.projects.firstIndex(where: { $0.id == plan.projectID }) {
+            next.projects[index].regulatoryGeometryRules = (next.projects[index].regulatoryGeometryRules ?? [:])
+                .merging(plan.geometryRules) { _, confirmed in confirmed }
+        }
+        for i in next.horizons.indices {
+            if let range = plan.ranges[next.horizons[i].id] { next.horizons[i].regulatoryElevationRange = range }
+        }
+        return next
+    }
+
+    static func assigning(_ ids: Set<UUID>, destination: MappingContext, journal: MappingJournal, now: Date = Date()) throws -> MappingJournal {
+        guard !ids.isEmpty, journal.validContext(destination), destination.projectID != nil else { throw StorageError.invalidRecord }
+        var next = journal
+        var observations = journal.regulatorySourceObservations ?? []
+        var found = Set<UUID>()
+        for i in observations.indices where ids.contains(observations[i].id) {
+            guard observations[i].key.projectID == destination.projectID, var version = observations[i].latest else {
+                throw StorageError.invalidRecord
+            }
+            found.insert(observations[i].id)
+            if version.destination == destination && version.explicitlyAssigned { continue }
+            version.destination = destination
+            version.explicitlyAssigned = true
+            version.resolution = nil
+            version.savedAt = now
+            observations[i].versions.append(version)
+        }
+        guard found == ids else { throw StorageError.invalidRecord }
+        next.regulatorySourceObservations = observations
+        return next
+    }
+
+    static func validate(journal: MappingJournal, context: MappingValidationContext) throws {
+        for horizon in journal.horizons {
+            if let range = horizon.regulatoryElevationRange, !range.valid || range.datum != horizon.elevationDatum {
+                throw StorageError.invalidRecord
+            }
+        }
+        for project in journal.projects {
+            guard (project.regulatoryGeometryRules ?? [:]).values.allSatisfy(\.valid) else { throw StorageError.invalidRecord }
+        }
+        var ids = Set(journal.observations.map(\.id))
+        var keys = Set<RegulatorySourceObservation.Key>()
+        for record in journal.regulatorySourceObservations ?? [] {
+            guard ids.insert(record.id).inserted, keys.insert(record.key).inserted, !record.versions.isEmpty,
+                  !record.key.dataset.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  record.key.dataset.utf8.count <= 256,
+                  !record.key.sourceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  record.key.sourceID.utf8.count <= 256 else { throw StorageError.invalidRecord }
+            for version in record.versions {
+                guard version.cells.count == RegulatoryDataWorkbook.columns.count,
+                      version.cells[0] == record.key.sourceID,
+                      version.cells.allSatisfy({ $0.utf16.count <= 32_767 }),
+                      version.destination.projectID == record.key.projectID, context.validContext(version.destination),
+                      version.frame.valid, version.savedAt.timeIntervalSinceReferenceDate.isFinite,
+                      (5...1_048_576).contains(version.sourceRow),
+                      version.workbookSHA256.range(of: #"^[a-f0-9]{64}$"#, options: .regularExpression) != nil,
+                      version.cells[2...4].allSatisfy({ $0.isEmpty || RegulatoryDataWorkbook.sourceNumber($0) != nil }) else {
+                    throw StorageError.invalidRecord
+                }
+                switch version.resolution {
+                case .elevationRange(let range):
+                    guard !version.explicitlyAssigned, version.destination.horizonID != nil, range.valid,
+                          range.datum == version.frame.verticalDatum,
+                          let z = version.xyz[2], range.contains(z) else { throw StorageError.invalidRecord }
+                case .geometry(let planID, let sha256, let rule):
+                    guard !version.explicitlyAssigned, rule.valid, rule.frame == version.frame,
+                          rule.horizonID == version.destination.horizonID,
+                          let plan = context.plans[planID], plan.horizonID == rule.horizonID,
+                          plan.file?.sha256 == sha256,
+                          version.destination.excavationID == nil || version.destination.excavationID == rule.excavationID else {
+                        throw StorageError.invalidRecord
+                    }
+                case nil:
+                    guard version.explicitlyAssigned || version.destination.horizonID == nil else { throw StorageError.invalidRecord }
+                }
+            }
+        }
+    }
+
+    static func preserves(previous: MappingJournal, in current: MappingJournal) -> Bool {
+        let currentByID = Dictionary(uniqueKeysWithValues: (current.regulatorySourceObservations ?? []).map { ($0.id, $0) })
+        return (previous.regulatorySourceObservations ?? []).allSatisfy { old in
+            guard let record = currentByID[old.id], old.key == record.key else { return false }
+            return record.versions.starts(with: old.versions)
+        }
     }
 }
