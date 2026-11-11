@@ -56,6 +56,56 @@ can be added after the saved faults are accounted for. The preview shows the
 actual Excel row alongside the saved and proposed values. Duplicate rows and
 multiple groups targeting one observation require reconciliation.
 
+## Excel conversion and import limits
+
+The reader resolves the visible sheet named `Data` through the workbook
+relationships. It reads actual cell addresses and ignores Excel's cached
+worksheet dimension. It accepts additional visible and hidden worksheets.
+Only `Data` and the optional hidden `_FieldForge` sheet are read. Shared
+strings are loaded if a required sheet contains shared-string cells.
+Styles are loaded when a numeric Data value needs format validation.
+Core properties provide the workbook identifier when present.
+
+Calculation chains, themes, secondary sheets and their relationships, and
+recognized drawing, control-property and printer assets are skipped.
+Relationships of the imported worksheets may reference internal printer
+settings. External workbook links, macros and connections are rejected.
+Formula cells and their cached results are flagged as unsupported inputs.
+
+The ZIP32 reader validates entry paths, local and central headers, payload
+extents, sizes and declared ratios even for skipped entries. It accepts
+STORE and raw DEFLATE, with bounded decoding and CRC-32 verification for
+parts it reads. XML and CRC validation cover the consumed parts.
+Regulatory limits are 32 MiB compressed, 256 MiB declared uncompressed,
+32 MiB per decoded part, 128 MiB cumulatively decoded, and 1,000:1 per entry.
+The higher declared-size ceiling accommodates skipped Excel parts. The
+decoded byte limits and the existing XML, row and cell limits still apply.
+Preview errors identify the failed size or ratio check, the oversized
+required sheet, invalid package structure or an incompatible Data layout.
+
+### Production workbook diagnosis
+
+The Excel conversion supplied for this bug has 12,859,434 file bytes and
+136,085,253 declared uncompressed bytes. The original importer stopped on
+`xl/worksheets/sheet1.xml` because its 100,155,069 bytes exceeded the
+32 MiB per-entry limit. The preceding entries brought the running total to
+100,162,808 bytes at that point, within the old 128 MiB cumulative limit.
+The full archive would have exceeded that cumulative limit by 1,867,525
+bytes. Its highest compression ratio is 11.90:1, well within the 1,000:1 limit.
+The 27,201,205-byte calculation chain also contributed to the old total.
+
+The workbook links `Data` to `sheet1.xml`. The worksheet declares
+`A1:CP19999`, with 19,998 row elements. The regulatory headers start in
+A:AD. The sheet also contains populated fields through CP, including
+Q/RMR results, observation numbers, notes and formula-based checks.
+The `kart` sheet is a formula-based projection with a different column
+order. Import supports the documented four-header `Data!A:AD` contract.
+The production preview reports the oversized `Data` sheet. A read-only
+diagnostic with a larger local limit also confirmed that `Data!BI1` fails
+the A:AD check. The extended layout requires a reviewed mapping. Any prepared import copy
+must preserve the original workbook and account for all populated source
+fields, including values with unconfirmed meaning or provenance.
+
 ## Exact A:AD column policy
 
 The [reference audit](regulatory-excel-audit.md#exact-aad-mapping) records the
@@ -157,9 +207,10 @@ Read-only extraction checked the A:AD headers and confirmed that populated A
 and B cells are text and the 4,117 populated observation rows use numeric
 ROCK cells. The file remains private. Import accepts XLSX. To use a legacy
 XLSB, preserve the original and prepare a reviewed values-only XLSX copy
-cropped to A:AD with the four original header rows. Reconcile numeric ROCK
-codes against the project catalogue. The source workbook's extra columns,
-formulas and placeholders require review before conversion.
+with the four original Data header rows and the supported A:AD fields.
+Review extra columns, formulas and placeholders in the original before
+preparing that copy. Reconcile numeric ROCK codes against the project
+catalogue.
 
 Automated tests use actual XLSX archives and cover insertion among existing
 records, sorting across duplicate A/B anchors, reordering and adding fault
@@ -180,3 +231,10 @@ Exchange XLSX, preview and file coordination, and the durable ledger. The
 Simulator `build-for-testing` succeeded. The focused XLSX tests simulated
 Excel insertion and sorting by relocating full worksheet rows and their cell
 addresses while retaining the original hidden sheet.
+
+The production XLSX fix passed 100 focused SwiftPM tests. One opt-in
+independent workbook fixture was skipped. The cases include bounded synthetic
+Office archives, invalid ZIP and XML, worksheet and package limits, preview
+diagnostics, and duplicate-free application and replay of 20 new observations
+and five revisions. Xcode 26.6 built the app for the generic iOS Simulator
+destination. Full regression and physical-device import were outside this run.

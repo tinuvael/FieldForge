@@ -16,8 +16,10 @@ import FoundationXML
     }
     /// Independent central-directory reader (not the production ZIP implementation).
     /// Python zipfile independently checks CRCs and descriptors in the external validation.
-    private func parts(_ export: MappingCSVExport, format: MappingExportFormat = .xlsx) throws -> [String: Data] {
-        let files = try MappingExportFiles.write(export, format: format); defer { files.cleanup() }
+    private func parts(_ export: MappingCSVExport, format: MappingExportFormat = .xlsx,
+                       includeRegulatoryIdentity: Bool = true) throws -> [String: Data] {
+        let files = try MappingExportFiles.write(export, format: format, includeRegulatoryIdentity: includeRegulatoryIdentity)
+        defer { files.cleanup() }
         return try unzip(Data(contentsOf: XCTUnwrap(files.urls.first)))
     }
     private func unzip(_ data: Data) throws -> [String: Data] {
@@ -93,9 +95,14 @@ import FoundationXML
         let export = try MappingCSVExport.prepare(journal: w.journal, selection: csv.selection(point, "2000-01-01T00:00:00Z"), includeEnterprise: true)
         let package = try parts(export, format: .enterpriseGeotechnical)
         let book = try xml(XCTUnwrap(package["xl/workbook.xml"]))
-        XCTAssertEqual(book.sheetNames, ["Data"])
-        XCTAssertEqual(package.keys.filter { $0.hasPrefix("xl/worksheets/") }, ["xl/worksheets/sheet1.xml"])
-        let sheet = try xml(XCTUnwrap(package["xl/worksheets/sheet1.xml"]))
+        XCTAssertEqual(book.sheetNames, ["Data", "_FieldForge"])
+        let legacy = try parts(export, format: .enterpriseGeotechnical, includeRegulatoryIdentity: false)
+        let legacyBook = try xml(XCTUnwrap(legacy["xl/workbook.xml"]))
+        XCTAssertEqual(legacyBook.sheetNames, ["Data"])
+        XCTAssertEqual(legacy.keys.filter { $0.hasPrefix("xl/worksheets/") }, ["xl/worksheets/sheet1.xml"])
+        let data = try XCTUnwrap(package["xl/worksheets/sheet1.xml"])
+        XCTAssertEqual(data, legacy["xl/worksheets/sheet1.xml"])
+        let sheet = try xml(data)
         XCTAssertEqual(sheet.rowCount, 4)
         XCTAssertEqual(sheet.formulas, 0)
         XCTAssertEqual(sheet.filter, "A4:AD4")

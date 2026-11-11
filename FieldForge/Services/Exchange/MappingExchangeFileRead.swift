@@ -39,11 +39,11 @@ final class ExchangeCoordinatedRead: @unchecked Sendable {
                 try Task.checkCancellation()
                 let handle = try FileHandle(forReadingFrom: coordinated)
                 defer { try? handle.close() }
-                guard try handle.seekToEnd() <= maximum else { throw ExchangeImportError("Файл XLSX превышает допустимый размер.") }
+                guard try handle.seekToEnd() <= maximum else { throw ExchangeArchive.compressedSizeError(maximum) }
                 try handle.seek(toOffset: 0)
                 let data = try handle.read(upToCount: maximum + 1) ?? Data()
                 try Task.checkCancellation()
-                guard data.count <= maximum else { throw ExchangeImportError("Размер файла изменился.") }
+                guard data.count <= maximum else { throw ExchangeArchive.compressedSizeError(maximum) }
                 return data
             }
         }

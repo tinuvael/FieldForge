@@ -61,7 +61,7 @@ import zlib
         return try .prepare(url: files.urls[0], committed: .init(journal))
     }
     private func parts(_ export: MappingExchangeExport) throws -> [String: Data] {
-        let files = try export.write(); return try ExchangeArchive(url: files.urls[0], limits: .init()).parts
+        let files = try export.write(); return try archiveParts(Data(contentsOf: files.urls[0]))
     }
     private func newPoint(_ export: MappingExchangeExport, token: UUID? = nil) -> MappingExchangeExport {
         var tables = export.tables, table = export.tables.first { $0.name == "points" }!
@@ -337,7 +337,7 @@ import zlib
         XCTAssertEqual(updated.latestRevisions[id(7)]?.author, "Инженер")
 
         let reexport = try bytes(export(updated.journal))
-        let reexported = try workbook(ExchangeArchive(data: reexport, limits: .init()).parts)
+        let reexported = try workbook(archiveParts(reexport))
         let rows = try XCTUnwrap(reexported.sheets["points"]?.rows)
         let exported = try XCTUnwrap(rows.first { $0["point_id"] == id(7).uuidString })
         XCTAssertEqual(exported["notes"], "Уточнение по журналу 🪨")
@@ -466,7 +466,7 @@ import zlib
             selection: .init(accepted: [id(7).uuidString]), now: time.addingTimeInterval(30))
         let (after, report) = try await owner.applyExchange(batch)
         XCTAssertEqual(report.count(.applied), 1)
-        let reexported = try self.workbook(ExchangeArchive(data: bytes(export(after.journal)), limits: .init()).parts)
+        let reexported = try self.workbook(archiveParts(bytes(export(after.journal))))
         let q = try XCTUnwrap(reexported.sheets["assessments"]?.rows.first { $0["kind"] == "Q" })
         XCTAssertEqual(q["method"], QMethod.version)
         XCTAssertEqual(q["rqd_text"], "87")
@@ -725,8 +725,8 @@ import zlib
         let names = matches.map { (book as NSString).substring(with: $0.range) }
         for (match, replacement) in Swift.zip(matches.reversed(), names) { book.replaceSubrange(Range(match.range, in: book)!, with: replacement) }
         rewritten["xl/workbook.xml"] = Data(book.utf8)
-        let archive = try ExchangeArchive(data: zip(rewritten.sorted { $0.key < $1.key }, deflated: true), limits: .init())
-        let p = try MappingExchangePreview.prepare(workbook: workbook(archive.parts), committed: .init(j))
+        let parts = try archiveParts(zip(rewritten.sorted { $0.key < $1.key }, deflated: true))
+        let p = try MappingExchangePreview.prepare(workbook: workbook(parts), committed: .init(j))
         let old = try MappingExchangePreview.prepare(workbook: workbook(original), committed: .init(j))
         XCTAssertEqual(p.count(.unchanged), 1); XCTAssertFalse(p.hasBlockingRecords); XCTAssertEqual(p.proposalDigest, old.proposalDigest)
     }
@@ -821,15 +821,15 @@ import zlib
             XCTAssertThrowsError(try ExchangeArchive(data: zip(entries), limits: .init()))
         }
         var limits = ExchangeLimits(); limits.partBytes = 100
-        XCTAssertThrowsError(try ExchangeArchive(data: zip([("a", Data(repeating: 65, count: 10_000))], deflated: true), limits: limits))
+        XCTAssertThrowsError(try archiveParts(zip([("a", Data(repeating: 65, count: 10_000))], deflated: true), limits: limits))
         limits = .init(); limits.compressionRatio = 2
-        XCTAssertThrowsError(try ExchangeArchive(data: zip([("a", Data(repeating: 65, count: 10_000))], deflated: true), limits: limits))
+        XCTAssertThrowsError(try archiveParts(zip([("a", Data(repeating: 65, count: 10_000))], deflated: true), limits: limits))
         limits = .init(); limits.entries = 1
         XCTAssertThrowsError(try ExchangeArchive(data: zip([("a", bytes), ("b", bytes)]), limits: limits))
         var encrypted = try zip([("a", bytes)]); encrypted[6] |= 1
         XCTAssertThrowsError(try ExchangeArchive(data: encrypted, limits: .init()))
         var corrupt = try zip([("a", bytes)]); corrupt[31] ^= 1
-        XCTAssertThrowsError(try ExchangeArchive(data: corrupt, limits: .init()))
+        XCTAssertThrowsError(try archiveParts(corrupt))
     }
     func testCommittedGenerationStalenessNoMutationFailureOrCancellation() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("B2b-tests-\(UUID())")
@@ -855,6 +855,11 @@ import zlib
         let current = try await owner.exchangePreviewIsCurrent(p.generationID); XCTAssertFalse(current)
         await owner.retire()
         do { _ = try await owner.exchangePreviewIsCurrent(p.generationID); XCTFail("Retired owner") } catch {}
+    }
+
+    private func archiveParts(_ data: Data, limits: ExchangeLimits = .init()) throws -> [String: Data] {
+        var archive = try ExchangeArchive(data: data, limits: limits)
+        return try archive.readAll()
     }
 
     /// Independent tiny ZIP fixture encoder, including deliberate unsafe names/duplicates.
@@ -898,7 +903,7 @@ extension MappingExchangePreviewTests {
     }
 
     private func editData(_ data: Data, _ transform: (String) throws -> String) throws -> Data {
-        var parts = try ExchangeArchive(data: data, limits: .init()).parts
+        var parts = try archiveParts(data)
         let path = "xl/worksheets/sheet1.xml"
         parts[path] = try Data(transform(String(decoding: XCTUnwrap(parts[path]), as: UTF8.self)).utf8)
         return try zip(parts.sorted { $0.key < $1.key }, deflated: true)
@@ -1008,6 +1013,162 @@ extension MappingExchangePreviewTests {
         XCTAssertEqual(stable.journal, after.journal)
     }
 
+    private func withOfficeParts(_ workbook: Data, extraWorksheet: Data, calcChain: Data) throws -> [String: Data] {
+        var parts = try archiveParts(workbook)
+        let book = "xl/workbook.xml", rels = "xl/_rels/workbook.xml.rels", types = "[Content_Types].xml"
+        func insert(_ part: String, before anchor: String, _ text: String) throws {
+            let xml = String(decoding: try XCTUnwrap(parts[part]), as: UTF8.self)
+            XCTAssertTrue(xml.contains(anchor))
+            parts[part] = Data(xml.replacingOccurrences(of: anchor, with: text + anchor).utf8)
+        }
+        let workbookXML = String(decoding: try XCTUnwrap(parts[book]), as: UTF8.self)
+        XCTAssertTrue(workbookXML.contains("<sheets>"))
+        parts[book] = Data(workbookXML.replacingOccurrences(of: "<sheets>",
+            with: #"<sheets><sheet name="Filter" sheetId="14" state="hidden" r:id="filter"/>"#).utf8)
+        let office = ExchangeWorkbook.documentRelationships
+        try insert(rels, before: "</Relationships>", """
+            <Relationship Id="filter" Type="\(office)worksheet" Target="worksheets/filter.xml"/>
+            <Relationship Id="calc" Type="\(office)calcChain" Target="calcChain.xml"/>
+            """)
+        let content = "application/vnd.openxmlformats-officedocument.spreadsheetml."
+        try insert(types, before: "</Types>", """
+            <Override PartName="/xl/worksheets/filter.xml" ContentType="\(content)worksheet+xml"/>
+            <Override PartName="/xl/calcChain.xml" ContentType="\(content)calcChain+xml"/>
+            """)
+        parts["xl/worksheets/filter.xml"] = extraWorksheet
+        parts["xl/calcChain.xml"] = calcChain
+        return parts
+    }
+
+    private func addSharedStrings(_ data: Data, to parts: inout [String: Data]) throws {
+        let rels = "xl/_rels/workbook.xml.rels", types = "[Content_Types].xml"
+        let sstType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"
+        parts[rels] = Data(String(decoding: try XCTUnwrap(parts[rels]), as: UTF8.self)
+            .replacingOccurrences(of: "</Relationships>", with: """
+                <Relationship Id="strings" Type="\(ExchangeWorkbook.documentRelationships)sharedStrings" Target="sharedStrings.xml"/></Relationships>
+                """).utf8)
+        parts[types] = Data(String(decoding: try XCTUnwrap(parts[types]), as: UTF8.self)
+            .replacingOccurrences(of: "</Types>", with: """
+                <Override PartName="/xl/sharedStrings.xml" ContentType="\(sstType)"/></Types>
+                """).utf8)
+        parts["xl/sharedStrings.xml"] = data
+    }
+
+    func testRegulatorySelectiveReadSkipsLargeOfficePartsAndUsesNamedData() throws {
+        let journal = try fixture()
+        let book = try regulatoryExport(journal)
+        let ns = ExchangeWorkbook.spreadsheet
+        let auxRows = (1...15_000).map { "<row r=\"\($0)\"><c r=\"A\($0)\"><f>1+1</f><v>2</v></c></row>" }.joined()
+        let chain = (1...60_000).map { "<c r=\"A\($0)\" i=\"14\"/>" }.joined()
+        var parts = try withOfficeParts(book,
+            extraWorksheet: Data("<worksheet xmlns=\"\(ns)\"><sheetData>\(auxRows)</sheetData></worksheet>".utf8),
+            calcChain: Data("<calcChain xmlns=\"\(ns)\">\(chain)</calcChain>".utf8))
+        let dataPath = "xl/worksheets/sheet1.xml"
+        let data = String(decoding: try XCTUnwrap(parts[dataPath]), as: UTF8.self)
+        // Office-converted dimensions can be stale. Import the actual cell addresses.
+        // Formatted empty rows make the required worksheet larger and highly compressible.
+        let emptyRows = (6...2500).map { "<row r=\"\($0)\"><c r=\"AD\($0)\"/></row>" }.joined()
+        let revised = try cells(data, ["A4": " t=\"s\"><v>0</v></c>"])
+            .replacingOccurrences(of: #"<dimension ref="[^"]*"/>"#, with: #"<dimension ref="A1"/>"#, options: .regularExpression)
+            .replacingOccurrences(of: "</sheetData>", with: emptyRows + "</sheetData>")
+        parts[dataPath] = Data(revised.utf8)
+        XCTAssertTrue(revised.contains(#"<dimension ref="A1"/>"#))
+        try addSharedStrings(Data("<sst xmlns=\"\(ns)\"><si><t>ID</t></si></sst>".utf8), to: &parts)
+        let bytes = try zip(parts.sorted { $0.key < $1.key }, deflated: true)
+        var limits = ExchangeLimits()
+        limits.partBytes = 128 * 1024
+        limits.expandedBytes = 192 * 1024
+        XCTAssertGreaterThan(try XCTUnwrap(parts["xl/calcChain.xml"]).count, limits.expandedBytes)
+        XCTAssertGreaterThan(try XCTUnwrap(parts["xl/worksheets/filter.xml"]).count, limits.expandedBytes)
+        let parsed = try RegulatoryDataWorkbook.Read(bytes: bytes, limits: limits)
+        XCTAssertEqual(parsed.rows.map(\.number), [5])
+        XCTAssertNotNil(parsed.manifest)
+        XCTAssertEqual(try RegulatoryDataImport.prepare(bytes: bytes, committed: .init(journal), limits: limits).count(.unchanged), 1)
+
+        limits.partBytes = try XCTUnwrap(parts[dataPath]).count - 1
+        XCTAssertThrowsError(try RegulatoryDataWorkbook.Read(bytes: bytes, limits: limits)) {
+            XCTAssertTrue($0.localizedDescription.contains("Обязательный лист «Data»"), $0.localizedDescription)
+        }
+        limits.partBytes = 128 * 1024
+        limits.expandedBytes = try XCTUnwrap(parts[dataPath]).count
+        XCTAssertThrowsError(try RegulatoryDataWorkbook.Read(bytes: bytes, limits: limits)) {
+            XCTAssertTrue($0.localizedDescription.contains("Суммарный размер распаковываемых частей"), $0.localizedDescription)
+        }
+        limits.regulatoryDeclaredBytes = 192 * 1024
+        XCTAssertThrowsError(try RegulatoryDataWorkbook.Read(bytes: bytes, limits: limits)) {
+            XCTAssertTrue($0.localizedDescription.contains("Суммарный заявленный размер"), $0.localizedDescription)
+        }
+    }
+
+    func testRegulatorySkipsUnreferencedSharedStringsAndStyles() throws {
+        let book = try editData(regulatoryExport(fixture(), identity: false)) { xml in
+            try cells(xml, ["J5": "/>", "I5": "/>", "K5": "/>"])
+                .replacingOccurrences(of: #"<v>[^<]*</v>"#, with: "", options: .regularExpression)
+        }
+        var parts = try archiveParts(book)
+        try addSharedStrings(Data("unread shared strings".utf8), to: &parts)
+        parts["xl/styles.xml"] = Data("unread styles".utf8)
+        let bytes = try zip(parts.sorted { $0.key < $1.key }, deflated: true)
+        XCTAssertEqual(try RegulatoryDataWorkbook.Read(bytes: bytes, limits: .init()).rows.count, 1)
+    }
+
+    func testRegulatoryRejectsPopulatedColumnsPastADAndRequiresVisibleData() async throws {
+        let book = try regulatoryExport(fixture(), identity: false)
+        for (row, cell) in [(4, #"<c r="AE4" t="inlineStr"><is><t>Q</t></is></c>"#),
+                            (5, #"<c r="AE5" t="str"><f>1+1</f></c>"#)] {
+            let invalid = try editData(book) { xml in
+                let range = try XCTUnwrap(xml.range(of: #"<row r="\#(row)"[^>]*>.*?</row>"#, options: .regularExpression))
+                var result = xml
+                result.replaceSubrange(range, with: xml[range].replacingOccurrences(of: "</row>", with: cell + "</row>"))
+                return result
+            }
+            XCTAssertThrowsError(try RegulatoryDataWorkbook.Read(bytes: invalid, limits: .init())) {
+                XCTAssertTrue($0.localizedDescription.contains("Data!AE\(row)"), $0.localizedDescription)
+                XCTAssertTrue($0.localizedDescription.contains("Неподдерживаемая схема листа"), $0.localizedDescription)
+            }
+        }
+        var parts = try archiveParts(book)
+        let path = "xl/workbook.xml"
+        parts[path] = Data(String(decoding: try XCTUnwrap(parts[path]), as: UTF8.self)
+            .replacingOccurrences(of: #"name="Data""#, with: #"name="kart""#).utf8)
+        let unsupported = try zip(parts.sorted { $0.key < $1.key })
+        let committed = MappingCommittedSnapshot(try fixture())
+        let coordinator = MappingExchangePreviewCoordinator()
+        coordinator.activate(generation: committed.generationID)
+        let work = MappingExchangePreviewCoordinator.Work(snapshot: { committed },
+            read: { _, snapshot in try RegulatoryDataImport.prepare(bytes: unsupported, committed: snapshot) },
+            isCurrent: { $0 == committed.generationID })
+        let operation = try XCTUnwrap(coordinator.prepare(URL(fileURLWithPath: "/unused/legacy.xlsx"), work: work))
+        await operation.task.value
+        XCTAssertNil(coordinator.state.preview)
+        XCTAssertTrue(try XCTUnwrap(coordinator.state.message).contains("требуется видимый лист Data"))
+    }
+
+    func testSelectiveZIPRejectsSkippedEntryRatioAndRequiredPartOverrun() throws {
+        var limits = ExchangeLimits()
+        let bomb = try zip([("xl/calcChain.xml", Data(repeating: 65, count: 2 * 1024 * 1024))], deflated: true)
+        XCTAssertThrowsError(try ExchangeArchive(data: bomb, limits: limits, regulatory: true)) {
+            XCTAssertTrue($0.localizedDescription.contains("Коэффициент сжатия"), $0.localizedDescription)
+        }
+        limits.fileBytes = bomb.count - 1
+        XCTAssertThrowsError(try ExchangeArchive(data: bomb, limits: limits, regulatory: true)) {
+            XCTAssertTrue($0.localizedDescription.contains("Размер сжатого файла"), $0.localizedDescription)
+        }
+
+        // A one-entry archive with matching local/central sizes that understate output.
+        var malformed = try zip([("required.xml", Data("<xml/>".utf8))], deflated: true)
+        let central = try XCTUnwrap(malformed.range(of: Data([0x50, 0x4b, 0x01, 0x02]))).lowerBound
+        malformed[22] = 5
+        malformed[central + 24] = 5
+        var archive = try ExchangeArchive(data: malformed, limits: .init(), regulatory: true)
+        XCTAssertThrowsError(try archive.read("required.xml")) {
+            XCTAssertTrue($0.localizedDescription.contains("DEFLATE"), $0.localizedDescription)
+        }
+        malformed[6] |= 1
+        malformed[central + 8] |= 1
+        XCTAssertThrowsError(try ExchangeArchive(data: malformed, limits: .init(), regulatory: true))
+    }
+
     func testRegulatoryStructuralAndCellDiagnostics() throws {
         let journal = try fixture(includeRegulatory: true)
         let committed = MappingCommittedSnapshot(journal)
@@ -1015,7 +1176,13 @@ extension MappingExchangePreviewTests {
         for edit in [["AD4": "/>"], ["A4": " t=\"inlineStr\"><is><t>PK</t></is></c>", "B4": " t=\"inlineStr\"><is><t>ID</t></is></c>"],
                      ["B4": " t=\"inlineStr\"><is><t>ID</t></is></c>"]] {
             let malformed = try editData(book) { try cells($0, edit) }
-            XCTAssertThrowsError(try RegulatoryDataImport.prepare(bytes: malformed, committed: committed))
+            XCTAssertThrowsError(try RegulatoryDataImport.prepare(bytes: malformed, committed: committed)) {
+                XCTAssertTrue($0.localizedDescription.contains("несовместимые заголовки"), $0.localizedDescription)
+            }
+        }
+        let invalidXML = try editData(book) { $0.replacingOccurrences(of: "</worksheet>", with: "</unknown>") }
+        XCTAssertThrowsError(try RegulatoryDataImport.prepare(bytes: invalidXML, committed: committed)) {
+            XCTAssertTrue($0.localizedDescription.contains("Некорректный XML XLSX"), $0.localizedDescription)
         }
         for (address, body) in [
             ("G5", "><f>1+2</f><v>3</v></c>"), ("G5", "><v>2</v></c>"),
@@ -1049,7 +1216,7 @@ extension MappingExchangePreviewTests {
         try ambiguous.validate()
         let current = MappingCommittedSnapshot(ambiguous)
         let book = try regulatoryExport(journal, identity: false)
-        var package = try ExchangeArchive(data: book, limits: .init()).parts
+        var package = try archiveParts(book)
         let core = "docProps/core.xml"
         let metadata = String(decoding: try XCTUnwrap(package[core]), as: UTF8.self)
         package[core] = Data(metadata.replacingOccurrences(of: #"<dc:identifier>.*?</dc:identifier>"#,
@@ -1220,8 +1387,8 @@ extension MappingExchangePreviewTests {
         let book = try regulatoryExport(journal)
         let legacy = try regulatoryExport(journal, identity: false)
         let dataPart = "xl/worksheets/sheet1.xml"
-        let package = try ExchangeArchive(data: book, limits: .init()).parts
-        XCTAssertEqual(package[dataPart], try ExchangeArchive(data: legacy, limits: .init()).parts[dataPart])
+        let package = try archiveParts(book)
+        XCTAssertEqual(package[dataPart], try archiveParts(legacy)[dataPart])
         XCTAssertTrue(String(decoding: try XCTUnwrap(package["xl/workbook.xml"]), as: UTF8.self).contains("state=\"hidden\""))
         let source = try RegulatoryDataWorkbook.Read(bytes: book, limits: .init())
         XCTAssertEqual(source.rows.count, 100)
@@ -1240,7 +1407,12 @@ extension MappingExchangePreviewTests {
              "U": .number(0.35), "V": .number(40), "W": .number(120)]
         }
         rows[19].removeValue(forKey: "D")
-        let expanded = try appendDataRows(edited, rows: rows, start: 105)
+        let newRows = try appendDataRows(edited, rows: rows, start: 105)
+        let ns = ExchangeWorkbook.spreadsheet
+        let office = try withOfficeParts(newRows,
+            extraWorksheet: Data("<worksheet xmlns=\"\(ns)\"><sheetData/></worksheet>".utf8),
+            calcChain: Data("<calcChain xmlns=\"\(ns)\"/>".utf8))
+        let expanded = try zip(office.sorted { $0.key < $1.key }, deflated: true)
         var review = RegulatoryDataImport.Review()
         review.assignment = assignmentForData(plan: plan.id)
         let uncertain = try RegulatoryDataImport.prepare(bytes: expanded, review: review, committed: before)
@@ -1400,8 +1572,8 @@ extension MappingExchangePreviewTests {
         // Excel sorts full rows, leaving the separate hidden sheet unchanged.
         let sorted = try reorderData(inserted, order: [8, 9, 7, 5, 6])
         let hidden = "xl/worksheets/sheet2.xml"
-        XCTAssertEqual(try ExchangeArchive(data: sorted, limits: .init()).parts[hidden],
-                       try ExchangeArchive(data: book, limits: .init()).parts[hidden])
+        XCTAssertEqual(try archiveParts(sorted)[hidden],
+                       try archiveParts(book)[hidden])
         var review = RegulatoryDataImport.Review()
         review.assignment = assignmentForData(plan: plan.id)
         let initial = try RegulatoryDataImport.prepare(bytes: sorted, review: review, committed: before)

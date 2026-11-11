@@ -24,8 +24,8 @@ enum RegulatoryDataWorkbook {
         let manifest: RegulatoryDataManifest?
 
         init(bytes: Data, limits: ExchangeLimits) throws {
-            let archive = try ExchangeArchive(data: bytes, limits: limits)
-            let workbook = try ExchangeWorkbook(parts: archive.parts, limits: limits, regulatory: true)
+            let archive = try ExchangeArchive(data: bytes, limits: limits, regulatory: true)
+            let workbook = try ExchangeWorkbook(regulatoryArchive: archive, limits: limits)
             documentID = workbook.documentID
             manifest = try workbook.sheets[RegulatoryDataManifest.sheetName].map {
                 try RegulatoryDataManifest.read(sheet: $0, documentID: workbook.documentID, rowLimit: limits.rows)
@@ -46,7 +46,7 @@ enum RegulatoryDataWorkbook {
                 }
             }
             guard headerIssues.isEmpty else {
-                throw ExchangeImportError("Data: отсутствующие, повторные или переставленные заголовки. " + headerIssues.joined(separator: "; "))
+                throw ExchangeImportError("Data!A1:AD4: отсутствующие или несовместимые заголовки регламента. " + headerIssues.joined(separator: "; "))
             }
             rows = try data.keys.filter { $0 > 4 }.sorted().compactMap { number in
                 try Task.checkCancellation()

@@ -65,8 +65,8 @@ struct MappingExchangePreview: Sendable {
         return try prepare(data: bytes, committed: committed, limits: limits)
     }
     static func prepare(data: Data, committed: MappingCommittedSnapshot, limits: ExchangeLimits = .init()) throws -> Self {
-        let archive = try ExchangeArchive(data: data, limits: limits)
-        return try prepare(workbook: ExchangeWorkbook(parts: archive.parts, limits: limits), committed: committed, bytes: data)
+        var archive = try ExchangeArchive(data: data, limits: limits)
+        return try prepare(workbook: ExchangeWorkbook(parts: archive.readAll(), limits: limits), committed: committed, bytes: data)
     }
     static func prepare(workbook: ExchangeWorkbook, committed: MappingCommittedSnapshot, bytes: Data? = nil) throws -> Self {
         try Task.checkCancellation()
