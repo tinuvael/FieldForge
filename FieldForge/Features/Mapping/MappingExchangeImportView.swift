@@ -11,7 +11,10 @@ struct MappingExchangeImportView: View {
     @State private var observationDate = Date()
     @State private var draftPickets: [String: String] = [:]
     @State private var selectedURL: URL?
-    @State private var selection = MappingExchangeImport.Selection()
+    private var selection: MappingExchangeImport.Selection {
+        get { coordinator.state.selection }
+        nonmutating set { coordinator.updateSelection(newValue) }
+    }
     @State private var confirming = false
     @State private var applying = false
     @State private var report: MappingExchangeImport.Report?
@@ -59,7 +62,10 @@ struct MappingExchangeImportView: View {
             guard coordinator.isActive, !applying else { return }
             switch result {
             case .success(let url):
-                review = .init(); draftPickets = [:]
+                if selectedURL != url {
+                    coordinator.clear()
+                    review = .init(); draftPickets = [:]
+                }
                 selectedURL = url; prepare(url)
             case .failure(let error): coordinator.selectionFailed(error)
             }
@@ -74,7 +80,7 @@ struct MappingExchangeImportView: View {
         .onChange(of: kind) { _, _ in
             coordinator.clear()
             selectedURL = nil; review = .init(); draftPickets = [:]
-            selection = .init(); report = nil; applyError = nil
+            report = nil; applyError = nil
         }
         .onAppear {
             coordinator.activate(generation: mapping.workflow?.committed.generationID)
@@ -82,6 +88,14 @@ struct MappingExchangeImportView: View {
                 assignment.projectID = mapping.workflow?.context.projectID
                 assignment.horizonID = mapping.workflow?.context.horizonID
             }
+        }
+        .onChange(of: state.publicationID) { _, _ in
+            guard let source = coordinator.state.preview?.source, source.kind == .regulatoryData else { return }
+            let documentID = RegulatoryDataImport.reviewDocumentID(source)
+            if let previous = review.documentID, previous != documentID {
+                review = .init(); draftPickets = [:]
+            }
+            review.documentID = documentID
         }
         .task(id: state.publicationID) {
             guard let id = state.publicationID else { return }
@@ -293,6 +307,7 @@ struct MappingExchangeImportView: View {
             if !record.candidates.isEmpty {
                 Picker("Наблюдение в журнале", selection: Binding(get: { review.matches[key] }, set: { id in
                     review.matches[key] = id
+                    review.faultMatches[key] = nil
                     review.createSeparately.remove(key)
                     recheck()
                 })) {
@@ -332,8 +347,16 @@ struct MappingExchangeImportView: View {
             if actions.canAcknowledgeDerived {
                 Button("Продолжить с сохранёнными SD и GSI") { review.acknowledgeDerived.insert(key); recheck() }
             }
-            if actions.canConfirmFaultOrder {
-                Button("Подтвердить исходный порядок строк разломов") { review.faultOrder.insert(key); recheck() }
+            ForEach(actions.faultMatches) { fault in
+                Picker("Разлом · строка \(fault.row) · \(fault.values)", selection: Binding(get: {
+                    review.faultMatches[key]?[fault.id]
+                }, set: { id in
+                    review.faultMatches[key, default: [:]][fault.id] = id
+                    recheck()
+                })) {
+                    Text("Новый разлом / выберите сохранённый").tag(UUID?.none)
+                    ForEach(fault.choices) { choice in Text(choice.label).tag(Optional(choice.id)) }
+                }
             }
             if actions.needsPicket {
                 TextField("Пикет", text: Binding(get: { draftPickets[key] ?? "" }, set: { draftPickets[key] = $0 }))
@@ -353,7 +376,7 @@ struct MappingExchangeImportView: View {
     }
 
     private func prepare(_ url: URL) {
-        selection = .init(); report = nil; applyError = nil
+        report = nil; applyError = nil
         coordinator.prepare(url, work: .init(storage: mapping.storage, kind: kind, regulatoryReview: review))
     }
 

@@ -19,12 +19,26 @@ enum RegulatoryDataProposal {
         var north = GeographicReference.unknown
         var verticalSide = false
         var picketOverride = ""
+        // Previously approved, exact-byte pending operations may carry this flag.
         var faultOrder = false
+        var faultMatches: [String: UUID]?
+        var canonicalFaultOrder: Bool?
         var resolvedChainage: Double?
         var acknowledgeDerived: Bool?
         var preservePrecision: Bool?
         var reviewKey: String?
         var resolvedRockCode: String?
+    }
+
+    struct FaultMatch: Identifiable, Sendable {
+        let id: String
+        let row: Int
+        let values: String
+        let choices: [MappingExchangePreview.MatchCandidate]
+    }
+
+    struct FaultMatchingRequired: Error {
+        let matches: [FaultMatch]
     }
 
     static func makeNew(id: UUID, row: Row, assignment: Assignment, in current: MappingCommittedSnapshot) throws -> MappingObservation {
@@ -54,7 +68,7 @@ enum RegulatoryDataProposal {
     }
 
     static func make(rows: [Row], point: MappingObservation, exported: MappingObservation?, exportedRows: [[String]],
-                     assignment: Assignment, in current: MappingCommittedSnapshot) throws -> MappingObservation {
+                     assignment: Assignment, in current: MappingCommittedSnapshot, faultRows: inout [UUID: Int]) throws -> MappingObservation {
         let row = rows[0]
         let base = exportedRows[0]
         let old = exported == nil ? nil : point
@@ -85,7 +99,7 @@ enum RegulatoryDataProposal {
         }
         let ratings = try assessments(patch, row: row, point: point)
         let geology = try geology(rows, patch: patch, point: point, exported: exported, exportedRows: exportedRows,
-                                  assignment: assignment, revision: current.latestRevisions[point.id]?.version ?? 1)
+                                  assignment: assignment, revision: current.latestRevisions[point.id]?.version ?? 1, faultRows: &faultRows)
         let proposal = MappingObservation(id: point.id, projectID: point.projectID, horizonID: point.horizonID, excavationID: point.excavationID,
             picket: picket, chainageMeters: chainage, chainageOriginAndDirection: point.chainageOriginAndDirection,
             observedAt: point.observedAt, observedTimeZoneID: point.observedTimeZoneID, observedUTCOffsetSeconds: point.observedUTCOffsetSeconds,
@@ -253,7 +267,8 @@ enum RegulatoryDataProposal {
     }
 
     private static func geology(_ rows: [Row], patch: [String], point: MappingObservation, exported: MappingObservation?,
-                                exportedRows: [[String]], assignment: Assignment, revision: Int) throws -> MappingGeology? {
+                                exportedRows: [[String]], assignment: Assignment, revision: Int,
+                                faultRows: inout [UUID: Int]) throws -> MappingGeology? {
         let prior = point.geology
         var sets = prior?.jointSets ?? []
         for (offset, identifier) in JointSetIdentifier.routine.enumerated() {
@@ -274,20 +289,21 @@ enum RegulatoryDataProposal {
             if let index { sets[index] = set } else { sets.append(set) }
         }
         let faults = try faults(rows, prior: prior?.tectonicStructures ?? [], baseline: exported?.geology?.tectonicStructures ?? [],
-                               exportedRows: exportedRows, assignment: assignment, point: point)
+                               exportedRows: exportedRows, assignment: assignment, point: point, faultRows: &faultRows)
         guard prior != nil || !sets.isEmpty || !faults.isEmpty else { return nil }
         return MappingGeology(start: prior?.start, end: prior?.end, position: prior?.position, jointSets: sets, tectonicStructures: faults)
     }
 
     private static func faults(_ rows: [Row], prior: [TectonicStructure], baseline: [TectonicStructure],
-                               exportedRows: [[String]], assignment: Assignment, point: MappingObservation) throws -> [TectonicStructure] {
+                               exportedRows: [[String]], assignment: Assignment, point: MappingObservation,
+                               faultRows: inout [UUID: Int]) throws -> [TectonicStructure] {
         let range = RegulatoryDataWorkbook.fault
         let base = Array(exportedRows.prefix(baseline.count)).map { Array($0[range]) }
         let input = rows.map { Array($0.values[range]) }
         if baseline.isEmpty && input.allSatisfy({ $0.allSatisfy(\.isEmpty) }) { return prior }
-        if input.count == base.count && zip(input, base).allSatisfy({ values, saved in
-            zip(values, saved).allSatisfy { $0.isEmpty || $0 == $1 }
-        }) { return prior }
+        if Dictionary(grouping: input, by: { $0 }).mapValues(\.count) ==
+            Dictionary(grouping: base, by: { $0 }).mapValues(\.count) { return prior }
+        if input.count == base.count, input.allSatisfy({ $0.allSatisfy(\.isEmpty) }) { return prior }
         guard prior == baseline else {
             throw ExchangeImportError("Data!S:U: структуры изменились в журнале. Для правки этих полей нужна новая выгрузка.")
         }
@@ -303,19 +319,41 @@ enum RegulatoryDataProposal {
         guard available.count <= unmatched.count else {
             throw ExchangeImportError("Data!S:U: отсутствуют сохранённые строки разломов. Удаление структур через Excel недоступно.")
         }
-        if available.count > 1 || (!available.isEmpty && unmatched.count > available.count) {
-            guard assignment.faultOrder else {
-                throw ExchangeImportError("Data!S:U: подтвердите соответствие изменённых разломов по исходному порядку строк.")
+        if !available.isEmpty {
+            if assignment.faultOrder {
+                for (row, old) in zip(unmatched, available.sorted()) { matches[row] = old }
+            } else {
+                let candidates = available.sorted().map { index -> MappingExchangePreview.MatchCandidate in
+                    let fault = baseline[index]
+                    let values = faultValuesLabel(base[index])
+                    let description = fault.description.isEmpty ? "" : " · " + fault.description
+                    return .init(id: fault.id, label: values + description + " · " + fault.id.uuidString)
+                }
+                let requests = unmatched.map { index in
+                    FaultMatch(id: faultKey(input[index]), row: rows[index].number,
+                        values: faultValuesLabel(input[index]), choices: candidates)
+                }
+                let known = Dictionary(uniqueKeysWithValues: available.map { (baseline[$0].id, $0) })
+                var used = Set<Int>()
+                for (index, request) in zip(unmatched, requests) {
+                    guard let chosen = assignment.faultMatches?[request.id], let old = known[chosen] else { continue }
+                    guard used.insert(old).inserted else { throw FaultMatchingRequired(matches: requests) }
+                    matches[index] = old
+                }
+                guard used == available else { throw FaultMatchingRequired(matches: requests) }
             }
         }
-        for (row, old) in zip(unmatched, available.sorted()) { matches[row] = old }
         var result = prior
-        for (index, values) in input.enumerated() {
+        let order = assignment.canonicalFaultOrder == true
+            ? input.indices.sorted { input[$0].lexicographicallyPrecedes(input[$1]) } : Array(input.indices)
+        for index in order {
+            let values = input[index]
             let oldIndex = matches[index]
             let old = oldIndex.map { baseline[$0] }
             if old == nil && values.allSatisfy({ $0.isEmpty || $0 == clear }) { continue }
             let previous = oldIndex.map { base[$0] } ?? ["", "", ""]
             let patch = zip(values, previous).map { $0 == $1 ? "" : $0 }
+            if let old { faultRows[old.id] = rows[index].number }
             if patch.allSatisfy(\.isEmpty) { continue }
             let orientation = orientation(patch[0], patch[1], previous: old?.orientation, assignment: assignment)
             let thickness = patch[2].isEmpty ? old?.thicknessMeters : Double(patch[2])
@@ -325,9 +363,16 @@ enum RegulatoryDataProposal {
             let id = old?.id ?? stableID("\(point.id)/fault/\(values.joined(separator: "|"))")
             let fault = TectonicStructure(id: id, type: old?.type ?? .fault, orientation: orientation,
                 thicknessMeters: thickness, picket: old?.picket, position: old?.position ?? "", description: old?.description ?? provenance)
+            faultRows[id] = rows[index].number
             if let oldIndex { result[oldIndex] = fault } else { result.append(fault) }
         }
         return result
+    }
+
+    private static func faultKey(_ values: [String]) -> String { values.joined(separator: "|") }
+
+    private static func faultValuesLabel(_ values: [String]) -> String {
+        zip(["F_DIP", "F_AZI", "F_THI"], values).map { "\($0) \($1.isEmpty ? "—" : $1)" }.joined(separator: " · ")
     }
 
     private static func orientation(_ dip: String, _ azimuth: String, previous: ManualOrientationInput?,

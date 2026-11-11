@@ -1,7 +1,7 @@
 import Foundation
 
-/// Optional companion file, selected separately in Files. Its bindings are checked
-/// against local history and the full read-only report projection before use.
+/// Hidden worksheet identity. Bindings reference archived journal snapshots.
+/// Row numbers provide hints for review when the original anchor is missing.
 struct RegulatoryDataManifest: Codable, Sendable {
     static let sheetName = "_FieldForge"
     private static let column = "FieldForge-Regulatory-Data/2"

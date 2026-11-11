@@ -32,24 +32,29 @@ UUIDs and owners, revision IDs, and fingerprints. A single XLSX carries the
 entire exchange workflow. Choose **Совместимость · только лист Data** for
 consumers that require a single-sheet workbook.
 
-The reader checks hidden bindings against the journal's archived observation
-snapshot. Matching uses the workbook UUID, original row position and A/B
-context together. A moved or relabelled row, a stripped workbook UUID or an
-ambiguous original anchor can require an explicit match. A/B and chainage
-shortlist candidates in legacy files. Use the observation's project, horizon,
-excavation, field date and UUID to confirm a match or explicitly create a
-distinct observation. Coordinates never establish identity. Keep original
-rows in place and append new rows to minimize reconciliation. Removing a
-worksheet row does not delete a saved observation or fault.
+The reader checks hidden bindings against archived observation snapshots in the
+journal. You can insert rows anywhere, sort the entire A:AD range below row 4,
+or reorder complete rows. A unique, exact match to the archived Data values
+reports an unchanged observation, even when its row numbers or tectonic-row
+order changed. The current journal version is retained. Changed groups require
+an explicit observation match. Original row positions can offer a candidate
+when a group disappears from its former A/B context. They never establish a
+write target.
+
+When an original group is missing and an unmatched group appears, explicitly
+choose an existing observation or confirm creation. This also covers a moved
+row with a changed picket. In a legacy workbook, A/B and chainage shortlist
+candidates. Review the project, horizon, excavation, field date and UUID before
+matching. Coordinates never establish identity. Removing a worksheet row does
+not delete a saved observation or fault.
 
 Rows with the same A/B and identical observation-level cells may describe
-several faults. The preview asks whether to group new or additional rows when
-their ownership is ambiguous. When editing several saved faults, preserve
-their order or confirm the remaining correspondence after reviewing the
-unchanged fault matches. Exact duplicate rows are blocked. Multiple groups
-assigned to the same observation are blocked until reconciled. Unchanged
-faults preserve their UUID and descriptions. A group creates or revises one
-observation.
+several faults. Confirm whether additional rows belong to that observation.
+Unique unchanged S:U values retain their fault UUIDs regardless of row order.
+For a changed fault row, choose the saved fault explicitly. Unmatched rows
+can be added after the saved faults are accounted for. The preview shows the
+actual Excel row alongside the saved and proposed values. Duplicate rows and
+multiple groups targeting one observation require reconciliation.
 
 ## Exact A:AD column policy
 
@@ -131,6 +136,12 @@ fields untouched in Excel are retained. Fault edits with concurrent local fault
 changes require a fresh export. An apply-time conflict requires a fresh preview
 and explicit resolution.
 
+When you match a row, assign context or resolve a conflict, the refreshed preview
+keeps approvals whose proposal, target and baseline still match. Changed,
+conflicting and newly unmatched proposals need approval again. A stale preview
+blocks confirmation until rechecked. Sorting or moving a row alone keeps its
+approval if the proposed change is identical.
+
 Confirmation re-reads the XLSX and checks its SHA-256. The storage owner
 revalidates each target and commits the new observation or correction with its
 receipt in the existing schema-8 journal. Pending intents retain the approved
@@ -150,10 +161,12 @@ cropped to A:AD with the four original header rows. Reconcile numeric ROCK
 codes against the project catalogue. The source workbook's extra columns,
 formulas and placeholders require review before conversion.
 
-Automated tests use actual XLSX archives and cover the 100 + 20 / 5 revision
-scenario, exact Data XML, DXF point query and missing XY, typed legacy rows,
-fault grouping, numerical and structural diagnostics, stale resolution,
-restart persistence, recovery and duplicate-free replay. Native Excel
+Automated tests use actual XLSX archives and cover insertion among existing
+records, sorting across duplicate A/B anchors, reordering and adding fault
+rows, and retaining unaffected approvals through matching, assignment, conflict
+resolution and journal changes. The 100 + 20 / 5 revision scenario covers
+exact Data XML, DXF point queries and missing XY, restart recovery, and
+duplicate-free re-export and re-import. Native Excel
 resaving of the reference, physical-device Files acceptance and full
 regression remain outside this verification.
 
@@ -161,3 +174,9 @@ SwiftPM passed 128 focused tests across Excel import and export, file and
 preview coordination, the import ledger, plan management and offline backup.
 Xcode 26.6 `build-for-testing` compiled the app and test targets for the
 generic iOS Simulator destination with signing disabled.
+
+PR #81 finalization passed 94 targeted SwiftPM tests across regulatory and
+Exchange XLSX, preview and file coordination, and the durable ledger. The
+Simulator `build-for-testing` succeeded. The focused XLSX tests simulated
+Excel insertion and sorting by relocating full worksheet rows and their cell
+addresses while retaining the original hidden sheet.

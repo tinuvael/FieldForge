@@ -6,6 +6,7 @@ enum RegulatoryDataImport {
     typealias Row = RegulatoryDataWorkbook.Row
 
     struct Review: Sendable {
+        var documentID: String?
         var matches: [String: UUID] = [:]
         var assignment = RegulatoryDataProposal.Assignment()
         var assignments: [String: RegulatoryDataProposal.Assignment] = [:]
@@ -17,7 +18,7 @@ enum RegulatoryDataImport {
         var groupFaults = Set<String>()
         var splitFaults = Set<String>()
         var takeExcelChanges: [String: String] = [:]
-        var faultOrder = Set<String>()
+        var faultMatches: [String: [String: UUID]] = [:]
         var pickets: [String: String] = [:]
     }
 
@@ -31,7 +32,7 @@ enum RegulatoryDataImport {
         var canGroup = false
         var canSplit = false
         var canResolveConflict = false
-        var canConfirmFaultOrder = false
+        var faultMatches: [RegulatoryDataProposal.FaultMatch] = []
         var needsPicket = false
         var canFindExisting = false
         var canAcknowledgeDerived = false
@@ -53,6 +54,10 @@ enum RegulatoryDataImport {
         let metres: Double
     }
 
+    static func reviewDocumentID(_ source: MappingImportSource) -> String {
+        UUID(uuidString: source.documentID)?.uuidString ?? "legacy-regulatory-data"
+    }
+
     static func prepare(bytes: Data, matches: [String: UUID] = [:], review: Review = .init(), committed: MappingCommittedSnapshot,
                         limits: ExchangeLimits = .init()) throws -> Preview {
         let workbook = try RegulatoryDataWorkbook.Read(bytes: bytes, limits: limits)
@@ -60,7 +65,8 @@ enum RegulatoryDataImport {
         let documentID = workbook.documentID ?? manifest?.workbookID
         let source = MappingImportSource(kind: .regulatoryData,
             documentID: documentID?.uuidString ?? ExchangeBaseline.hash(bytes), bytes: bytes)
-        var review = review
+        let scope = reviewDocumentID(source)
+        var review = review.documentID == nil || review.documentID == scope ? review : Review()
         review.matches.merge(matches) { _, explicit in explicit }
         let candidates = Dictionary(grouping: committed.effectiveObservations) {
             Anchor(committed.excavations[$0.excavationID]?.name ?? "", $0.displayPicket)
@@ -71,21 +77,44 @@ enum RegulatoryDataImport {
         }
         let originalBindings = manifest?.bindings ?? []
         let byAnchor = Dictionary(grouping: originalBindings) { Anchor($0.excavation ?? "", $0.picket ?? "") }
-        var byRow: [Int: RegulatoryDataManifest.Binding] = [:]
-        for binding in originalBindings {
-            for row in binding.firstRow..<(binding.firstRow + binding.rowCount) { byRow[row] = binding }
-        }
-        let ledger = (committed.journal.importLedger?.entries ?? []).filter {
-            $0.operation.source.kind == .regulatoryData && $0.operation.source.documentID == source.documentID
-        }
-        let receipts = Dictionary(grouping: ledger, by: \.operation.sourceRecordID)
-        let duplicateNumbers = Set(Dictionary(grouping: workbook.rows.filter { $0.issues.isEmpty }, by: \.values)
-            .values.filter { $0.count > 1 }.flatMap { $0.map(\.number) })
+        let bindingsByID = Dictionary(uniqueKeysWithValues: originalBindings.map { ($0.target.observationID, $0) })
         let grouped = Dictionary(grouping: workbook.rows) { row -> [String] in
             // A missing A or B provides no common observation key.
             let common = RegulatoryDataWorkbook.common.map { row.values[$0] } + [row.numericRock ? "numeric-rock" : "text-rock"]
             return row.values[0].isEmpty || row.values[1].isEmpty ? common + [String(row.number)] : common
         }
+        let groupsByAnchor = Dictionary(grouping: grouped.values) { Anchor($0[0].values) }.mapValues(\.count)
+        let missingBindings = originalBindings.filter { binding in
+            let anchor = Anchor(binding.excavation ?? "", binding.picket ?? "")
+            return groupsByAnchor[anchor, default: 0] < byAnchor[anchor, default: []].count
+        }
+        var byRow: [Int: RegulatoryDataManifest.Binding] = [:]
+        for binding in missingBindings {
+            for row in binding.firstRow..<(binding.firstRow + binding.rowCount) { byRow[row] = binding }
+        }
+        let archived = Dictionary(uniqueKeysWithValues: committed.journal.revisions.map { ($0.id, $0) })
+        let originals = Dictionary(uniqueKeysWithValues: committed.journal.observations.map { ($0.id, $0) })
+        var originalProjections: [UUID: (point: MappingObservation, rows: [[String]])] = [:]
+        for binding in originalBindings {
+            try Task.checkCancellation()
+            guard let point = try original(binding, originals: originals, archived: archived) else { continue }
+            let rows = try projected(point, current: committed)
+            guard binding.excavation == rows[0][0], binding.picket == rows[0][1],
+                  try RegulatoryDataWorkbook.legacySignature(rows[0]) == binding.signature else { continue }
+            originalProjections[point.id] = (point, rows)
+        }
+        let ledger = (committed.journal.importLedger?.entries ?? []).filter {
+            $0.operation.source.kind == .regulatoryData && $0.operation.source.documentID == source.documentID
+        }
+        let receipts = Dictionary(grouping: ledger, by: \.operation.sourceRecordID)
+        var exactReceipts: [String: MappingImportLedger.Entry] = [:]
+        for entry in ledger where entry.operation.isMutation && entry.operation.source == source {
+            if let note = entry.operation.note,
+               let saved = try? ExchangeBaseline.decode(RegulatoryDataProposal.Assignment.self, note),
+               let key = saved.reviewKey { exactReceipts[key] = entry }
+        }
+        let duplicateNumbers = Set(Dictionary(grouping: workbook.rows.filter { $0.issues.isEmpty }, by: \.values)
+            .values.filter { $0.count > 1 }.flatMap { $0.map(\.number) })
         var records: [Record] = []
         for allRows in grouped.values.sorted(by: { $0[0].number < $1[0].number }) {
             try Task.checkCancellation()
@@ -98,61 +127,52 @@ enum RegulatoryDataImport {
             let groups: [[Row]]
             if shouldSplit {
                 let anchor = Anchor(allRows[0].values)
-                let original = Dictionary(grouping: allRows.filter { row in
-                    guard let binding = byRow[row.number] else { return false }
-                    return Anchor(binding.excavation ?? "", binding.picket ?? "") == anchor
-                }, by: { byRow[$0.number]?.target.observationID })
-                let retainedRows = Set(original.values.flatMap { $0.map(\.number) })
-                groups = (Array(original.values) + allRows.filter { !retainedRows.contains($0.number) }.map { [$0] })
-                    .sorted { $0[0].number < $1[0].number }
+                let originals = (byAnchor[anchor] ?? []).compactMap { binding in
+                    originalProjections[binding.target.observationID]?.rows
+                }
+                groups = split(allRows, originals: originals)
             } else { groups = [allRows] }
             for rows in groups {
                 let first = rows[0]
                 let anchor = Anchor(first.values)
                 let key = try rowKey(rows)
                 let legacy = try RegulatoryDataWorkbook.legacySignature(first.values)
-                let bindingAtRow = byRow[first.number]
                 let anchorBindings = byAnchor[anchor] ?? []
-                let compatible = anchorBindings.filter { $0.signature == legacy }
-                // A binding provides identity. The declared row positions or an exact
-                // original projection corroborate it. Other candidates need a choice.
-                let aligned = anchorBindings.filter { $0.firstRow == first.number }
-                let bound = (aligned.count == 1 && (anchorBindings.count == 1 ||
-                    compatible.count == 1 && compatible.first?.target == aligned.first?.target)) ? aligned.first : nil
-                let possibleBindings = (anchorBindings + [bindingAtRow].compactMap { $0 })
-                let bindingByID = Dictionary(possibleBindings.map { ($0.target.observationID, $0) },
-                    uniquingKeysWith: { first, _ in first })
+                let rowValues = rows.map(\.values).sorted(by: lexicographic)
+                // Exact archival matches can only report unchanged. All changed
+                // records require confirmation of a target, even at the old slot.
+                let exact = anchorBindings.filter { binding in
+                    !first.numericRock && originalProjections[binding.target.observationID]?.rows.sorted(by: lexicographic) == rowValues
+                }
+                let unchanged = exact.count == 1 ? exact.first : nil
+                let hints = anchorBindings.isEmpty ? [byRow[first.number]].compactMap { $0 } : []
+                let possibleBindings = anchorBindings + hints
                 let assignment = review.assignments[key] ?? review.assignment
-                var suggested = (candidates[anchor] ?? []) + bindingByID.keys.compactMap { committed.observation(id: $0) }
+                var suggested = (candidates[anchor] ?? []) + possibleBindings.compactMap { committed.observation(id: $0.target.observationID) }
                 for convention in [PicketConvention.tenMeters, .legacyMeters] {
                     if let metres = try? convention.meters(anchor.picket) {
                         suggested += chainageCandidates[ChainageKey(excavation: anchor.excavation, convention: convention, metres: metres)] ?? []
                     }
                 }
+                let choice = review.matches[key]
                 if review.findExisting.contains(key) {
+                    if let choice, let selected = committed.observation(id: choice) { suggested.append(selected) }
                     suggested += committed.effectiveObservations.filter {
                         (assignment.projectID == nil || assignment.projectID == $0.projectID) &&
                         (assignment.horizonID == nil || assignment.horizonID == $0.horizonID) &&
                         (assignment.excavationID == nil || assignment.excavationID == $0.excavationID)
                     }
                 }
-                let choice = review.matches[key]
-                let matchedBinding = choice.flatMap { bindingByID[$0] } ?? bound
-                let boundIDs = bindingByID.keys.map(boundKey)
-                let ids = [matchedBinding.map { boundKey($0.target.observationID) }, Optional(key), Optional(legacy)].compactMap { $0 }
-                let receipt = (ids + boundIDs.filter { !ids.contains($0) }).lazy.compactMap { id in
-                    receipts[id]?.last { entry in
-                        guard entry.operation.isMutation, entry.operation.source == source else { return false }
-                        if let note = entry.operation.note,
-                           let saved = try? ExchangeBaseline.decode(RegulatoryDataProposal.Assignment.self, note) {
-                            return saved.reviewKey == key
-                        }
-                        return ids.contains(id)
-                    }
+                let selectedBinding = choice.flatMap { bindingsByID[$0] } ?? unchanged
+                let ids = [selectedBinding.map { boundKey($0.target.observationID) }, Optional(key), Optional(legacy)].compactMap { $0 }
+                let receipt = exactReceipts[key] ?? ids.lazy.compactMap { id in
+                    receipts[id]?.last { $0.operation.isMutation && $0.operation.source == source && $0.operation.note == nil }
                 }.first
-                let record = try compare(key: key, rows: rows, suggestions: suggested,
-                    binding: receipt.flatMap { bindingByID[$0.operation.target.observationID] } ?? matchedBinding, automatic: workbook.documentID != nil && bound != nil,
-                    choice: choice, duplicate: rows.contains { duplicateNumbers.contains($0.number) },
+                let binding = receipt.flatMap { bindingsByID[$0.operation.target.observationID] } ?? selectedBinding
+                let record = try compare(key: key, rows: rows, suggestions: suggested, binding: binding,
+                    originalProjection: binding.flatMap { originalProjections[$0.target.observationID] },
+                    unchanged: unchanged?.target.observationID, choice: choice, missingOriginals: !missingBindings.isEmpty,
+                    duplicate: rows.contains { duplicateNumbers.contains($0.number) },
                     receipt: receipt, previous: ids.flatMap { receipts[$0] ?? [] }, source: source,
                     review: review, current: committed)
                 records.append(record)
@@ -183,7 +203,9 @@ enum RegulatoryDataImport {
     private static func boundKey(_ id: UUID) -> String { "point/\(id.uuidString)" }
 
     private static func compare(key: String, rows: [Row], suggestions: [MappingObservation],
-                                binding: RegulatoryDataManifest.Binding?, automatic: Bool, choice: UUID?, duplicate: Bool,
+                                binding: RegulatoryDataManifest.Binding?,
+                                originalProjection: (point: MappingObservation, rows: [[String]])?,
+                                unchanged: UUID?, choice: UUID?, missingOriginals: Bool, duplicate: Bool,
                                 receipt: MappingImportLedger.Entry?, previous: [MappingImportLedger.Entry],
                                 source: MappingImportSource, review: Review, current: MappingCommittedSnapshot) throws -> Record {
         let first = rows[0]
@@ -195,10 +217,12 @@ enum RegulatoryDataImport {
         var assignment = review.assignments[key] ?? review.assignment
         assignment.reviewKey = key
         assignment.picketOverride = review.pickets[key] ?? ""
-        assignment.faultOrder = review.faultOrder.contains(key)
-        if let note = receipt?.operation.note,
+        assignment.faultOrder = false
+        assignment.faultMatches = review.faultMatches[key]
+        assignment.canonicalFaultOrder = true
+        if let receipt, receipt.outcome == .pending, let note = receipt.operation.note,
            let saved = try? ExchangeBaseline.decode(RegulatoryDataProposal.Assignment.self, note) { assignment = saved }
-        let selected = choice.flatMap { existingIDs.contains($0) ? $0 : nil } ?? (automatic ? binding?.target.observationID : nil)
+        let selected = choice.flatMap { existingIDs.contains($0) ? $0 : nil } ?? unchanged
         let currentID = receipt?.operation.target.observationID ?? (userCreation ? nil : selected)
         let point = currentID.flatMap { current.observation(id: $0) }
         let retryAfterConflict: Bool
@@ -209,15 +233,16 @@ enum RegulatoryDataImport {
             }
         } else { retryAfterConflict = false }
         let activeReceipt = retryAfterConflict ? nil : receipt
-        let options = (automatic && !review.findExisting.contains(key)) || receipt != nil ? [] : Set(suggestions.map(\.id)).sorted { $0.uuidString < $1.uuidString }.compactMap { id in
+        let options = unchanged != nil || receipt != nil ? [] : Set(suggestions.map(\.id)).sorted { $0.uuidString < $1.uuidString }.compactMap { id in
             current.observation(id: id).map { Preview.MatchCandidate(id: id, label: contextLabel($0, in: current)) }
         }
         let context = point.map { contextLabel($0, in: current) } ?? label
         let boundID = point.flatMap { binding?.target.observationID == $0.id ? boundKey($0.id) : nil }
         let id = receipt?.operation.sourceRecordID ?? boundID ?? key
-        var actions = Actions(canCreateSeparately: !options.isEmpty && receipt == nil,
+        let uncertainCreation = unchanged == nil && (!options.isEmpty || missingOriginals)
+        var actions = Actions(canCreateSeparately: uncertainCreation && receipt == nil,
             canSplit: rows.count > 1 && receipt == nil && (point == nil || rows.count > max(1, point?.geology?.tectonicStructures.count ?? 0)), needsPicket: point == nil && first.values[1].isEmpty,
-            canFindExisting: !automatic && receipt == nil && options.isEmpty)
+            canFindExisting: unchanged == nil && receipt == nil && !review.findExisting.contains(key))
         func result(_ classification: Preview.Classification, _ reason: String,
                     changes: [Preview.Change] = [], proposed: MappingObservation? = nil,
                     baseline: MappingImportBaseline? = nil, graph: String? = nil) -> Record {
@@ -239,10 +264,13 @@ enum RegulatoryDataImport {
         let issues = rows.flatMap(\.issues)
         guard issues.isEmpty else { return result(.invalid, issues.joined(separator: "\n")) }
         guard !duplicate else { return result(.duplicate, "Повторяющиеся строки. Сверьте исходные данные.") }
+        if let unchanged, point?.id == unchanged, choice == nil, receipt == nil {
+            return result(.unchanged, "Строки совпадают с исходной выгрузкой. Текущая версия журнала сохранена.")
+        }
         if let pending = previous.last(where: { $0.outcome == .pending }), pending.operation.source != source {
             return result(.conflict, "Для этой группы есть незавершённый импорт. Откройте исходный файл.")
         }
-        if point == nil && !options.isEmpty && !userCreation && receipt == nil {
+        if point == nil && uncertainCreation && !userCreation && receipt == nil {
             return result(.ambiguous, "Подтвердите существующее наблюдение или создание отдельной записи.")
         }
         let savedFaultRows = point.map { max(1, $0.geology?.tectonicStructures.count ?? 0) } ?? 1
@@ -256,15 +284,11 @@ enum RegulatoryDataImport {
             var baseRows: [[String]]
             if let point {
                 if let binding, binding.target.observationID == point.id {
-                    guard let original = try original(binding, current: current) else {
-                        return result(.conflict, "Исходная версия из книги отсутствует в журнале.")
+                    guard let originalProjection else {
+                        return result(.conflict, "Скрытый лист не соответствует исходной версии журнала.")
                     }
-                    old = original
-                    baseRows = try projected(original, current: current)
-                    guard binding.excavation == baseRows[0][0], binding.picket == baseRows[0][1],
-                          try RegulatoryDataWorkbook.legacySignature(baseRows[0]) == binding.signature else {
-                        return result(.conflict, "Скрытый лист не соответствует исходной проекции журнала.")
-                    }
+                    old = originalProjection.point
+                    baseRows = originalProjection.rows
                 } else {
                     old = point
                     baseRows = try projected(point, current: current)
@@ -292,7 +316,6 @@ enum RegulatoryDataImport {
             if let pending = activeReceipt?.operation, pending.baseline != baseline || pending.graphFingerprint != graph {
                 return result(.conflict, "Журнал изменился после подтверждения. Отклоните незавершённый импорт.")
             }
-            actions.canConfirmFaultOrder = point != nil && rows.count > 1
             if first.numericRock {
                 let raw = first.values[5]
                 let rockKey = RockKey(projectID: target.projectID, numericValue: raw)
@@ -335,10 +358,11 @@ enum RegulatoryDataImport {
                 if row.numericRock, let code = assignment.resolvedRockCode { values[5] = code }
                 return Row(number: row.number, values: values, issues: row.issues)
             }
+            var faultRows: [UUID: Int] = [:]
             let proposed = try RegulatoryDataProposal.make(rows: acceptedRows, point: target, exported: old, exportedRows: baseRows,
-                assignment: assignment, in: current)
+                assignment: assignment, in: current, faultRows: &faultRows)
             let local = try point.map { try projected($0, current: current) } ?? baseRows
-            let changes = try differences(key: id, rows: rows, before: local, proposed: proposed, previous: point, current: current)
+            let changes = try differences(key: id, rows: rows, before: local, proposed: proposed, previous: point, current: current, faultRows: faultRows)
             if proposed == point { return result(.unchanged, "Значения совпадают с журналом.") }
             let staleExport = binding.map { $0.target.observationID == point?.id &&
                 ($0.baseline != baseline || $0.graphFingerprint != graph) } ?? false
@@ -356,6 +380,9 @@ enum RegulatoryDataImport {
             let status = point == nil ? "Новое наблюдение из Data." : "Исправление существующего наблюдения."
             return result(point == nil ? .new : .correction, status + spatial + retained, changes: changes,
                           proposed: proposed, baseline: baseline, graph: graph)
+        } catch let required as RegulatoryDataProposal.FaultMatchingRequired {
+            actions.faultMatches = required.matches
+            return result(.ambiguous, "Data!S:U: сопоставьте каждую изменённую строку с сохранённым разломом. Оставшиеся строки добавятся как новые.")
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -363,12 +390,35 @@ enum RegulatoryDataImport {
         }
     }
 
-    private static func original(_ binding: RegulatoryDataManifest.Binding, current: MappingCommittedSnapshot) throws -> MappingObservation? {
+    private static func lexicographic(_ a: [String], _ b: [String]) -> Bool { a.lexicographicallyPrecedes(b) }
+
+    /// Retain a saved multi-row group only when all its fault values are present
+    /// uniquely. Worksheet positions never decide which faults stay together.
+    private static func split(_ rows: [Row], originals: [[[String]]]) -> [[Row]] {
+        let byFault = Dictionary(grouping: rows) { Array($0.values[RegulatoryDataWorkbook.fault]) }
+        let candidates = originals.compactMap { original -> [Row]? in
+            guard original.count > 1 else { return nil }
+            let matches = original.compactMap { values -> Row? in
+                let rows = byFault[Array(values[RegulatoryDataWorkbook.fault])] ?? []
+                return rows.count == 1 ? rows[0] : nil
+            }
+            guard matches.count == original.count, Set(matches.map(\.number)).count == original.count else { return nil }
+            return matches.sorted { $0.number < $1.number }
+        }
+        let useCount = Dictionary(grouping: candidates.flatMap { $0 }, by: \.number).mapValues(\.count)
+        let retained = candidates.filter { $0.allSatisfy { useCount[$0.number] == 1 } }
+        let used = Set(retained.flatMap { $0.map(\.number) })
+        return (retained + rows.filter { !used.contains($0.number) }.map { [$0] }).sorted { $0[0].number < $1[0].number }
+    }
+
+    private static func original(_ binding: RegulatoryDataManifest.Binding, originals: [UUID: MappingObservation],
+                                 archived: [UUID: MappingObservationRevision]) throws -> MappingObservation? {
         let snapshot: MappingObservation?
         if let revision = binding.baseline.revisionID {
-            snapshot = current.journal.revisions.first { $0.id == revision && $0.version == binding.baseline.version }?.snapshot
+            let entry = archived[revision]
+            snapshot = entry?.version == binding.baseline.version ? entry?.snapshot : nil
         } else {
-            snapshot = binding.baseline.version == 1 ? current.journal.observations.first { $0.id == binding.target.observationID } : nil
+            snapshot = binding.baseline.version == 1 ? originals[binding.target.observationID] : nil
         }
         guard let snapshot, MappingImportTarget(snapshot) == binding.target,
               try MappingImportLedger.fingerprint(snapshot) == binding.baseline.fingerprint else { return nil }
@@ -400,9 +450,10 @@ enum RegulatoryDataImport {
     }
 
     private static func differences(key: String, rows: [Row], before: [[String]], proposed: MappingObservation,
-                                    previous: MappingObservation?, current: MappingCommittedSnapshot) throws -> [Preview.Change] {
+                                    previous: MappingObservation?, current: MappingCommittedSnapshot, faultRows: [UUID: Int]) throws -> [Preview.Change] {
         let after = try projected(proposed, current: current)
         var changes: [Preview.Change] = []
+        let structures = proposed.geology?.tectonicStructures ?? []
         for index in 0..<max(before.count, after.count) {
             let number = rows.indices.contains(index) ? rows[index].number : rows[0].number
             for column in RegulatoryDataWorkbook.columns.indices {
@@ -411,7 +462,9 @@ enum RegulatoryDataImport {
                 let new = after.indices.contains(index) ? after[index][column] : ""
                 guard old != new else { continue }
                 let field = MappingXLSXExport.column(column + 1) + " · " + RegulatoryDataWorkbook.columns[column]
-                changes.append(.init(sheet: "Data", record: key + "/\(index)", field: field, before: old, after: new, row: number))
+                let faultRow = RegulatoryDataWorkbook.fault.contains(column) && structures.indices.contains(index)
+                    ? faultRows[structures[index].id] : nil
+                changes.append(.init(sheet: "Data", record: key + "/\(index)", field: field, before: old, after: new, row: faultRow ?? number))
             }
         }
         let qBefore = previous?.ratings?.bartonQ?.evaluation.result?.value

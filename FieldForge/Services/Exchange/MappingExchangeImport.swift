@@ -7,6 +7,42 @@ enum MappingExchangeImport {
         var rejectedPending: Set<String> = []
         var rejectedConflicts: Set<String> = []
 
+        func retained(from old: MappingExchangePreview?, to next: MappingExchangePreview) -> Self {
+            guard let old, let previousSource = old.source, let source = next.source,
+                  previousSource.kind == source.kind, !next.workbookBlocked else { return .init() }
+            let legacy = source.kind == .regulatoryData &&
+                UUID(uuidString: previousSource.documentID) == nil && UUID(uuidString: source.documentID) == nil
+            guard legacy || previousSource.documentID == source.documentID else { return .init() }
+            let oldRecords = Dictionary(grouping: old.records) { $0.reviewID ?? $0.id }
+            let nextRecords = Dictionary(grouping: next.records) { $0.reviewID ?? $0.id }
+            var result = Self()
+            for (key, group) in nextRecords {
+                guard group.count == 1, let prior = oldRecords[key], prior.count == 1 else { continue }
+                let before = prior[0], after = group[0]
+                if accepted.contains(before.id), before.canApply, after.canApply,
+                   before.target == after.target, before.proposed == after.proposed,
+                   before.baseline == after.baseline, before.graphFingerprint == after.graphFingerprint,
+                   before.receipt == after.receipt, before.correctionAuthor == after.correctionAuthor,
+                   before.reviewID != nil || before.correctionReason == after.correctionReason {
+                    result.accepted.insert(after.id)
+                }
+                if rejectedPending.contains(before.id), before.canRejectPending, after.canRejectPending,
+                   before.receipt == after.receipt {
+                    result.rejectedPending.insert(after.id)
+                }
+                if rejectedConflicts.contains(before.id), before.canRejectConflict, after.canRejectConflict,
+                   before.target == after.target, before.baseline == after.baseline,
+                   before.graphFingerprint == after.graphFingerprint, before.reason == after.reason,
+                   before.changes.elementsEqual(after.changes, by: { lhs, rhs in
+                       lhs.sheet == rhs.sheet && lhs.record == rhs.record && lhs.field == rhs.field &&
+                       lhs.before == rhs.before && lhs.after == rhs.after
+                   }) {
+                    result.rejectedConflicts.insert(after.id)
+                }
+            }
+            return result
+        }
+
         func hasAction(in preview: MappingExchangePreview) -> Bool {
             preview.records.contains { record in
                 (accepted.contains(record.id) && record.canApply) ||
