@@ -97,7 +97,7 @@ enum MappingExchangeImport {
             guard !preview.workbookBlocked, let expected = preview.source else {
                 throw ExchangeImportError("Эту книгу нельзя импортировать. Проверьте ошибки на защищённых листах.")
             }
-            source = MappingImportSource(kind: .exchange, documentID: expected.documentID, bytes: bytes)
+            source = MappingImportSource(kind: expected.kind, documentID: expected.documentID, bytes: bytes)
             guard source == expected else { throw ExchangeImportError("Файл изменился после проверки. Выберите книгу и проверьте её снова.") }
             let confirmsChanges = selection.hasAction(in: preview)
             items = try preview.records.map { record in
@@ -125,7 +125,7 @@ enum MappingExchangeImport {
         switch record.classification {
         case .unchanged: return .report(.unchanged, "")
         case .duplicate: return .report(.skipped, record.reason)
-        case .unsupported, .invalid: return .report(.rejected, record.reason)
+        case .unsupported, .invalid, .ambiguous: return .report(.rejected, record.reason)
         case .conflict:
             guard record.canRejectConflict, selection.rejectedConflicts.contains(record.id), let target = record.target else { return .report(.rejected, record.reason) }
             return .execute(try operation(.conflict, for: record, target: target, source: source, note: "Конфликт обнаружен при проверке книги."), nil)
@@ -158,7 +158,8 @@ enum MappingExchangeImport {
                                   correction: MappingImportOperation.Correction? = nil, note: String? = nil) throws -> MappingImportOperation {
         // Decision-specific identity lets a skipped row be selected in a later confirmation.
         // A terminal rejection of an approved mutation is retained for this exact file.
-        let key = try MappingExchangeExport.json(["exchange-stage-4b", source.documentID, source.fingerprint, record.id, kind.rawValue])
+        let format = source.kind == .exchange ? "exchange-stage-4b" : "regulatory-data-stage-4c"
+        let key = try MappingExchangeExport.json([format, source.documentID, source.fingerprint, record.id, kind.rawValue])
         var bytes = Array(SHA256.hash(data: Data(key.utf8)).prefix(16))
         bytes[6] = (bytes[6] & 0x0f) | 0x80
         bytes[8] = (bytes[8] & 0x3f) | 0x80

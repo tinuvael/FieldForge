@@ -3,10 +3,11 @@ import Foundation
 /// Transient comparison and the typed input to an explicitly approved import.
 struct MappingExchangePreview: Sendable {
     enum Classification: String, CaseIterable, Sendable {
-        case new, unchanged, correction, duplicate, conflict, invalid, unsupported
+        case new, unchanged, correction, duplicate, conflict, invalid, unsupported, ambiguous
         var title: String {
             switch self {
             case .new: return "Новые"; case .unchanged: return "Без изменений"; case .correction: return "Исправления"
+            case .ambiguous: return "Требуют сопоставления"
             case .duplicate: return "Дубликаты"; case .conflict: return "Конфликты"; case .invalid: return "Некорректные"; case .unsupported: return "Неподдерживаемые"
             }
         }
@@ -15,6 +16,10 @@ struct MappingExchangePreview: Sendable {
         let sheet: String; let record: String; let field: String; let before: String; let after: String
         var row: Int? = nil
         var id: String { sheet + "/" + record + "/" + field }
+    }
+    struct MatchCandidate: Identifiable, Sendable {
+        let id: UUID
+        let label: String
     }
     struct Record: Identifiable, Sendable {
         let id: String; let classification: Classification; let reason: String; let changes: [Change]
@@ -27,6 +32,8 @@ struct MappingExchangePreview: Sendable {
         var correctionReason = ""
         var correctionAuthor: String?
         var receipt: MappingImportLedger.Entry?
+        var candidates: [MatchCandidate] = []
+        var matchedID: UUID?
         var target: MappingImportTarget? { (proposed ?? previous).map(MappingImportTarget.init) }
         var canRejectPending: Bool { receipt?.outcome == .pending }
         var canRejectConflict: Bool { classification == .conflict && receipt == nil && target != nil }

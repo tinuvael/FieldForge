@@ -5,6 +5,10 @@ struct MappingExchangeImportView: View {
     @EnvironmentObject private var mapping: MappingModel
     @StateObject private var coordinator = MappingExchangePreviewCoordinator()
     @State private var picker = false
+    @State private var choosingManifest = false
+    @State private var kind: MappingImportSource.Kind = .exchange
+    @State private var manifestURL: URL?
+    @State private var matches: [String: UUID] = [:]
     @State private var selectedURL: URL?
     @State private var selection = MappingExchangeImport.Selection()
     @State private var confirming = false
@@ -16,10 +20,29 @@ struct MappingExchangeImportView: View {
         let state = coordinator.state
         List {
             Section {
-                Button("Выбрать книгу Excel…", systemImage: "doc.badge.plus") { picker = true }
+                Picker("Формат", selection: $kind) {
+                    Text("FieldForge Exchange").tag(MappingImportSource.Kind.exchange)
+                    Text("Регламент · Data A:AD").tag(MappingImportSource.Kind.regulatoryData)
+                }.disabled(applying)
+                Button("Выбрать книгу Excel…", systemImage: "doc.badge.plus") {
+                    choosingManifest = false; picker = true
+                }
                     .accessibilityIdentifier("exchangeSelectWorkbook")
                     .disabled(applying)
                 if let selectedURL { LabeledContent("Файл", value: selectedURL.lastPathComponent) }
+                if kind == .regulatoryData, let selectedURL {
+                    Button("Выбрать файл сопоставления…") { choosingManifest = true; picker = true }
+                        .disabled(applying)
+                    if let manifestURL {
+                        LabeledContent("Сопоставление", value: manifestURL.lastPathComponent)
+                        Button("Сопоставить вручную") {
+                            self.manifestURL = nil; matches = [:]; prepare(selectedURL)
+                        }.disabled(applying)
+                    } else {
+                        Text("Для каждой группы строк выберите наблюдение и проверьте значения журнала.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
                 if state.busy {
                     ProgressView("Проверка книги…")
                     let operationID = coordinator.operationID
@@ -28,7 +51,7 @@ struct MappingExchangeImportView: View {
                 if applying { ProgressView("Сохранение выбранных строк…") }
                 if let message = applyError ?? state.message { Text(message).foregroundStyle(.red) }
                 if state.preview == nil, let entries = mapping.workflow?.journal.importLedger?.entries,
-                   entries.contains(where: { $0.operation.source.kind == .exchange && $0.outcome == .pending }) {
+                   entries.contains(where: { $0.operation.source.kind == kind && $0.outcome == .pending }) {
                     Text("Есть незавершённый импорт. Выберите ту же книгу, чтобы продолжить или отклонить строки.")
                         .foregroundStyle(.orange)
                 }
@@ -42,12 +65,19 @@ struct MappingExchangeImportView: View {
                 previewSections(preview, stale: state.stale)
             }
         }
-        .navigationTitle("Импорт Excel Exchange")
+        .navigationTitle("Импорт Excel")
         .navigationBarBackButtonHidden(applying)
-        .fileImporter(isPresented: $picker, allowedContentTypes: [UTType(filenameExtension: "xlsx") ?? .data]) { result in
+        .fileImporter(isPresented: $picker, allowedContentTypes: [choosingManifest ? .json : (UTType(filenameExtension: "xlsx") ?? .data)]) { result in
             guard coordinator.isActive, !applying else { return }
             switch result {
-            case .success(let url): selectedURL = url; prepare(url)
+            case .success(let url):
+                matches = [:]
+                if choosingManifest {
+                    manifestURL = url
+                    if let selectedURL { prepare(selectedURL) }
+                } else {
+                    manifestURL = nil; selectedURL = url; prepare(url)
+                }
             case .failure(let error): coordinator.selectionFailed(error)
             }
         }
@@ -56,7 +86,12 @@ struct MappingExchangeImportView: View {
                 .disabled(!canConfirm(state.preview, stale: state.stale))
             Button("Отмена", role: .cancel) {}
         } message: {
-            Text("Выбрано для импорта: \(selection.accepted.count). Выбрано для отклонения: \(selection.rejectedPending.count + selection.rejectedConflicts.count). Каждая строка сохраняется отдельно. Неотмеченные новые и изменённые строки будут пропущены. Конфликтующие строки исключены из импорта.")
+            Text("Выбрано для импорта: \(selection.accepted.count). Выбрано для отклонения: \(selection.rejectedPending.count + selection.rejectedConflicts.count). Каждое наблюдение сохраняется отдельно. Сохраняются только отмеченные изменения без конфликтов.")
+        }
+        .onChange(of: kind) { _, _ in
+            coordinator.clear()
+            selectedURL = nil; manifestURL = nil; matches = [:]
+            selection = .init(); report = nil; applyError = nil
         }
         .onAppear { coordinator.activate(generation: mapping.workflow?.committed.generationID) }
         .task(id: state.publicationID) {
@@ -75,10 +110,15 @@ struct MappingExchangeImportView: View {
     @ViewBuilder private func previewSections(_ preview: MappingExchangePreview, stale: Bool) -> some View {
         let canChoose = !stale && !preview.workbookBlocked && !applying
         Section("Предварительная проверка") {
-            LabeledContent("Проект", value: preview.projectName)
-            LabeledContent("Выгружено", value: preview.exportedAt.formatted(date: .abbreviated, time: .shortened))
+            if kind == .exchange { LabeledContent("Проект", value: preview.projectName) }
+            if preview.exportedAt != .distantPast {
+                LabeledContent("Выгружено", value: preview.exportedAt.formatted(date: .abbreviated, time: .shortened))
+            }
+            if kind == .regulatoryData {
+                LabeledContent("Сопоставлено наблюдений", value: String(Set(preview.records.compactMap(\.matchedID)).count))
+            }
             LabeledContent("Проверено строк наблюдений", value: String(preview.rowsProcessed))
-            ForEach(MappingExchangePreview.Classification.allCases, id: \.self) { category in
+            ForEach(categories, id: \.self) { category in
                 LabeledContent(category.title, value: String(preview.count(category)))
             }
             if stale {
@@ -93,17 +133,25 @@ struct MappingExchangeImportView: View {
                     .foregroundStyle(.orange)
             }
         }
-        ForEach(MappingExchangePreview.Classification.allCases, id: \.self) { category in
+        ForEach(categories, id: \.self) { category in
             let records = preview.records.filter { $0.classification == category }
-            if !records.isEmpty, category != .unchanged || records.contains(where: { $0.receipt != nil }) {
+            if !records.isEmpty, category != .unchanged || records.contains(where: { $0.receipt != nil || !$0.candidates.isEmpty }) {
                 Section(category.title) {
                     ForEach(records) { record in
                         DisclosureGroup {
                             Text(record.reason)
+                            if !record.candidates.isEmpty {
+                                Picker("Наблюдение", selection: match(record)) {
+                                    Text("Выберите наблюдение").tag(UUID?.none)
+                                    ForEach(record.candidates) { candidate in
+                                        Text(candidate.label).tag(Optional(candidate.id))
+                                    }
+                                }.disabled(!canChoose)
+                            }
                             ForEach(record.visibleChanges) { change in
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(verbatim: change.title).font(.subheadline.bold())
-                                    LabeledContent("В выгрузке") {
+                                    LabeledContent(kind == .exchange ? "В выгрузке" : "В журнале") {
                                         Text(verbatim: change.before.isEmpty ? "Пусто" : change.before)
                                     }
                                     LabeledContent("Предложено") {
@@ -141,6 +189,10 @@ struct MappingExchangeImportView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
+    }
+
+    private var categories: [MappingExchangePreview.Classification] {
+        MappingExchangePreview.Classification.allCases.filter { kind == .regulatoryData || $0 != .ambiguous }
     }
 
     private func reportSection(_ report: MappingExchangeImport.Report) -> some View {
@@ -185,9 +237,16 @@ struct MappingExchangeImportView: View {
         })
     }
 
+    private func match(_ record: MappingExchangePreview.Record) -> Binding<UUID?> {
+        Binding(get: { matches[record.id] }, set: { id in
+            matches[record.id] = id
+            if let selectedURL { prepare(selectedURL) }
+        })
+    }
+
     private func prepare(_ url: URL) {
         selection = .init(); report = nil; applyError = nil
-        coordinator.prepare(url, work: .init(storage: mapping.storage))
+        coordinator.prepare(url, work: .init(storage: mapping.storage, kind: kind, manifestURL: manifestURL, matches: matches))
     }
 
     private func canConfirm(_ preview: MappingExchangePreview?, stale: Bool) -> Bool {

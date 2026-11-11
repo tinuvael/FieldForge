@@ -198,6 +198,7 @@ final class MappingExportFiles: Sendable {
     init(directory: URL, urls: [URL]) { self.directory = directory; self.urls = urls }
     static func write(_ export: MappingCSVExport, parent: URL = FileManager.default.temporaryDirectory,
                       format: MappingExportFormat = .xlsx, showTechnicalSheets: Bool = false,
+                      regulatoryManifest: RegulatoryDataManifest? = nil,
                       write: (Data, URL) throws -> Void = { try $0.write(to: $1, options: .atomic) },
                       xlsxAppend: @escaping (Data, FileHandle) throws -> Void = { try $1.write(contentsOf: $0) }) throws -> MappingExportFiles {
         try Task.checkCancellation()
@@ -209,6 +210,11 @@ final class MappingExportFiles: Sendable {
                 let url = directory.appendingPathComponent(format == .enterpriseGeotechnical ? "FieldForge-Geotechnical.xlsx" : "FieldForge-Mapping.xlsx")
                 try MappingXLSXExport.write(export, to: url, showTechnicalSheets: showTechnicalSheets, enterprise: format == .enterpriseGeotechnical, append: xlsxAppend)
                 try Task.checkCancellation()
+                if format == .enterpriseGeotechnical, let regulatoryManifest {
+                    let companion = directory.appendingPathComponent("FieldForge-Geotechnical-Matching.json")
+                    try write(regulatoryManifest.encoded(), companion)
+                    return MappingExportFiles(directory: directory, urls: [url, companion])
+                }
                 return MappingExportFiles(directory: directory, urls: [url])
             }
             var urls: [URL] = []

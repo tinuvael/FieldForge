@@ -18,6 +18,7 @@ enum ExchangeObservationProposal {
     private static func normalizedDecimal(_ text: String) -> String {
         let parts = text.lowercased().split(separator: "e", omittingEmptySubsequences: false)
         guard parts.count <= 2, let power = parts.count == 2 ? Int(parts[1]) : 0 else { return "invalid" }
+        guard (-10_000...10_000).contains(power) else { return "invalid exponent" }
         let negative = parts[0].hasPrefix("-")
         let mantissa = parts[0].filter { $0 != "+" && $0 != "-" }
         let fraction = mantissa.split(separator: ".", omittingEmptySubsequences: false)

@@ -102,19 +102,26 @@ enum MappingImportApply {
         guard MappingImportTarget(proposal) == operation.target else { return .rejected(.ownershipChanged) }
         if let correction = operation.correction,
            let point = current.observation(id: operation.target.observationID) {
-            let historicalSets = point.geology?.jointSets.filter { !$0.identifier.isRoutine } ?? []
-            guard proposal.measurementIDs == point.measurementIDs,
-                  proposal.geology?.jointSets.filter({ !$0.identifier.isRoutine }) ?? [] == historicalSets,
-                  ExchangeObservationProposal.ratingsAllowed(proposal.ratings, from: point.ratings) else {
-                return .rejected(.protectedEvidence)
+            if operation.source.kind == .regulatoryData {
+                guard operation.graphFingerprint != nil,
+                      RegulatoryDataImport.preservesEvidence(proposal, from: point, in: current) else {
+                    return .rejected(.protectedEvidence)
+                }
+            } else {
+                let historicalSets = point.geology?.jointSets.filter { !$0.identifier.isRoutine } ?? []
+                guard proposal.measurementIDs == point.measurementIDs,
+                      proposal.geology?.jointSets.filter({ !$0.identifier.isRoutine }) ?? [] == historicalSets,
+                      ExchangeObservationProposal.ratingsAllowed(proposal.ratings, from: point.ratings) else {
+                    return .rejected(.protectedEvidence)
+                }
+                if operation.graphFingerprint != nil,
+                   !ExchangeObservationProposal.preservesEvidence(proposal, from: point) { return .rejected(.protectedEvidence) }
             }
-            if operation.graphFingerprint != nil,
-               !ExchangeObservationProposal.preservesEvidence(proposal, from: point) { return .rejected(.protectedEvidence) }
             if proposal == point { return .skipped }
             next.appendCorrection(id: operation.id, snapshot: proposal, now: correction.date,
                                   author: correction.author, reason: correction.reason)
         } else {
-            guard proposal.measurementIDs.isEmpty,
+            guard operation.source.kind != .regulatoryData, proposal.measurementIDs.isEmpty,
                   proposal.geology?.jointSets.contains(where: { !$0.identifier.isRoutine }) != true else {
                 return .rejected(.protectedEvidence)
             }

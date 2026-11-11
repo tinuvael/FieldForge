@@ -20,9 +20,17 @@ import Combine
         let read: @Sendable (URL, MappingCommittedSnapshot) async throws -> MappingExchangePreview
         let isCurrent: @Sendable (UUID) async throws -> Bool
 
-        init(storage: MappingStorageOwner) {
+        init(storage: MappingStorageOwner, kind: MappingImportSource.Kind = .exchange,
+             manifestURL: URL? = nil, matches: [String: UUID] = [:]) {
             snapshot = { try await storage.exchangeSnapshot() }
-            read = { try await MappingExchangeFileRead.prepare(url: $0, committed: $1) }
+            read = { url, committed in
+                if kind == .exchange { return try await MappingExchangeFileRead.prepare(url: url, committed: committed) }
+                let bytes = try await MappingExchangeFileRead.data(url: url)
+                let manifest: Data?
+                if let manifestURL { manifest = try await MappingExchangeFileRead.data(url: manifestURL) }
+                else { manifest = nil }
+                return try RegulatoryDataImport.prepare(bytes: bytes, manifestBytes: manifest, matches: matches, committed: committed)
+            }
             isCurrent = { try await storage.exchangePreviewIsCurrent($0) }
         }
         init(snapshot: @escaping @Sendable () async throws -> MappingCommittedSnapshot,
@@ -57,6 +65,10 @@ import Combine
         guard isActive, let id, operationID == id else { return }
         revokeOperation()
         state = State(message: "Проверка отменена. Данные не изменены.")
+    }
+    func clear() {
+        revokeOperation()
+        state = State()
     }
     func selectionFailed(_ error: Error) {
         guard isActive else { return }
