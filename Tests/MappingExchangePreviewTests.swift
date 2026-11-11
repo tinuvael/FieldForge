@@ -122,6 +122,83 @@ import zlib
 
     private enum Interrupted: Error { case simulated }
 
+    func testConfirmationWithoutActionDoesNotRecordSkips() async throws {
+        let journal = try fixture()
+        let (root, owner, snapshot) = try await makeOwner(journal)
+        let file = try bytes(newPoint(correction(export(journal), note: "Предложение из Excel")))
+        let preview = try MappingExchangePreview.prepare(data: file, committed: snapshot)
+        XCTAssertEqual(preview.count(.new), 1)
+        XCTAssertEqual(preview.count(.correction), 1)
+        let mappingURL = root.appendingPathComponent("mapping.json")
+        let original = try Data(contentsOf: mappingURL)
+
+        for selection in [MappingExchangeImport.Selection(), .init(accepted: ["missing"],
+            rejectedPending: [id(7).uuidString], rejectedConflicts: [id(7).uuidString])] {
+            XCTAssertFalse(selection.hasAction(in: preview))
+            let batch = try MappingExchangeImport.Batch(preview: preview, bytes: file, selection: selection, now: time)
+            XCTAssertTrue(batch.items.allSatisfy { $0.action.operation == nil })
+            let (unchanged, report) = try await owner.applyExchange(batch)
+            XCTAssertEqual(report.count(.notProcessed), 2)
+            XCTAssertEqual(report.count(.skipped), 0)
+            XCTAssertEqual(unchanged.journal, journal)
+            XCTAssertEqual(try Data(contentsOf: mappingURL), original)
+        }
+
+        let selection = MappingExchangeImport.Selection(accepted: [id(7).uuidString])
+        XCTAssertTrue(selection.hasAction(in: preview))
+        let batch = try MappingExchangeImport.Batch(preview: preview, bytes: file, selection: selection, now: time)
+        XCTAssertEqual(batch.items.compactMap { $0.action.operation?.kind }, [.update, .skip])
+    }
+
+    func testConfirmationDisplaysNewPointContextAndManualCoordinateProvenance() throws {
+        let journal = try fixture()
+        let workbook = try newPoint(export(journal))
+        let index = try row(workbook, sheet: "points", column: "client_record_id", value: id(80).uuidString)
+        let zone = try XCTUnwrap(TimeZone(identifier: "Asia/Almaty"))
+        let proposal = try XCTUnwrap(preview(edit(workbook, sheet: "points", row: index, values: [
+            "observed_zone": zone.identifier, "observed_offset_seconds": String(zone.secondsFromGMT(for: time)),
+            "chainage_origin_direction": "От устья на север"
+        ]), journal: journal).records.first { $0.classification == .new })
+        let point = try XCTUnwrap(proposal.proposed)
+        let expected = [
+            "project_id": point.projectID.uuidString, "horizon_id": point.horizonID.uuidString,
+            "excavation_id": point.excavationID.uuidString, "picket": point.picket, "picket_convention_json": "Пикет 10 м",
+            "chainage_origin_direction": "От устья на север", "has_coordinates": "Да",
+            "x": "123456789.12345679", "y": "-0.12345678912345678", "z_m": "-120.12345678912345",
+            "xy_units": "m", "crs": "mine", "axes": "X north; Y east", "coordinate_source": "Вручную",
+            "coordinate_provenance": "manual; survey log", "z_origin": "Вручную", "observed_zone": zone.identifier,
+            "observed_offset_seconds": String(zone.secondsFromGMT(for: time)),
+            "observed_at_reference_seconds": String(time.timeIntervalSinceReferenceDate)
+        ]
+        let displayed = proposal.visibleChanges
+        for (field, value) in expected {
+            let change = try XCTUnwrap(displayed.first { $0.id.hasSuffix("/" + field) }, field)
+            XCTAssertTrue(change.before.isEmpty, field)
+            XCTAssertEqual(change.after, value, field)
+            XCTAssertFalse(change.title.hasPrefix(field + " ·"), field)
+        }
+    }
+
+    func testConfirmationExpandsStructuredChangesAndPreservesUnexpandedValues() throws {
+        let before = #"{"jn":{"origin":"tableSelection","value":"12"},"future":{"comment":"old"}}"#
+        let after = #"{"jn":{"origin":"manualWithinRow","value":"12"},"future":{"comment":"[new](https://example.com)"}}"#
+        let q = MappingExchangePreview.Change(sheet: "assessments", record: "point/Q", field: "input_json",
+            before: before, after: after, row: 2)
+        let malformed = MappingExchangePreview.Change(sheet: "points", record: "point", field: "rock_json",
+            before: #"{"code":"004"}"#, after: #"{"code":"#, row: 3)
+        let record = MappingExchangePreview.Record(id: "point", classification: .correction, reason: "",
+            changes: [q, malformed], proposed: nil)
+        let displayed = record.visibleChanges
+        let origin = try XCTUnwrap(displayed.first { $0.id == q.id + "/jn.origin" })
+        XCTAssertEqual(origin.before, "Выбрана табличная величина")
+        XCTAssertEqual(origin.after, "Ручной ввод в пределах строки")
+        let fallback = try XCTUnwrap(displayed.first { $0.id == q.id })
+        XCTAssertEqual(fallback.before, before)
+        XCTAssertEqual(fallback.after, after)
+        XCTAssertEqual(displayed.first { $0.id == malformed.id }?.after, malformed.after)
+        XCTAssertEqual(Set(displayed.map(\.id)).count, displayed.count)
+    }
+
     func testWorkbookBytesRoundTripPreservesPhotosDXFMeasurementsAndAssessmentHistory() async throws {
         var rmrInput = FinalFieldPolishTests.referenceInput()
         rmrInput.source = "Original RMR log"
@@ -208,6 +285,19 @@ import zlib
         XCTAssertEqual(preview.count(.new), 1)
         XCTAssertEqual(preview.count(.correction), 3, preview.records.map(\.reason).joined(separator: "\n"))
         XCTAssertFalse(preview.hasBlockingRecords)
+        let reviewed = try XCTUnwrap(preview.records.first { $0.id == id(7).uuidString })
+        let displayed = reviewed.visibleChanges
+        for delta in reviewed.changes where delta.field != "input_json" {
+            XCTAssertTrue(displayed.contains { $0.id == delta.id || $0.id.hasPrefix(delta.id + "/") }, delta.id)
+        }
+        for path in ["rock_json/code", "rock_json/name", "input_json/basicSelections.rqd", "input_json/basicSelections.spacing",
+                     "input_json/lower", "input_json/upper"] + QParameter.allCases.map({ "input_json/\($0.rawValue).category" }) {
+            XCTAssertTrue(displayed.contains { $0.id.hasSuffix("/" + path) }, path)
+        }
+        XCTAssertEqual(displayed.first { $0.id.hasSuffix("/input_json/lower") }?.after, "37")
+        XCTAssertEqual(displayed.first { $0.id.hasSuffix("/interval_end_m") }?.after, "")
+        XCTAssertEqual(displayed.first { $0.id.hasPrefix("tectonic_structures/") && $0.id.hasSuffix("/type") }?.after, "Зона сдвига")
+        XCTAssertFalse(displayed.contains { $0.id.hasSuffix("/input_json") })
         let chosen: MappingExchangeImport.Selection = .init(accepted: [id(7).uuidString, id(60).uuidString, "new/\(id(80).uuidString)"])
         let date = time.addingTimeInterval(60)
         let batch = try MappingExchangeImport.Batch(preview: preview, bytes: workbookBytes, selection: chosen, now: date)
@@ -345,8 +435,11 @@ import zlib
         let stale = try MappingExchangePreview.prepare(data: file, committed: changed.committed)
         XCTAssertEqual(stale.count(.conflict), 1)
         XCTAssertEqual(stale.records.first?.receipt?.outcome, .pending)
-        let decision = try MappingExchangeImport.Batch(preview: stale, bytes: file,
-            selection: .init(rejectedPending: [pointID.uuidString]), now: date)
+        let rejection = MappingExchangeImport.Selection(rejectedPending: [pointID.uuidString])
+        XCTAssertFalse(MappingExchangeImport.Selection().hasAction(in: stale))
+        XCTAssertFalse(MappingExchangeImport.Selection(rejectedConflicts: [pointID.uuidString]).hasAction(in: stale))
+        XCTAssertTrue(rejection.hasAction(in: stale))
+        let decision = try MappingExchangeImport.Batch(preview: stale, bytes: file, selection: rejection, now: date)
         let (retained, report) = try await owner.applyExchange(decision)
         XCTAssertEqual(report.count(.rejected), 1)
         XCTAssertEqual(retained.journal.revisions, changed.journal.revisions)
@@ -406,6 +499,10 @@ import zlib
         let conflict = try MappingExchangePreview.prepare(data: edited, committed: changed.committed)
         let conflictingRow = try XCTUnwrap(conflict.records.first { $0.classification == .conflict })
         XCTAssertEqual(conflictingRow.changes.first { $0.field == "notes" }?.after, "Excel")
+        let rejection = MappingExchangeImport.Selection(rejectedConflicts: [conflictingRow.id])
+        XCTAssertTrue(rejection.hasAction(in: conflict))
+        let rejectedBatch = try MappingExchangeImport.Batch(preview: conflict, bytes: edited, selection: rejection, now: date)
+        XCTAssertEqual(rejectedBatch.items.first { $0.record.id == conflictingRow.id }?.action.operation?.kind, .conflict)
         let (updated, report) = try await owner.applyExchange(batch)
         XCTAssertEqual(report.count(.rejected), 1)
         XCTAssertEqual(report.count(.applied), 1)

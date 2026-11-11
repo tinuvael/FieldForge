@@ -6,6 +6,14 @@ enum MappingExchangeImport {
         var accepted: Set<String> = []
         var rejectedPending: Set<String> = []
         var rejectedConflicts: Set<String> = []
+
+        func hasAction(in preview: MappingExchangePreview) -> Bool {
+            preview.records.contains { record in
+                (accepted.contains(record.id) && record.canApply) ||
+                (rejectedPending.contains(record.id) && record.canRejectPending) ||
+                (rejectedConflicts.contains(record.id) && record.canRejectConflict)
+            }
+        }
     }
 
     struct Result: Identifiable, Sendable {
@@ -91,14 +99,16 @@ enum MappingExchangeImport {
             }
             source = MappingImportSource(kind: .exchange, documentID: expected.documentID, bytes: bytes)
             guard source == expected else { throw ExchangeImportError("Файл изменился после проверки. Выберите книгу и проверьте её снова.") }
+            let confirmsChanges = selection.hasAction(in: preview)
             items = try preview.records.map { record in
-                Item(record: record, action: try MappingExchangeImport.action(record, source: expected, selection: selection, now: now))
+                Item(record: record, action: try MappingExchangeImport.action(record, source: expected, selection: selection,
+                    confirmsChanges: confirmsChanges, now: now))
             }
         }
     }
 
     private static func action(_ record: MappingExchangePreview.Record, source: MappingImportSource,
-                               selection: Selection, now: Date) throws -> Item.Action {
+                               selection: Selection, confirmsChanges: Bool, now: Date) throws -> Item.Action {
         let receipt = record.receipt
         if receipt?.outcome == .applied { return .report(.alreadyApplied, "") }
         if let receipt, case .rejected(let conflict) = receipt.outcome {
@@ -117,9 +127,11 @@ enum MappingExchangeImport {
         case .duplicate: return .report(.skipped, record.reason)
         case .unsupported, .invalid: return .report(.rejected, record.reason)
         case .conflict:
-            guard selection.rejectedConflicts.contains(record.id), let target = record.target else { return .report(.rejected, record.reason) }
+            guard record.canRejectConflict, selection.rejectedConflicts.contains(record.id), let target = record.target else { return .report(.rejected, record.reason) }
             return .execute(try operation(.conflict, for: record, target: target, source: source, note: "Конфликт обнаружен при проверке книги."), nil)
         case .new, .correction:
+            // A replay can still report terminal receipts without recording new skips.
+            guard confirmsChanges else { return .report(.notProcessed, "Строка не выбрана для импорта.") }
             guard let target = record.target else { throw StorageError.invalidRecord }
             return .execute(try operation(.skip, for: record, target: target, source: source), nil)
         }

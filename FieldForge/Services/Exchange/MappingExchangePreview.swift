@@ -28,6 +28,8 @@ struct MappingExchangePreview: Sendable {
         var correctionAuthor: String?
         var receipt: MappingImportLedger.Entry?
         var target: MappingImportTarget? { (proposed ?? previous).map(MappingImportTarget.init) }
+        var canRejectPending: Bool { receipt?.outcome == .pending }
+        var canRejectConflict: Bool { classification == .conflict && receipt == nil && target != nil }
         var canApply: Bool {
             [.new, .correction].contains(classification) && proposed != nil && (receipt == nil || receipt?.outcome == .pending)
         }
@@ -312,5 +314,169 @@ private struct ExchangeComparison {
             workbookBlocked: workbookBlocked, workbookID: baseline.workbookID, generationID: current.generationID, exportedAt: baseline.exportedAt,
             projectName: baseline.snapshot.journal.projects[0].name, metadata: baseline.metadata,
             records: output.sorted { $0.id < $1.id }, proposalDigest: ExchangeBaseline.hash(Data(normalized.utf8)))
+    }
+}
+
+extension MappingExchangePreview.Record {
+    struct DisplayChange: Identifiable {
+        let id: String
+        let title: String
+        let before: String
+        let after: String
+    }
+
+    private static let columnLabels = [
+        "notes": "Примечание", "position": "Положение", "interval_start_text": "Начало интервала",
+        "interval_start_m": "Начало интервала, м", "interval_end_text": "Конец интервала", "interval_end_m": "Конец интервала, м",
+        "has_geology": "Геологические данные", "correction_reason": "Причина исправления", "correction_author": "Автор исправления",
+        "spacing_m": "Расстояние, м", "persistence_m": "Протяжённость, м", "aperture_mm": "Раскрытие, мм",
+        "roughness": "Шероховатость", "infill": "Заполнитель", "description": "Описание",
+        "type": "Тип структуры", "thickness_m": "Мощность, м", "picket": "Пикет",
+        "chainage_m": "Расстояние по выработке, м", "chainage_origin_direction": "Начало и направление отсчёта",
+        "observed_at_utc": "Время наблюдения (UTC)", "observed_at_reference_seconds": "Точное время (с от 01.01.2001 UTC)",
+        "observed_zone": "Часовой пояс наблюдения", "observed_offset_seconds": "Смещение от UTC, с",
+        "has_coordinates": "Координаты заданы", "x": "X", "y": "Y", "z_m": "Z, м", "xy_units": "Единицы X и Y",
+        "crs": "Система координат", "axes": "Оси координат", "coordinate_source": "Способ задания координат",
+        "coordinate_provenance": "Происхождение координат", "z_origin": "Источник отметки Z",
+        "project_id": "UUID проекта", "horizon_id": "UUID горизонта", "excavation_id": "UUID выработки",
+        "client_record_id": "UUID новой точки", "record_action": "Действие со строкой",
+        "rqd_text": "RQD, %", "rmr_spacing_m_text": "RMR89 · Расстояние, м",
+        "jn_text": "Q · Jn", "jr_text": "Q · Jr", "ja_text": "Q · Ja", "jw_text": "Q · Jw", "srf_text": "Q · SRF"
+    ]
+
+    var visibleChanges: [DisplayChange] {
+        changes.flatMap { change -> [DisplayChange] in
+            let location = change.row.map { " · \(change.sheet), строка \($0)" } ?? ""
+            func display(_ title: String, before: String, after: String) -> [DisplayChange] {
+                [.init(id: change.id, title: title + location, before: before, after: after)]
+            }
+            if let label = Self.columnLabels[change.field] {
+                let title = change.field == "rqd_text" && change.sheet == "assessments"
+                    ? (change.record.hasSuffix("/Q") ? "Q" : "RMR89") + " · " + label : label
+                return display(title, before: Self.columnValue(change.before, for: change), after: Self.columnValue(change.after, for: change))
+            }
+            let isProposal = classification == .new || classification == .correction
+            guard isProposal || classification == .conflict else { return [] }
+            switch change.field {
+            case "rock_json", "input_json":
+                return structuredChanges(change, location: location)
+            case "picket_convention_json":
+                func convention(_ raw: String) -> String {
+                    switch try? ExchangeObservationProposal.object(PicketConvention.self, raw) {
+                    case .legacyMeters: "Километры + метры"
+                    case .tenMeters: "Пикет 10 м"
+                    case nil: raw
+                    }
+                }
+                return display("Система отсчёта пикетов", before: convention(change.before), after: convention(change.after))
+            default:
+                return isProposal ? display(change.field, before: change.before, after: change.after) : []
+            }
+        }
+    }
+
+    private static func columnValue(_ value: String, for change: MappingExchangePreview.Change) -> String {
+        switch change.field {
+        case "has_geology", "has_coordinates":
+            return ["true": "Да", "false": "Нет"][value] ?? value
+        case "position" where change.sheet == "points":
+            return ["roof": "Кровля", "leftWall": "Левая стенка", "rightWall": "Правая стенка",
+                    "face": "Забой", "other": "Другое"][value] ?? value
+        case "type" where change.sheet == "tectonic_structures":
+            return ["fault": "Разлом", "shearZone": "Зона сдвига", "fractureZone": "Зона трещиноватости",
+                    "other": "Другое"][value] ?? value
+        case "coordinate_source": return value == "manual" ? "Вручную" : value
+        case "z_origin": return ElevationOrigin(rawValue: value)?.fieldLabel ?? value
+        case "record_action": return value == "new" ? "Создать наблюдение" : value
+        default: return value
+        }
+    }
+
+    private func structuredChanges(_ change: MappingExchangePreview.Change, location: String) -> [DisplayChange] {
+        let isRock = change.field == "rock_json"
+        let kind = change.record.split(separator: "/").last.map(String.init) ?? ""
+        var paths: [(key: String, title: String, column: String?)] = []
+        if isRock {
+            paths = [("code", "Код породы", nil), ("name", "Название породы", nil)]
+        } else {
+            switch kind {
+            case "Q":
+                paths = [("rqd", "Q · RQD, %", "rqd_text")]
+                paths += QParameter.allCases.flatMap { parameter in
+                    let key = parameter.rawValue
+                    let label = Self.columnLabels[key + "_text"] ?? key
+                    return [("\(key).value", label, key + "_text"), ("\(key).category", "\(label) · Категория", nil),
+                            ("\(key).origin", "\(label) · Способ выбора", nil)]
+                }
+            case "RMR89-basic":
+                paths = [("rqd", "RMR89 · RQD, %", "rqd_text"), ("spacingMeters", "RMR89 · Расстояние, м", "rmr_spacing_m_text"),
+                         ("basicSelections.rqd", "RMR89 · Категория RQD", nil),
+                         ("basicSelections.spacing", "RMR89 · Категория расстояния", nil)]
+            case "GSI":
+                paths = [("lower", "GSI · Нижняя граница", nil), ("upper", "GSI · Верхняя граница", nil)]
+            default: break
+            }
+        }
+        let title = isRock ? "Данные о породе (JSON)" : "Входные данные оценки (JSON)"
+        let fallback = DisplayChange(id: change.id, title: title + location, before: change.before, after: change.after)
+        guard !paths.isEmpty, var before = Self.jsonObject(change.before), var after = Self.jsonObject(change.after) else {
+            return [fallback]
+        }
+        var result: [DisplayChange] = []
+        var needsFallback = false
+        for (key, label, column) in paths {
+            let parts = key.split(separator: ".", maxSplits: 1).map(String.init)
+            let old = Self.remove(parts, from: &before)
+            let new = Self.remove(parts, from: &after)
+            guard let a = Self.scalar(old), let b = Self.scalar(new) else {
+                needsFallback = true
+                continue
+            }
+            if a == b { continue }
+            if let column, changes.contains(where: {
+                $0.sheet == change.sheet && $0.record == change.record && $0.field == column && $0.before == a && $0.after == b
+            }) { continue }
+            result.append(.init(id: change.id + "/" + key, title: label + location,
+                before: Self.jsonValue(a, key: key), after: Self.jsonValue(b, key: key)))
+        }
+        // Compare the unexpanded portion even when some known fields were shown.
+        let remainingBefore = try? JSONSerialization.data(withJSONObject: before, options: [.sortedKeys])
+        let remainingAfter = try? JSONSerialization.data(withJSONObject: after, options: [.sortedKeys])
+        if needsFallback || remainingBefore != remainingAfter { result.append(fallback) }
+        return result
+    }
+
+    private static func jsonObject(_ raw: String) -> [String: Any]? {
+        if raw.isEmpty { return [:] }
+        guard (try? ExchangeJSON.validate(raw)) != nil else { return nil }
+        return (try? JSONSerialization.jsonObject(with: Data(raw.utf8))) as? [String: Any]
+    }
+
+    private static func remove(_ path: [String], from fields: inout [String: Any]) -> Any? {
+        if path.count == 1 { return fields.removeValue(forKey: path[0]) }
+        guard var group = fields[path[0]] as? [String: Any], let value = group.removeValue(forKey: path[1]) else { return nil }
+        fields[path[0]] = group.isEmpty ? nil : group
+        return value
+    }
+
+    private static func scalar(_ value: Any?) -> String? {
+        guard let value else { return "" }
+        if let text = value as? String { return text }
+        return (value as? NSNumber)?.stringValue
+    }
+
+    private static func jsonValue(_ value: String, key: String) -> String {
+        if key.hasSuffix(".origin"), let origin = QValueOrigin(rawValue: value) {
+            return origin == .tableSelection ? "Выбрана табличная величина" : "Ручной ввод в пределах строки"
+        }
+        if key.hasPrefix("basicSelections."), let parameter = RMR89Parameter(rawValue: String(key.dropFirst("basicSelections.".count))),
+           let choice = parameter.choices(test: nil).first(where: { $0.id == value }) {
+            return "\(choice.title) (\(choice.rating) балл.)"
+        }
+        if key.hasSuffix(".category"), let parameter = QParameter(rawValue: String(key.dropLast(".category".count))),
+           let row = QMethod.rows(parameter).first(where: { $0.id == value }) {
+            return "\(value) · \(row.description)"
+        }
+        return value
     }
 }

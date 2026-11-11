@@ -53,9 +53,10 @@ struct MappingExchangeImportView: View {
         }
         .alert("Подтвердить импорт?", isPresented: $confirming) {
             Button("Подтвердить") { confirm() }
+                .disabled(!canConfirm(state.preview, stale: state.stale))
             Button("Отмена", role: .cancel) {}
         } message: {
-            Text("Выбрано для импорта: \(selection.accepted.count). Каждая строка сохраняется отдельно. Неотмеченные новые и изменённые строки будут пропущены. Конфликтующие строки исключены из импорта.")
+            Text("Выбрано для импорта: \(selection.accepted.count). Выбрано для отклонения: \(selection.rejectedPending.count + selection.rejectedConflicts.count). Каждая строка сохраняется отдельно. Неотмеченные новые и изменённые строки будут пропущены. Конфликтующие строки исключены из импорта.")
         }
         .onAppear { coordinator.activate(generation: mapping.workflow?.committed.generationID) }
         .task(id: state.publicationID) {
@@ -99,11 +100,15 @@ struct MappingExchangeImportView: View {
                     ForEach(records) { record in
                         DisclosureGroup {
                             Text(record.reason)
-                            ForEach(visibleChanges(record)) { change in
+                            ForEach(record.visibleChanges) { change in
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text(change.title).font(.subheadline.bold())
-                                    LabeledContent("В выгрузке", value: change.before.isEmpty ? "Пусто" : change.before)
-                                    LabeledContent("Предложено", value: change.after.isEmpty ? "Пусто" : change.after)
+                                    Text(verbatim: change.title).font(.subheadline.bold())
+                                    LabeledContent("В выгрузке") {
+                                        Text(verbatim: change.before.isEmpty ? "Пусто" : change.before)
+                                    }
+                                    LabeledContent("Предложено") {
+                                        Text(verbatim: change.after.isEmpty ? "Пусто" : change.after)
+                                    }
                                 }.font(.caption)
                             }
                             if record.canApply {
@@ -111,10 +116,10 @@ struct MappingExchangeImportView: View {
                                        isOn: decision(record.id, accepting: true))
                                     .disabled(!canChoose)
                             }
-                            if record.receipt?.outcome == .pending {
+                            if record.canRejectPending {
                                 Toggle("Отклонить незавершённую строку", isOn: decision(record.id, accepting: false))
                                     .disabled(!canChoose)
-                            } else if record.classification == .conflict, record.receipt == nil, record.target != nil {
+                            } else if record.canRejectConflict {
                                 Toggle("Сохранить решение об отклонении", isOn: conflictDecision(record.id))
                                     .disabled(!canChoose)
                             }
@@ -131,9 +136,7 @@ struct MappingExchangeImportView: View {
         if preview.records.contains(where: { $0.canApply || $0.classification == .conflict || $0.receipt?.outcome == .pending }) {
             Section {
                 Button("Проверить выбор и подтвердить", systemImage: "checkmark.circle") { confirming = true }
-                    .disabled(!canChoose || mapping.isSaving ||
-                        (selection.accepted.isEmpty && selection.rejectedPending.isEmpty && selection.rejectedConflicts.isEmpty &&
-                            !preview.records.contains { $0.canApply && $0.receipt == nil }))
+                    .disabled(!canConfirm(preview, stale: stale))
                 Text("Изменения сохраняются только после подтверждения. Для конфликта с журналом нужна новая выгрузка.")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -187,8 +190,14 @@ struct MappingExchangeImportView: View {
         coordinator.prepare(url, work: .init(storage: mapping.storage))
     }
 
+    private func canConfirm(_ preview: MappingExchangePreview?, stale: Bool) -> Bool {
+        guard !stale, !applying, !mapping.isSaving, let preview, !preview.workbookBlocked else { return false }
+        return selection.hasAction(in: preview)
+    }
+
     private func confirm() {
-        guard !applying, !coordinator.state.stale, let preview = coordinator.state.preview, let selectedURL else { return }
+        let state = coordinator.state
+        guard let preview = state.preview, let selectedURL, canConfirm(preview, stale: state.stale) else { return }
         applying = true
         applyError = nil
         let approved = selection
@@ -196,57 +205,6 @@ struct MappingExchangeImportView: View {
             defer { applying = false }
             do { report = try await mapping.applyExchange(preview, url: selectedURL, selection: approved) }
             catch { applyError = error.localizedDescription }
-        }
-    }
-
-    private struct DisplayChange: Identifiable {
-        let id: String
-        let title: String
-        let before: String
-        let after: String
-    }
-
-    private func visibleChanges(_ record: MappingExchangePreview.Record) -> [DisplayChange] {
-        let labels = ["notes": "Примечание", "position": "Положение", "interval_start_text": "Начало интервала",
-            "interval_start_m": "Начало интервала, м", "interval_end_text": "Конец интервала",
-            "interval_end_m": "Конец интервала, м", "has_geology": "Геологические данные",
-            "correction_reason": "Причина исправления", "correction_author": "Автор исправления",
-            "spacing_m": "Расстояние, м", "persistence_m": "Протяжённость, м", "aperture_mm": "Раскрытие, мм",
-            "roughness": "Шероховатость", "infill": "Заполнитель", "description": "Описание",
-            "type": "Тип структуры", "thickness_m": "Мощность, м", "picket": "Пикет", "chainage_m": "Расстояние по выработке, м",
-            "observed_at_utc": "Время наблюдения (UTC)", "x": "X", "y": "Y", "z_m": "Z, м",
-            "rqd_text": "RQD, %", "rmr_spacing_m_text": "RMR89 · Расстояние, м",
-            "jn_text": "Jn", "jr_text": "Jr", "ja_text": "Ja", "jw_text": "Jw", "srf_text": "SRF"]
-        return record.changes.flatMap { change -> [DisplayChange] in
-            let position = change.row.map { " · \(change.sheet), строка \($0)" } ?? ""
-            if let title = labels[change.field] {
-                return [DisplayChange(id: change.id, title: title + position, before: change.before, after: change.after)]
-            }
-            guard record.classification == .correction || record.classification == .new || record.classification == .conflict,
-                  ["input_json", "rock_json"].contains(change.field) else { return [] }
-            let paths: [(String, String)] = change.field == "rock_json" ? [("code", "Код породы"), ("name", "Название породы")] :
-                [("lower", "GSI · Нижняя граница"), ("upper", "GSI · Верхняя граница"),
-                 ("basicSelections.rqd", "RMR89 · Категория RQD"), ("basicSelections.spacing", "RMR89 · Категория расстояния")] +
-                QParameter.allCases.flatMap { parameter in
-                    let name = parameter.rawValue.uppercased()
-                    return [("\(parameter.rawValue).category", "\(name) · Категория"), ("\(parameter.rawValue).origin", "\(name) · Способ выбора")]
-                }
-            func fields(_ text: String) -> [String: Any] {
-                guard (try? ExchangeJSON.validate(text)) != nil else { return [:] }
-                return (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any] ?? [:]
-            }
-            let before = fields(change.before), after = fields(change.after)
-            func value(_ path: String, in fields: [String: Any]) -> String {
-                let result = path.split(separator: ".").reduce(fields as Any?) { object, key in
-                    (object as? [String: Any])?[String(key)]
-                }
-                if let number = result as? NSNumber { return number.stringValue }
-                return result as? String ?? ""
-            }
-            return paths.compactMap { path, title in
-                let a = value(path, in: before), b = value(path, in: after)
-                return a == b ? nil : DisplayChange(id: change.id + "/" + path, title: title + position, before: a, after: b)
-            }
         }
     }
 }
