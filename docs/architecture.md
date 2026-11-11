@@ -2,7 +2,7 @@
 
 ## Stage 4a safe apply
 
-The mapping FIFO owner commits Excel import intent and then atomically commits the observation change with its receipt in the schema-8 journal. The ledger rides with the current graph through backup and restore. See [state transitions, evidence invariants and Stage 4b integration](excel-import-stage-4a.md).
+The mapping FIFO owner commits Excel import intent and then atomically commits the observation change with its receipt in the schema-8 journal. The ledger rides with the current graph through backup and restore. See [state transitions and evidence invariants](excel-import-stage-4a.md), [Exchange import](excel-exchange-stage-4b.md) and [regulatory Data import](regulatory-excel-stage-4c.md).
 
 ## B1a/B1b complete offline backup and verified restore
 

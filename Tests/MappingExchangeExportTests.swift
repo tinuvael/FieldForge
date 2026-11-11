@@ -202,7 +202,9 @@ import FoundationXML
                 XCTAssertFalse(workbook.sheetNames.contains("source_records"))
                 let styles = String(decoding: try XCTUnwrap(parts["xl/styles.xml"]), as: UTF8.self)
                 if format == .enterpriseGeotechnical {
-                    XCTAssertEqual(workbook.sheetNames, ["Data"])
+                    XCTAssertEqual(workbook.sheetNames, ["Data", "_FieldForge"])
+                    let xml = String(decoding: try XCTUnwrap(parts["xl/workbook.xml"]), as: UTF8.self)
+                    XCTAssertTrue(xml.contains("state=\"hidden\""))
                 } else {
                     XCTAssertTrue(styles.contains("cellXfs count=\"6\""))
                 }

@@ -70,7 +70,7 @@ struct MappingImportOperation: Codable, Equatable, Identifiable, Sendable {
     let kind: Kind
     let baseline: MappingImportBaseline?
     let proposalFingerprint: String?
-    /// Exchange export graph precondition; absent in Stage 4a entries.
+    /// Export/preview graph precondition; absent in early Stage 4a entries.
     let graphFingerprint: String?
     let creationDate: Date?
     let correction: Correction?
@@ -110,7 +110,7 @@ struct MappingImportOperation: Codable, Equatable, Identifiable, Sendable {
         guard nonblank(source.documentID, limit: 512), nonblank(sourceRecordID, limit: 512),
               isDigest(source.fingerprint), note.map({ nonblank($0, limit: 2048) }) ?? (kind != .conflict),
               isMutation == (proposalFingerprint != nil), proposalFingerprint.map(isDigest) ?? true,
-              graphFingerprint.map({ isMutation && source.kind == .exchange && isDigest($0) }) ?? true,
+              graphFingerprint.map({ isMutation && isDigest($0) }) ?? true,
               (kind == .create) == (creationDate != nil), creationDate?.timeIntervalSinceReferenceDate.isFinite ?? true,
               (kind == .update) == (correction != nil),
               kind != .create || baseline == nil, kind != .update || baseline != nil else {
@@ -164,7 +164,8 @@ struct MappingImportLedger: Codable, Equatable, Sendable {
 
         func reservesSource(against other: MappingImportOperation) -> Bool {
             reservesSource && operation.id != other.id && operation.sourceRecord == other.sourceRecord &&
-                (operation.sourceVersion == other.sourceVersion || other.kind == .create || operation.target != other.target)
+                (operation.sourceVersion == other.sourceVersion || other.kind == .create || operation.target != other.target ||
+                 (operation.source.kind == .regulatoryData && outcome == .pending))
         }
     }
 

@@ -10,6 +10,7 @@ import Combine
         var message: String?
         var stale = false
         var busy = false
+        var selection = MappingExchangeImport.Selection()
     }
     struct Operation {
         let id: UUID
@@ -20,9 +21,14 @@ import Combine
         let read: @Sendable (URL, MappingCommittedSnapshot) async throws -> MappingExchangePreview
         let isCurrent: @Sendable (UUID) async throws -> Bool
 
-        init(storage: MappingStorageOwner) {
+        init(storage: MappingStorageOwner, kind: MappingImportSource.Kind = .exchange,
+             regulatoryReview: RegulatoryDataImport.Review = .init()) {
             snapshot = { try await storage.exchangeSnapshot() }
-            read = { try await MappingExchangeFileRead.prepare(url: $0, committed: $1) }
+            read = { url, committed in
+                if kind == .exchange { return try await MappingExchangeFileRead.prepare(url: url, committed: committed) }
+                let bytes = try await MappingExchangeFileRead.data(url: url)
+                return try RegulatoryDataImport.prepare(bytes: bytes, review: regulatoryReview, committed: committed)
+            }
             isCurrent = { try await storage.exchangePreviewIsCurrent($0) }
         }
         init(snapshot: @escaping @Sendable () async throws -> MappingCommittedSnapshot,
@@ -37,6 +43,8 @@ import Combine
     private var operation: Task<Void, Never>?
     private var observedGeneration: UUID?
     private var appearanceID = UUID()
+    private var decisionPreview: MappingExchangePreview?
+    private var selectedURL: URL?
 
     func activate(generation: UUID?) {
         appearanceID = UUID()
@@ -56,12 +64,22 @@ import Combine
     func cancel(operationID id: UUID?) {
         guard isActive, let id, operationID == id else { return }
         revokeOperation()
-        state = State(message: "Проверка отменена. Данные не изменены.")
+        state = State(message: "Проверка отменена. Данные не изменены.", selection: state.selection)
+    }
+    func clear() {
+        revokeOperation()
+        decisionPreview = nil
+        selectedURL = nil
+        state = State()
+    }
+    func updateSelection(_ selection: MappingExchangeImport.Selection) {
+        guard isActive, state.preview != nil, !state.stale, !state.busy else { return }
+        state.selection = selection
     }
     func selectionFailed(_ error: Error) {
         guard isActive else { return }
         revokeOperation()
-        state = State(message: "Выбор файла: \(error.localizedDescription)")
+        state = State(message: "Выбор файла: \(error.localizedDescription)", selection: state.selection)
     }
     private func owns(_ id: UUID) -> Bool { isActive && operationID == id }
 
@@ -71,7 +89,13 @@ import Combine
         revokeOperation()
         let id = UUID()
         operationID = id
-        state = State(busy: true)
+        if selectedURL != url {
+            decisionPreview = nil
+            selectedURL = url
+            state = State(busy: true)
+        } else {
+            state = State(busy: true, selection: state.selection)
+        }
         let task = Task { @MainActor [weak self] in
             guard let self, self.owns(id) else { return }
             defer {
@@ -95,13 +119,15 @@ import Combine
                 guard self.owns(id), !Task.isCancelled else { return }
                 // One publication: no apparently current preview while freshness is pending.
                 // Also retain journal notifications received while that read was suspended.
-                self.state = State(preview: result, publicationID: id,
-                    stale: !current || self.observedGeneration != result.generationID)
+                let stale = !current || self.observedGeneration != result.generationID
+                let selection = stale ? self.state.selection : self.state.selection.retained(from: self.decisionPreview, to: result)
+                if !stale { self.decisionPreview = result }
+                self.state = State(preview: result, publicationID: id, stale: stale, selection: selection)
             } catch {
                 guard self.owns(id), !Task.isCancelled else { return }
                 self.state = State(message: error is CancellationError
                     ? "Проверка отменена. Данные не изменены."
-                    : "Книга отклонена: \(error.localizedDescription)")
+                    : "Книга отклонена: \(error.localizedDescription)", selection: self.state.selection)
             }
         }
         operation = task

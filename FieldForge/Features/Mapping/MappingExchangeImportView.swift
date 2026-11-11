@@ -5,8 +5,16 @@ struct MappingExchangeImportView: View {
     @EnvironmentObject private var mapping: MappingModel
     @StateObject private var coordinator = MappingExchangePreviewCoordinator()
     @State private var picker = false
+    @State private var kind: MappingImportSource.Kind = .regulatoryData
+    @State private var review = RegulatoryDataImport.Review()
+    @State private var assignment = RegulatoryDataProposal.Assignment()
+    @State private var observationDate = Date()
+    @State private var draftPickets: [String: String] = [:]
     @State private var selectedURL: URL?
-    @State private var selection = MappingExchangeImport.Selection()
+    private var selection: MappingExchangeImport.Selection {
+        get { coordinator.state.selection }
+        nonmutating set { coordinator.updateSelection(newValue) }
+    }
     @State private var confirming = false
     @State private var applying = false
     @State private var report: MappingExchangeImport.Report?
@@ -16,9 +24,12 @@ struct MappingExchangeImportView: View {
         let state = coordinator.state
         List {
             Section {
+                Picker("Формат", selection: $kind) {
+                    Text("FieldForge Exchange").tag(MappingImportSource.Kind.exchange)
+                    Text("Регламент · Data A:AD").tag(MappingImportSource.Kind.regulatoryData)
+                }.disabled(applying)
                 Button("Выбрать книгу Excel…", systemImage: "doc.badge.plus") { picker = true }
-                    .accessibilityIdentifier("exchangeSelectWorkbook")
-                    .disabled(applying)
+                    .accessibilityIdentifier("exchangeSelectWorkbook").disabled(applying)
                 if let selectedURL { LabeledContent("Файл", value: selectedURL.lastPathComponent) }
                 if state.busy {
                     ProgressView("Проверка книги…")
@@ -28,10 +39,13 @@ struct MappingExchangeImportView: View {
                 if applying { ProgressView("Сохранение выбранных строк…") }
                 if let message = applyError ?? state.message { Text(message).foregroundStyle(.red) }
                 if state.preview == nil, let entries = mapping.workflow?.journal.importLedger?.entries,
-                   entries.contains(where: { $0.operation.source.kind == .exchange && $0.outcome == .pending }) {
+                   entries.contains(where: { $0.operation.source.kind == kind && $0.outcome == .pending }) {
                     Text("Есть незавершённый импорт. Выберите ту же книгу, чтобы продолжить или отклонить строки.")
                         .foregroundStyle(.orange)
                 }
+            }
+            if kind == .regulatoryData, selectedURL != nil, let workflow = mapping.workflow {
+                assignmentSection(workflow.journal)
             }
             if let report {
                 reportSection(report)
@@ -42,12 +56,17 @@ struct MappingExchangeImportView: View {
                 previewSections(preview, stale: state.stale)
             }
         }
-        .navigationTitle("Импорт Excel Exchange")
+        .navigationTitle("Импорт Excel")
         .navigationBarBackButtonHidden(applying)
         .fileImporter(isPresented: $picker, allowedContentTypes: [UTType(filenameExtension: "xlsx") ?? .data]) { result in
             guard coordinator.isActive, !applying else { return }
             switch result {
-            case .success(let url): selectedURL = url; prepare(url)
+            case .success(let url):
+                if selectedURL != url {
+                    coordinator.clear()
+                    review = .init(); draftPickets = [:]
+                }
+                selectedURL = url; prepare(url)
             case .failure(let error): coordinator.selectionFailed(error)
             }
         }
@@ -56,9 +75,28 @@ struct MappingExchangeImportView: View {
                 .disabled(!canConfirm(state.preview, stale: state.stale))
             Button("Отмена", role: .cancel) {}
         } message: {
-            Text("Выбрано для импорта: \(selection.accepted.count). Выбрано для отклонения: \(selection.rejectedPending.count + selection.rejectedConflicts.count). Каждая строка сохраняется отдельно. Неотмеченные новые и изменённые строки будут пропущены. Конфликтующие строки исключены из импорта.")
+            Text("Выбрано для импорта: \(selection.accepted.count). Выбрано для отклонения: \(selection.rejectedPending.count + selection.rejectedConflicts.count). Каждое наблюдение сохраняется отдельно. Сохраняются только отмеченные изменения без конфликтов.")
         }
-        .onAppear { coordinator.activate(generation: mapping.workflow?.committed.generationID) }
+        .onChange(of: kind) { _, _ in
+            coordinator.clear()
+            selectedURL = nil; review = .init(); draftPickets = [:]
+            report = nil; applyError = nil
+        }
+        .onAppear {
+            coordinator.activate(generation: mapping.workflow?.committed.generationID)
+            if assignment.projectID == nil {
+                assignment.projectID = mapping.workflow?.context.projectID
+                assignment.horizonID = mapping.workflow?.context.horizonID
+            }
+        }
+        .onChange(of: state.publicationID) { _, _ in
+            guard let source = coordinator.state.preview?.source, source.kind == .regulatoryData else { return }
+            let documentID = RegulatoryDataImport.reviewDocumentID(source)
+            if let previous = review.documentID, previous != documentID {
+                review = .init(); draftPickets = [:]
+            }
+            review.documentID = documentID
+        }
         .task(id: state.publicationID) {
             guard let id = state.publicationID else { return }
             let storage = mapping.storage
@@ -75,10 +113,15 @@ struct MappingExchangeImportView: View {
     @ViewBuilder private func previewSections(_ preview: MappingExchangePreview, stale: Bool) -> some View {
         let canChoose = !stale && !preview.workbookBlocked && !applying
         Section("Предварительная проверка") {
-            LabeledContent("Проект", value: preview.projectName)
-            LabeledContent("Выгружено", value: preview.exportedAt.formatted(date: .abbreviated, time: .shortened))
+            if kind == .exchange { LabeledContent("Проект", value: preview.projectName) }
+            if preview.exportedAt != .distantPast {
+                LabeledContent("Выгружено", value: preview.exportedAt.formatted(date: .abbreviated, time: .shortened))
+            }
+            if kind == .regulatoryData {
+                LabeledContent("Сопоставлено наблюдений", value: String(Set(preview.records.compactMap(\.matchedID)).count))
+            }
             LabeledContent("Проверено строк наблюдений", value: String(preview.rowsProcessed))
-            ForEach(MappingExchangePreview.Classification.allCases, id: \.self) { category in
+            ForEach(categories, id: \.self) { category in
                 LabeledContent(category.title, value: String(preview.count(category)))
             }
             if stale {
@@ -93,17 +136,18 @@ struct MappingExchangeImportView: View {
                     .foregroundStyle(.orange)
             }
         }
-        ForEach(MappingExchangePreview.Classification.allCases, id: \.self) { category in
+        ForEach(categories, id: \.self) { category in
             let records = preview.records.filter { $0.classification == category }
-            if !records.isEmpty, category != .unchanged || records.contains(where: { $0.receipt != nil }) {
+            if !records.isEmpty, category != .unchanged || records.contains(where: { $0.receipt != nil || !$0.candidates.isEmpty }) {
                 Section(category.title) {
                     ForEach(records) { record in
                         DisclosureGroup {
                             Text(record.reason)
+                            if kind == .regulatoryData { regulatoryControls(record).disabled(!canChoose) }
                             ForEach(record.visibleChanges) { change in
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(verbatim: change.title).font(.subheadline.bold())
-                                    LabeledContent("В выгрузке") {
+                                    LabeledContent(kind == .exchange ? "В выгрузке" : "В журнале") {
                                         Text(verbatim: change.before.isEmpty ? "Пусто" : change.before)
                                     }
                                     LabeledContent("Предложено") {
@@ -135,12 +179,23 @@ struct MappingExchangeImportView: View {
         }
         if preview.records.contains(where: { $0.canApply || $0.classification == .conflict || $0.receipt?.outcome == .pending }) {
             Section {
+                if kind == .regulatoryData, preview.records.contains(where: \.canApply) {
+                    Button("Отметить все готовые наблюдения") {
+                        selection.accepted = Set(preview.records.filter(\.canApply).map(\.id))
+                        selection.rejectedPending.subtract(selection.accepted)
+                    }.disabled(!canChoose)
+                }
                 Button("Проверить выбор и подтвердить", systemImage: "checkmark.circle") { confirming = true }
                     .disabled(!canConfirm(preview, stale: stale))
-                Text("Изменения сохраняются только после подтверждения. Для конфликта с журналом нужна новая выгрузка.")
-                    .font(.caption).foregroundStyle(.secondary)
+                if kind == .exchange {
+                    Text("Для конфликта с журналом нужна новая выгрузка.").font(.caption).foregroundStyle(.secondary)
+                }
             }
         }
+    }
+
+    private var categories: [MappingExchangePreview.Classification] {
+        MappingExchangePreview.Classification.allCases.filter { kind == .regulatoryData || $0 != .ambiguous }
     }
 
     private func reportSection(_ report: MappingExchangeImport.Report) -> some View {
@@ -185,9 +240,144 @@ struct MappingExchangeImportView: View {
         })
     }
 
+    private func assignmentSection(_ journal: MappingJournal) -> some View {
+        Section {
+            DisclosureGroup("Контекст новых строк и координат") {
+                Picker("Проект", selection: $assignment.projectID) {
+                    Text("Выберите проект").tag(UUID?.none)
+                    ForEach(journal.projects) { Text($0.name).tag(Optional($0.id)) }
+                }
+                Picker("Горизонт", selection: $assignment.horizonID) {
+                    Text("Выберите горизонт").tag(UUID?.none)
+                    ForEach(journal.horizons.filter { $0.projectID == assignment.projectID }) {
+                        Text($0.displayName).tag(Optional($0.id))
+                    }
+                }
+                Picker("Выработка", selection: $assignment.excavationID) {
+                    Text("По названию в столбце ID").tag(UUID?.none)
+                    ForEach(journal.excavations.filter {
+                        $0.projectID == assignment.projectID && $0.horizonIDs.contains(where: { $0 == assignment.horizonID })
+                    }) { Text($0.name).tag(Optional($0.id)) }
+                }
+                DatePicker("Дата и время наблюдения", selection: $observationDate)
+                LabeledContent("Часовой пояс", value: assignment.zoneID)
+                Picker("Система пикетажа", selection: $assignment.convention) {
+                    Text("Выберите систему").tag(PicketConvention?.none)
+                    Text("ПК 10 м").tag(Optional(PicketConvention.tenMeters))
+                    Text("Километры + метры").tag(Optional(PicketConvention.legacyMeters))
+                }
+                TextField("Начало и направление отсчёта", text: $assignment.chainageOrigin)
+                Picker("Координаты X/Y из Excel", selection: $assignment.planID) {
+                    Text("Система XY пока неизвестна").tag(UUID?.none)
+                    ForEach(journal.plans.filter {
+                        $0.horizonID == assignment.horizonID && !$0.isDeleted && $0.file?.units != PlanUnits.unknown && $0.file != nil
+                    }) { plan in
+                        if let file = plan.file {
+                            Text("\(file.originalFilename) · \(plan.version) · \(file.units.label)").tag(Optional(plan.id))
+                        }
+                    }
+                }
+                Picker("Север для новых азимутов", selection: $assignment.north) {
+                    Text("Неизвестен").tag(GeographicReference.unknown)
+                    Text("Сеточный").tag(GeographicReference.gridNorth)
+                    Text("Истинный").tag(GeographicReference.trueNorth)
+                    Text("Магнитный").tag(GeographicReference.magneticNorth)
+                }
+                Toggle("Азимут вертикальных плоскостей — условная сторона падения", isOn: $assignment.verticalSide)
+                Button("Применить параметры к строкам без отдельного контекста") {
+                    review.assignment = declaredAssignment
+                    recheck()
+                }
+            }
+            .onChange(of: assignment.projectID) { _, _ in
+                assignment.horizonID = nil; assignment.excavationID = nil; assignment.planID = nil
+            }
+            .onChange(of: assignment.horizonID) { _, _ in assignment.excavationID = nil; assignment.planID = nil }
+        }.disabled(applying || coordinator.state.busy)
+    }
+
+    private var declaredAssignment: RegulatoryDataProposal.Assignment {
+        var value = assignment
+        value.observedAt = observationDate
+        return value
+    }
+
+    @ViewBuilder private func regulatoryControls(_ record: MappingExchangePreview.Record) -> some View {
+        if let key = record.reviewID, let actions = record.regulatoryActions {
+            if !record.candidates.isEmpty {
+                Picker("Наблюдение в журнале", selection: Binding(get: { review.matches[key] }, set: { id in
+                    review.matches[key] = id
+                    review.faultMatches[key] = nil
+                    review.createSeparately.remove(key)
+                    recheck()
+                })) {
+                    Text("Выберите наблюдение").tag(UUID?.none)
+                    ForEach(record.candidates) { candidate in Text(candidate.label).tag(Optional(candidate.id)) }
+                }
+            }
+            if let rock = actions.rockKey {
+                Picker("ROCK \(rock.numericValue) · код для проекта", selection: Binding(get: { review.rockCodes[rock] }, set: { code in
+                    review.rockCodes[rock] = code
+                    recheck()
+                })) {
+                    Text("Выберите точный код").tag(String?.none)
+                    ForEach(actions.rockChoices) { choice in
+                        Text([choice.code, choice.name].compactMap { $0 }.joined(separator: " · ")).tag(Optional(choice.code))
+                    }
+                }
+            }
+            if actions.canCreateSeparately {
+                Button("Создать отдельное наблюдение") { review.createSeparately.insert(key); recheck() }
+            }
+            if actions.canFindExisting {
+                Button("Найти другое наблюдение") { review.findExisting.insert(key); recheck() }
+            }
+            if actions.canGroup {
+                Button("Один объект с несколькими разломами") { review.groupFaults.insert(key); recheck() }
+            }
+            if actions.canSplit {
+                Button("Разделить на отдельные наблюдения") { review.splitFaults.insert(key); recheck() }
+            }
+            if actions.canResolveConflict, let graph = record.graphFingerprint {
+                Button("Использовать правки Excel поверх текущей версии") { review.takeExcelChanges[key] = graph; recheck() }
+            }
+            if actions.canPreservePrecision {
+                Button("Сохранить точные числа журнала") { review.preservePrecision.insert(key); recheck() }
+            }
+            if actions.canAcknowledgeDerived {
+                Button("Продолжить с сохранёнными SD и GSI") { review.acknowledgeDerived.insert(key); recheck() }
+            }
+            ForEach(actions.faultMatches) { fault in
+                Picker("Разлом · строка \(fault.row) · \(fault.values)", selection: Binding(get: {
+                    review.faultMatches[key]?[fault.id]
+                }, set: { id in
+                    review.faultMatches[key, default: [:]][fault.id] = id
+                    recheck()
+                })) {
+                    Text("Новый разлом / выберите сохранённый").tag(UUID?.none)
+                    ForEach(fault.choices) { choice in Text(choice.label).tag(Optional(choice.id)) }
+                }
+            }
+            if actions.needsPicket {
+                TextField("Пикет", text: Binding(get: { draftPickets[key] ?? "" }, set: { draftPickets[key] = $0 }))
+                Button("Применить пикет") { review.pickets[key] = draftPickets[key]; recheck() }
+            }
+            if record.matchedID == nil && record.receipt == nil {
+                Button("Использовать текущий контекст только для этих строк") {
+                    review.assignments[key] = declaredAssignment
+                    recheck()
+                }
+            }
+        }
+    }
+
+    private func recheck() {
+        if let selectedURL { prepare(selectedURL) }
+    }
+
     private func prepare(_ url: URL) {
-        selection = .init(); report = nil; applyError = nil
-        coordinator.prepare(url, work: .init(storage: mapping.storage))
+        report = nil; applyError = nil
+        coordinator.prepare(url, work: .init(storage: mapping.storage, kind: kind, regulatoryReview: review))
     }
 
     private func canConfirm(_ preview: MappingExchangePreview?, stale: Bool) -> Bool {

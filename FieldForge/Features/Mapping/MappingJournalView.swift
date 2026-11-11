@@ -210,6 +210,10 @@ struct MappingObservationDetail: View {
             }
             Section(record.coordinates.map { MappingCoordinateText.header(xyUnits: $0.units) } ?? "Координаты") {
                 if let c = record.coordinates {
+                    if c.source == "regulatoryExcel" && (c.x != nil || c.y != nil) {
+                        Text("XY из Excel: подтвердите систему координат и привязку к DXF для отображения на плане.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     let xyUnit = MappingCoordinateText.xyUnit(c.units)
                     LabeledContent(c.units == "m" ? "X" : "X, \(xyUnit)", value: c.x.map { EngineeringDisplay.coordinate($0) } ?? "Неизвестно")
                     LabeledContent(c.units == "m" ? "Y" : "Y, \(xyUnit)", value: c.y.map { EngineeringDisplay.coordinate($0) } ?? "Неизвестно")

@@ -190,7 +190,8 @@ final class PlanRevisionManagementTests: XCTestCase {
         let model = MappingModel(workflow: w, photoStore: photoStore, preferences: prefs)
         XCTAssertEqual(model.activePlan(for: a.horizonID)?.id, a.id)
         model.selectActivePlan(a)
-        let c = try plan(files, w, version: "3"); try model.workflow!.registerPlan(c)
+        let c = try plan(files, w, version: "3")
+        try await model.persist { try $0.registerPlan(c) }
         XCTAssertEqual(model.activePlan(for: a.horizonID)?.id, a.id)
         let relaunched = MappingModel(workflow: model.workflow!, photoStore: photoStore, preferences: prefs)
         XCTAssertEqual(relaunched.activePlan(for: a.horizonID)?.id, a.id)

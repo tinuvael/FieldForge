@@ -13,6 +13,7 @@ struct EnterpriseGeotechnicalWorkbook: Sendable {
         let rmr: String
     }
 
+    let observationIDs: [UUID]
     let table: Table
     let rqdConflicts: [RQDConflict]
     let spatialWarnings: [String]
@@ -92,7 +93,7 @@ struct EnterpriseGeotechnicalWorkbook: Sendable {
                 ] + afterFault)
             }
         }
-        return Self(table: report, rqdConflicts: rqdConflicts, spatialWarnings: spatial.warnings)
+        return Self(observationIDs: points.map(\.id), table: report, rqdConflicts: rqdConflicts, spatialWarnings: spatial.warnings)
     }
 
     private struct SpatialReferences {

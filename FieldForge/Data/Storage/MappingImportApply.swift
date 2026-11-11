@@ -74,6 +74,17 @@ enum MappingImportApply {
         if let duplicate = journal.importLedger?.entries.first(where: { $0.reservesSource(against: operation) }) {
             return .duplicateSourceRecord(operationID: duplicate.operation.id)
         }
+        if operation.kind == .create, operation.source.kind == .regulatoryData,
+           let note = operation.note, let assignment = try? ExchangeBaseline.decode(RegulatoryDataProposal.Assignment.self, note),
+           let chainage = assignment.resolvedChainage,
+           let pending = journal.importLedger?.entries.first(where: { entry in
+               guard entry.outcome == .pending, entry.operation.id != operation.id,
+                     entry.operation.source.kind == .regulatoryData, entry.operation.kind == .create,
+                     entry.operation.target.context == operation.target.context,
+                     let note = entry.operation.note,
+                     let other = try? ExchangeBaseline.decode(RegulatoryDataProposal.Assignment.self, note) else { return false }
+               return chainage == other.resolvedChainage
+           }) { return .duplicateSourceRecord(operationID: pending.operation.id) }
         guard journal.validContext(operation.target.context) else { return .ownershipChanged }
         let observation = current.observation(id: operation.target.observationID)
         if let observation, MappingImportTarget(observation) != operation.target { return .ownershipChanged }
@@ -102,14 +113,21 @@ enum MappingImportApply {
         guard MappingImportTarget(proposal) == operation.target else { return .rejected(.ownershipChanged) }
         if let correction = operation.correction,
            let point = current.observation(id: operation.target.observationID) {
-            let historicalSets = point.geology?.jointSets.filter { !$0.identifier.isRoutine } ?? []
-            guard proposal.measurementIDs == point.measurementIDs,
-                  proposal.geology?.jointSets.filter({ !$0.identifier.isRoutine }) ?? [] == historicalSets,
-                  ExchangeObservationProposal.ratingsAllowed(proposal.ratings, from: point.ratings) else {
-                return .rejected(.protectedEvidence)
+            if operation.source.kind == .regulatoryData {
+                guard operation.graphFingerprint != nil,
+                      RegulatoryDataImport.preservesEvidence(proposal, from: point, in: current) else {
+                    return .rejected(.protectedEvidence)
+                }
+            } else {
+                let historicalSets = point.geology?.jointSets.filter { !$0.identifier.isRoutine } ?? []
+                guard proposal.measurementIDs == point.measurementIDs,
+                      proposal.geology?.jointSets.filter({ !$0.identifier.isRoutine }) ?? [] == historicalSets,
+                      ExchangeObservationProposal.ratingsAllowed(proposal.ratings, from: point.ratings) else {
+                    return .rejected(.protectedEvidence)
+                }
+                if operation.graphFingerprint != nil,
+                   !ExchangeObservationProposal.preservesEvidence(proposal, from: point) { return .rejected(.protectedEvidence) }
             }
-            if operation.graphFingerprint != nil,
-               !ExchangeObservationProposal.preservesEvidence(proposal, from: point) { return .rejected(.protectedEvidence) }
             if proposal == point { return .skipped }
             next.appendCorrection(id: operation.id, snapshot: proposal, now: correction.date,
                                   author: correction.author, reason: correction.reason)
@@ -117,6 +135,12 @@ enum MappingImportApply {
             guard proposal.measurementIDs.isEmpty,
                   proposal.geology?.jointSets.contains(where: { !$0.identifier.isRoutine }) != true else {
                 return .rejected(.protectedEvidence)
+            }
+            if operation.source.kind == .regulatoryData {
+                guard operation.graphFingerprint != nil,
+                      RegulatoryDataImport.preservesEvidence(proposal, from: nil, in: current) else {
+                    return .rejected(.protectedEvidence)
+                }
             }
             next.observations.append(proposal)
         }

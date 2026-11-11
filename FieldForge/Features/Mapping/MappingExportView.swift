@@ -13,8 +13,11 @@ struct MappingExportView: View {
     @State private var firstDay = Date()
     @State private var lastDay = Date()
     @State private var timeZoneID = TimeZone.current.identifier
-    @State private var format: MappingExportFormat = .xlsx
+    @State private var format: MappingExportFormat = .enterpriseGeotechnical
+    @State private var allRegulatoryDates = true
+    @State private var dataSheetOnly = false
     @State private var showTechnicalSheets = false
+
     @State private var preview: MappingCSVExport?
     @State private var photoPreview: PhotoPackageExport?
     @State private var confirmIncomplete = false
@@ -29,8 +32,11 @@ struct MappingExportView: View {
         _projectID = State(initialValue: projectID ?? committed.journal.projects.first?.id)
     }
     private var selection: MappingExportSelection? {
-        projectID.map { MappingExportSelection(projectID: $0, horizonID: horizonID, excavationID: excavationID,
-            firstDay: firstDay, lastDay: lastDay, timeZoneID: timeZoneID) }
+        guard let projectID else { return nil }
+        let dates = format == .enterpriseGeotechnical && allRegulatoryDates
+            ? committed.observations(projectID: projectID).map(\.observedAt) : []
+        return MappingExportSelection(projectID: projectID, horizonID: horizonID, excavationID: excavationID,
+            firstDay: dates.min() ?? firstDay, lastDay: dates.max() ?? lastDay, timeZoneID: timeZoneID)
     }
     private var zone: TimeZone { TimeZone(identifier: timeZoneID) ?? .gmt }
     private var calendar: Calendar { var c = Calendar(identifier: .gregorian); c.timeZone = zone; return c }
@@ -50,10 +56,13 @@ struct MappingExportView: View {
                         Text($0.name).tag(Optional($0.id))
                     }
                 }
-                DatePicker("Дата от", selection: $firstDay, displayedComponents: .date)
-                    .accessibilityIdentifier("mappingExportFirstDay")
-                DatePicker("Дата до включительно", selection: $lastDay, displayedComponents: .date)
-                    .accessibilityIdentifier("mappingExportLastDay")
+                if format == .enterpriseGeotechnical { Toggle("Все даты", isOn: $allRegulatoryDates) }
+                if format != .enterpriseGeotechnical || !allRegulatoryDates {
+                    DatePicker("Дата от", selection: $firstDay, displayedComponents: .date)
+                        .accessibilityIdentifier("mappingExportFirstDay")
+                    DatePicker("Дата до включительно", selection: $lastDay, displayedComponents: .date)
+                        .accessibilityIdentifier("mappingExportLastDay")
+                }
             }.disabled(busy || sharing)
             Section {
                 Picker("Выгрузка", selection: $format) {
@@ -71,14 +80,16 @@ struct MappingExportView: View {
                     Picker("Формат файла", selection: $format) {
                         ForEach(MappingExportFormat.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                     }.accessibilityIdentifier("mappingExportFormat")
-                    if format != .enterpriseGeotechnical {
+                    if format == .enterpriseGeotechnical {
+                        Toggle("Совместимость · только лист Data", isOn: $dataSheetOnly)
+                    } else {
                         Toggle("Показывать технические листы Excel", isOn: $showTechnicalSheets)
                     }
                     Text("Отбор по дате наблюдения актуальной версии точки в поясе \(timeZoneID), включая весь последний день.").font(.caption)
                 }
             }.disabled(busy || sharing)
             Section {
-                Text(format == .exchange ? "Обмен: подтверждённый снимок после ранее принятых сохранений. Импорт пока недоступен." : "Подтверждённый снимок журнала при открытии выгрузки. Незавершённые сохранения не включены.").font(.caption).foregroundStyle(.secondary)
+                Text(format == .exchange ? "Обмен: подтверждённый снимок после ранее принятых сохранений." : "Подтверждённый снимок журнала при открытии выгрузки. Незавершённые сохранения не включены.").font(.caption).foregroundStyle(.secondary)
                 Text("Наблюдений: \(selectedCount)").accessibilityIdentifier("mappingExportPointCount")
                 if format == .enterpriseGeotechnical, let report = preview?.enterpriseReport, report.requiresReview {
                     regulatoryWarnings(report)
@@ -117,9 +128,10 @@ struct MappingExportView: View {
                 DisclosureGroup("Состав и ограничения") {
                     if format == .exchange {
                         Text("FieldForge Exchange.xlsx: связанные таблицы точек, J1–J5, тектоники и оценок; UUID, базовые версии и отпечатки, полные исходные записи и история. Числа и даты сохранены текстом без округления. Пусто означает отсутствие значения.")
-                        Text("B2a: только экспорт. Можно подготовить предложения на компьютере, но загрузить их обратно в этой версии нельзя. Не меняйте базовые UUID, версии, отпечатки и source_records. Оригиналы фото и DXF не включены; сохраняйте отдельную резервную копию ZIP.")
+                        Text("Импорт предложений доступен в журнале. Сохраните базовые UUID, версии, отпечатки и source_records. Оригиналы фото и DXF не включены; сохраняйте отдельную резервную копию ZIP.")
                     } else if format == .enterpriseGeotechnical {
                         Text("Лист Data (A–AD). Для актуального наблюдения формируется строка на каждую тектоническую структуру. Если структур нет, формируется одна строка с пустыми полями разлома. SD — среднее положительных сохранённых расстояний J1–J4.")
+                        Text("Добавляйте и исправляйте строки на листе Data. Скрытый лист хранит UUID и версии. Для повторного импорта сохраните его в книге.")
                         Text("При расхождении RQD в Q и RMR поле RQD остаётся пустым. Координаты и азимуты выгружаются в исходных единицах и системах отсчёта. История, сведения о системе координат и типе севера доступны в журнале и Excel Exchange.")
                     } else if format == .photoPackage {
                         Text("ZIP: оригиналы, FieldForge-Mapping.xlsx с реестром photo_register и manifest.json. Файлы проверяются по размеру и SHA-256. Путь и статус каждого оригинала указаны в реестре.")
@@ -257,6 +269,7 @@ struct MappingExportView: View {
         guard !busy, !sharing else { return }
         let format = format
         let showTechnicalSheets = showTechnicalSheets
+        let includeIdentity = !dataSheetOnly
         let photos = photoPreview
         busy = true; errorMessage = nil
         operation = Task { @MainActor in
@@ -265,7 +278,8 @@ struct MappingExportView: View {
                     guard let photos else { throw MappingError.invalid("Обновите предпросмотр фотографий.") }
                     return try photos.write(allowIncomplete: allowIncomplete)
                 }
-                return try MappingExportFiles.write(preview, format: format, showTechnicalSheets: showTechnicalSheets)
+                return try MappingExportFiles.write(preview, format: format, showTechnicalSheets: showTechnicalSheets,
+                    includeRegulatoryIdentity: includeIdentity)
             }
             defer { busy = false }
             do {

@@ -148,6 +148,12 @@ revisions remain in the journal and are available through FieldForge Exchange
 within its documented scope. Complete backup also includes the original
 attachment bytes and independent measurement journal.
 
+The regulatory workbook is the primary bidirectional mapping exchange.
+A hidden worksheet holds observation UUIDs and revision baselines. The
+[A:AD import contract](regulatory-excel-stage-4c.md) describes supported
+source fields, assisted creation and matching, plan assignment and conflict
+resolution. The Data-only compatibility setting retains the single-sheet layout.
+
 ## Persistence
 
 Mapping stays on experimental **schema 8**. Additions are optional Codable fields; absent fields decode to their historic meaning. No mapping schema migration, reset, old-format acceptance, old file deletion or original-measurement-journal change is introduced. Current-schema atomic saves, `.previous`, external-change guards, relationship checks and append-only originals/revisions remain in force. New assessment method/rating/value metadata is validated, and saved dictionary codes are append-only. Reopening an assessment does not recalculate history.
