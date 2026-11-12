@@ -87,7 +87,7 @@ final class MappingStorageOwner: @unchecked Sendable {
                        checkpoint: @escaping @Sendable (MappingImportOperation, MappingImportApply.Checkpoint) throws -> Void = { _, _ in }) async throws
         -> (MappingCommittedSnapshot, MappingExchangeImport.Report) {
         try await run {
-            guard let file = self.store as? FileMappingStore, let initial = self.committed else { throw StorageError.writesBlocked }
+            guard !batch.mixed, let file = self.store as? FileMappingStore, let initial = self.committed else { throw StorageError.writesBlocked }
             var interrupted = false
             var rows: [MappingExchangeImport.Result] = []
             let save: (MappingJournal) throws -> Void = { journal in
@@ -124,6 +124,18 @@ final class MappingStorageOwner: @unchecked Sendable {
                 }
             }
             return (self.committed ?? initial, MappingExchangeImport.Report(rows: rows, interrupted: interrupted))
+        }
+    }
+
+    func applyMixedExchange(_ batch: MappingExchangeImport.Batch, sourcePlan: RegulatorySourceImport.Plan) async throws -> MappingCommittedSnapshot {
+        try await run {
+            guard let file = self.store as? FileMappingStore, let current = self.committed else { throw StorageError.writesBlocked }
+            let next = try MappingExchangeImport.applyingMixed(batch, sourcePlan: sourcePlan, to: current)
+            guard next != current.journal else { return current }
+            try file.save(next, atomicUpdates: batch.atomicUpdateIDs)
+            let saved = MappingCommittedSnapshot(next)
+            self.committed = saved
+            return saved
         }
     }
 

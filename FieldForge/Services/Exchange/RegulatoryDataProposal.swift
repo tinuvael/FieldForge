@@ -149,6 +149,32 @@ enum RegulatoryDataProposal {
             planID: plan?.id, zPlanGeometry: zEdit ? nil : old?.zPlanGeometry)
     }
 
+    /// Source records retain literal inputs. Use the same field tables and
+    /// numerical constraints without selecting a classification or north datum.
+    static func validateSourceValue(_ raw: String, column: Int, field: String) throws {
+        guard let value = RegulatoryDataWorkbook.sourceNumber(raw) else {
+            throw ExchangeImportError("\(field): требуется конечное десятичное число.")
+        }
+        let valid: Bool
+        switch column {
+        case 6: valid = RegulatoryWallAlteration.allCases.contains { Double($0.rating) == value }
+        case 8: valid = RegulatoryStrengthBand.allCases.contains { Double($0.rating) == value }
+        case 7, 11, 12, 13:
+            let parameter: QParameter = switch column { case 7: .jw; case 11: .jn; case 12: .jr; default: .ja }
+            valid = QMethod.rows(parameter).contains { ($0.minimum...$0.maximum).contains(value) }
+        case 9, 20: valid = value >= 0
+        case 10: valid = (0...100).contains(value)
+        case 15, 17:
+            let parameter: RMR89Parameter = column == 15 ? .aperture : .persistence
+            valid = parameter.choices(test: nil).contains { Double($0.rating) == value }
+        case 16: valid = JCond76Category.allCases.contains { Double($0.rating) == value }
+        case 18, 21, 23, 25, 27: valid = ManualOrientationInput.dipAngleRange.contains(value)
+        case 19, 22, 24, 26, 28: valid = ManualOrientationInput.dipDirectionRange.contains(value)
+        default: valid = false
+        }
+        guard valid else { throw ExchangeImportError("\(field): значение вне допустимых пределов или категории.") }
+    }
+
     private static func assessments(_ patch: [String], row: Row, point: MappingObservation) throws -> MappingRatings? {
         let previous = point.ratings
         var categories = previous?.regulatory ?? RegulatoryFieldCategories()

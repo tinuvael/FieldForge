@@ -72,6 +72,25 @@ import Combine
         }
     }
 
+    func applyMixedExchange(_ batch: MappingExchangeImport.Batch, sourcePlan: RegulatorySourceImport.Plan) async throws {
+        guard !isSaving, workflow?.draft.photoSessions.isEmpty == true else {
+            throw MappingError.invalid("Дождитесь завершения сохранения или получения фотографий.")
+        }
+        try Task.checkCancellation()
+        let operationID = UUID()
+        savingState = .saving(operationID)
+        workflow?.draft.saving = true
+        defer { workflow?.draft.saving = false }
+        do {
+            let committed = try await storage.applyMixedExchange(batch, sourcePlan: sourcePlan)
+            workflow?.prepareTransaction(committed: committed, store: PresentationMappingStore())
+            savingState = .committed(operationID)
+        } catch {
+            savingState = .failed(operationID, error.localizedDescription)
+            throw error
+        }
+    }
+
     func beginCoordinateSelection() throws -> MappingPlanSelectionRequest? {
         guard let workflow, let horizonID = workflow.context.horizonID else { throw StorageError.invalidRecord }
         guard let plan = activePlan(for: horizonID) else { selectedTab = 1; return nil }

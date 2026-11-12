@@ -202,9 +202,12 @@ struct MappingImportLedger: Codable, Equatable, Sendable {
         else { entries.append(entry) }
     }
 
-    func preserves(_ previous: Self) -> Bool {
+    func preserves(_ previous: Self, atomicUpdates: Set<UUID> = []) -> Bool {
         guard entries.count >= previous.entries.count,
-              entries.dropFirst(previous.entries.count).allSatisfy({ $0.outcome != .applied }) else { return false }
+              entries.dropFirst(previous.entries.count).allSatisfy({ entry in
+                  entry.outcome != .applied || (entry.operation.kind == .update &&
+                      entry.operation.source.kind == .regulatoryData && atomicUpdates.contains(entry.operation.id))
+              }) else { return false }
         return zip(previous.entries, entries).allSatisfy { old, next in
             guard old.operation == next.operation else { return false }
             if old.outcome == next.outcome { return true }

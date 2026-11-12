@@ -16,8 +16,10 @@ import FoundationXML
     }
     /// Independent central-directory reader (not the production ZIP implementation).
     /// Python zipfile independently checks CRCs and descriptors in the external validation.
-    private func parts(_ export: MappingCSVExport, format: MappingExportFormat = .xlsx) throws -> [String: Data] {
-        let files = try MappingExportFiles.write(export, format: format); defer { files.cleanup() }
+    private func parts(_ export: MappingCSVExport, format: MappingExportFormat = .xlsx,
+                       includeRegulatoryIdentity: Bool = true) throws -> [String: Data] {
+        let files = try MappingExportFiles.write(export, format: format, includeRegulatoryIdentity: includeRegulatoryIdentity)
+        defer { files.cleanup() }
         return try unzip(Data(contentsOf: XCTUnwrap(files.urls.first)))
     }
     private func unzip(_ data: Data) throws -> [String: Data] {
@@ -68,6 +70,7 @@ import FoundationXML
                     let actual = try XCTUnwrap(reader.cells[MappingXLSXExport.column(c + 1) + String(r + 2)])
                     switch value {
                     case .text(let text): XCTAssertEqual(actual.type, "inlineStr"); XCTAssertEqual(actual.value, text)
+                    case .rawNumber(let raw): XCTAssertEqual(actual.type, "n"); XCTAssertEqual(actual.value, raw)
                     case .number(let number):
                         if let number {
                             XCTAssertEqual(Double(actual.value), number)
@@ -93,9 +96,14 @@ import FoundationXML
         let export = try MappingCSVExport.prepare(journal: w.journal, selection: csv.selection(point, "2000-01-01T00:00:00Z"), includeEnterprise: true)
         let package = try parts(export, format: .enterpriseGeotechnical)
         let book = try xml(XCTUnwrap(package["xl/workbook.xml"]))
-        XCTAssertEqual(book.sheetNames, ["Data"])
-        XCTAssertEqual(package.keys.filter { $0.hasPrefix("xl/worksheets/") }, ["xl/worksheets/sheet1.xml"])
-        let sheet = try xml(XCTUnwrap(package["xl/worksheets/sheet1.xml"]))
+        XCTAssertEqual(book.sheetNames, ["Data", "_FieldForge"])
+        let legacy = try parts(export, format: .enterpriseGeotechnical, includeRegulatoryIdentity: false)
+        let legacyBook = try xml(XCTUnwrap(legacy["xl/workbook.xml"]))
+        XCTAssertEqual(legacyBook.sheetNames, ["Data"])
+        XCTAssertEqual(legacy.keys.filter { $0.hasPrefix("xl/worksheets/") }, ["xl/worksheets/sheet1.xml"])
+        let data = try XCTUnwrap(package["xl/worksheets/sheet1.xml"])
+        XCTAssertEqual(data, legacy["xl/worksheets/sheet1.xml"])
+        let sheet = try xml(data)
         XCTAssertEqual(sheet.rowCount, 4)
         XCTAssertEqual(sheet.formulas, 0)
         XCTAssertEqual(sheet.filter, "A4:AD4")
@@ -262,6 +270,7 @@ import FoundationXML
             expected[table.name] = ["columns": table.columns, "rows": table.rows.map { row in row.map { value -> [String: Any] in
                 switch value {
                 case .text(let s): return ["type": "s", "value": s]
+                case .rawNumber(let raw): return ["type": "n", "value": Double(raw) ?? 0]
                 case .number(let n):
                     guard let n else { return ["type": "blank"] }; let cell = try! MappingXLSXExport.numericText(n)
                     return ["type": cell.isText ? "s" : "n", "value": cell.isText ? cell.value as Any : n as Any]

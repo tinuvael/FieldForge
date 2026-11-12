@@ -35,7 +35,7 @@ struct MappingCSVExport: Sendable {
         }
     }
     enum Cell: Sendable {
-        case text(String), number(Double?), integer(Int?), timestamp(Date?), empty
+        case text(String), rawNumber(String), number(Double?), integer(Int?), timestamp(Date?), empty
         var csv: String {
             let value: String
             switch self {
@@ -43,6 +43,7 @@ struct MappingCSVExport: Sendable {
                 // Guard whitespace/control-prefixed formulas and preserve literal leading apostrophes.
                 let first = text.trimmingCharacters(in: .whitespacesAndNewlines.union(.controlCharacters)).first
                 value = first.map { "=+-@'".contains($0) } == true || text.first.map({ "\t\r\n".contains($0) }) == true ? "'" + text : text
+            case .rawNumber(let raw): value = raw
             case .number(let n): value = CSVExporter.engineeringNumber(n)
             case .integer(let n): value = n.map(String.init) ?? ""
             case .timestamp(let date): value = date.map(MappingCSVExport.iso) ?? ""
@@ -72,6 +73,11 @@ struct MappingCSVExport: Sendable {
             $0.projectID == selection.projectID && (selection.horizonID == nil || $0.horizonID == selection.horizonID) &&
             (selection.excavationID == nil || $0.excavationID == selection.excavationID) && $0.observedAt >= bounds.start && $0.observedAt < bounds.end
         }.sorted { $0.id.uuidString < $1.id.uuidString }
+        let sourceRecords = (journal.regulatorySourceObservations ?? []).filter { record in
+            guard record.key.projectID == selection.projectID, let version = record.latest else { return false }
+            return (selection.horizonID == nil || version.destination.horizonID == selection.horizonID) &&
+                (selection.excavationID == nil || version.destination.excavationID == selection.excavationID)
+        }.sorted { $0.key.sourceID.localizedStandardCompare($1.key.sourceID) == .orderedAscending }
         let pointIDs = Set(points.map(\.id))
         let photos = journal.photos.filter { pointIDs.contains($0.context.pointID) }.sorted { $0.id.uuidString < $1.id.uuidString }
         let historical = try photos.map { photo -> MappingObservation in
@@ -183,7 +189,7 @@ struct MappingCSVExport: Sendable {
         var snapshot = Self(id: id, snapshotAt: now, selection: selection, tables: tables, manifest: try JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]))
         snapshot.fieldTables = try MappingFieldWorkbook.tables(points: points, photos: photos, journal: journal)
         if includeEnterprise {
-            snapshot.enterpriseReport = try EnterpriseGeotechnicalWorkbook.prepare(points: points, journal: journal)
+            snapshot.enterpriseReport = try EnterpriseGeotechnicalWorkbook.prepare(points: points, journal: journal, sourceRecords: sourceRecords)
             snapshot.regulatoryIdentity = try RegulatoryDataManifest(export: snapshot, committed: MappingCommittedSnapshot(journal))
         }
         return snapshot

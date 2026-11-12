@@ -50,7 +50,7 @@ enum BackupValidator {
         let journal = try JSONDecoder().decode(MappingJournal.self, from: reader.data(OfflineBackup.mappingPath))
         try journal.validate()
         let attachments = try BackupManifest.attachments(in: journal)
-        guard manifest.projectCount == journal.projects.count, manifest.observationCount == journal.observations.count,
+        guard manifest.projectCount == journal.projects.count, manifest.observationCount == journal.totalObservationCount,
               manifest.attachments == attachments else { throw BackupError.invalid("UUID-связи или счётчики не совпадают с графом.") }
         let pending = paths.filter { $0.hasPrefix("photos/operations/") || $0.hasPrefix("plans/operations/") }.sorted()
         guard pending == manifest.pendingOperationPaths else { throw BackupError.invalid("Список незавершённых операций не совпадает.") }

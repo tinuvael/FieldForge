@@ -56,6 +56,129 @@ can be added after the saved faults are accounted for. The preview shows the
 actual Excel row alongside the saved and proposed values. Duplicate rows and
 multiple groups targeting one observation require reconciliation.
 
+## Excel conversion and import limits
+
+The reader resolves the visible sheet named `Data` through the workbook
+relationships. It reads actual cell addresses and ignores Excel's cached
+worksheet dimension. It accepts additional visible and hidden worksheets.
+Only `Data` and the optional hidden `_FieldForge` sheet are read. Shared
+strings are loaded if a required sheet contains shared-string cells.
+Styles are loaded when a numeric Data value needs format validation.
+Core properties provide the workbook identifier when present.
+
+Calculation chains, themes, secondary sheets and their relationships, and
+recognized drawing, control-property and printer assets are skipped.
+Relationships of the imported worksheets may reference internal printer
+settings. External workbook links, macros and connections are rejected.
+Formula cells and their cached results are flagged as unsupported inputs.
+
+The ZIP32 reader validates entry paths, local and central headers, payload
+extents, sizes and declared ratios even for skipped entries. It accepts
+STORE and raw DEFLATE, with bounded decoding and CRC-32 verification for
+parts it reads. XML and CRC validation cover the consumed parts.
+Regulatory limits are 32 MiB compressed, 256 MiB declared uncompressed,
+128 MiB cumulatively decoded, and 1,000:1 per entry. Supporting parts have
+a 32 MiB buffered limit. The required `Data` sheet uses incremental
+STORE/DEFLATE decoding with 64 KiB chunks and SAX parsing, with a separate
+112 MiB output ceiling. The streaming path checks the exact length, end
+of DEFLATE stream and CRC before publishing a preview. It rejects DTDs and
+entity declarations across chunk boundaries and checks cancellation while
+reading and parsing. Data is limited to 2 million scanned cells, 650,000
+retained cell values or references, 6 million XML elements, and the
+existing limits of 100,000 rows, depth 48 and 32,767 UTF-16 code units per
+cell text. The 100 MB expanded worksheet never becomes a single buffer.
+
+### Production workbook diagnosis
+
+The Excel conversion supplied for this bug has 12,859,434 file bytes and
+136,085,253 declared uncompressed bytes. The original importer stopped on
+`xl/worksheets/sheet1.xml` because its 100,155,069 bytes exceeded the
+32 MiB per-entry limit. The preceding entries brought the running total to
+100,162,808 bytes at that point, within the old 128 MiB cumulative limit.
+The full archive would have exceeded that cumulative limit by 1,867,525
+bytes. Its highest compression ratio is 11.90:1, well within the 1,000:1 limit.
+The 27,201,205-byte calculation chain also contributed to the old total.
+
+The workbook links `Data` to `sheet1.xml`. The worksheet declares
+`A1:CP19999` and contains 19,998 row elements and 1,724,884 cell elements.
+The populated mapping candidates are rows 5–15. Later template rows have
+dash placeholders in the mapping fields and calculated or auxiliary
+content elsewhere. The `kart` sheet is a formula projection in a different
+column order. Its NAME and PK columns reference Data A and B.
+
+The reader recognizes the extended layout using the four A:AD header rows
+and the additional headers at AE4, AH4, AI3, AJ3, BI1 and CP3. It reports
+supplementary columns and opens batch reconciliation for these source
+records. The ordinary four-header A:AD contract uses its existing
+reconciliation and approval workflow.
+
+| Source cells / labels | Verified structure and treatment |
+| --- | --- |
+| A3 «Место картирования», A4 `ID`, A5:A15 | The owner confirmed these are source observation IDs. The source ID is stored independently of the FieldForge observation UUID and any destination. |
+| B3 «Пикетаж», B4 `PK`, B5:B15 | All 11 candidates contain `-`. Imported records may have an empty picket. A populated text picket is retained as supplied. |
+| C3 «Координаты точек замеров», C4:E4 `X`, `Y`, `Z` | Six candidate triples use Excel text and five use numeric cells. Both preserve the source decimal spelling. Spatial comparisons use finite binary64 values, and Z remains absolute elevation in metres. |
+| F4:N4, P4:R4, S4:AC4 | These source inputs are available in the source record detail. Their retention does not validate the source catalogue, rating method or azimuth north reference. |
+| O3 «Расстояние между трещинами, м», O4 `SD` | Ten source rows have a spacing summary. It is stored as a source field. Original spacing per joint set remains unknown. |
+| AD3:AD4 `GSI` and AE4:AH4 `Q'`, `Q`, `RMR89`, `RMR76` | Formula-derived GSI and the supplementary rating columns remain in the source workbook. Their caches do not supply assessment provenance. |
+| AI3 «№ точки наблюдения» and AJ3 «Примечание» | AI is populated even on template rows. Its relationship to persistent identity is unverified. AJ contains dash placeholders for the 11 candidates. Both columns remain in the source. |
+| AK4:BB4 | Auxiliary ratings, inputs and calculations remain in the source. `AT4 RMR76` includes a literal value among formulas, `AW4 благоприятность трещин` contains literal inputs with unconfirmed scoring provenance, and BB4 has no label. |
+| BI1 «Ошибки в пополнении БД по картированию выработок» through CP | Worksheet validation formulas, booleans and cached errors remain in the source. Conditional formats are parsed as display markup. |
+
+### Batch import and location resolution
+
+Choose the project and a stable dataset name. Use the same project and
+dataset for later editions of the source, even when the file name or row
+order changes. The scoped key is project UUID, dataset name and exact
+source ID. Confirm XY CRS, axes, units and vertical datum once. Explicitly
+unknown metadata allows import and leaves frame-dependent rules inactive.
+The workbook is read-only and its SHA-256 and source row are recorded with
+each new version. Keep the original XLSX with the supplementary columns.
+
+Resolution uses existing explicit source assignments first. For compatible
+DXF revisions, confirm the plan's actual datum and its association with the
+horizon and, where known, the excavation. Set two project-specific limits
+in metres: maximum horizontal distance to a supported WCS segment and
+maximum difference from the local segment elevation. Both limits require
+explicit values. The reader verifies the managed DXF's hash, CRS, axes,
+units and datum. It reuses the [existing WCS projection and elevation
+index](p2-dxf.md) to compare the imported Z with the segment elevation at
+the observation's XY. Inclined segments therefore use the local elevation.
+Multiple eligible horizons leave the destination unresolved. A unique
+horizon with competing excavation associations leaves excavation blank.
+The import neither converts the coordinate frame nor alters XYZ.
+
+When no verified DXF corresponds, a unique configured elevation range in
+the confirmed datum can supply the horizon. An overlapping range leaves
+the destination unresolved. The profile supplies no verified new horizon
+identifier. A user can create a named horizon through the project editor
+and assign a source group later. Coordinate proximity alone supplies no
+excavation identity.
+
+The preview shows new, matched, revised, conflicting and unresolved
+records and the excluded source fields. Confirmation rechecks the XLSX
+hash and the journal generation. The production batch uses one atomic
+journal save. Duplicate source IDs, incompatible cells, stale previews
+and conflicts block the batch before storage. Replayed evidence is
+unchanged, edited evidence appends a version to the same UUID, and
+resubmitting an older differing version reports a conflict. Changing
+context from **Журнал → Наблюдения из Excel** also appends a version
+without changing the UUID. Use the preview's horizon filter or selected rows for a bulk correction
+before confirmation. In the journal, filter by dataset or horizon and
+select a group to assign it together.
+
+Schema 8 stores these source-backed observations in an optional field
+of the same project journal. Existing schema-8 files and backups decode
+with an empty source collection. New backups include the source records
+and count them in the manifest. The source journal shows retained input
+fields and assignment history. Source markers appear on compatible DXF
+plans, and regulatory export includes effective source-backed records.
+Promotion to field-capture observations and linked photography remain
+separate work. The current journal uses whole-state JSON validation and
+atomic replacement. XLSX decoding is streamed and input limits remain
+bounded. Reconciliation and commit hold a bounded in-memory batch and
+journal snapshot, with phase-level progress and cancellation before
+storage admission.
+
 ## Exact A:AD column policy
 
 The [reference audit](regulatory-excel-audit.md#exact-aad-mapping) records the
@@ -157,9 +280,10 @@ Read-only extraction checked the A:AD headers and confirmed that populated A
 and B cells are text and the 4,117 populated observation rows use numeric
 ROCK cells. The file remains private. Import accepts XLSX. To use a legacy
 XLSB, preserve the original and prepare a reviewed values-only XLSX copy
-cropped to A:AD with the four original header rows. Reconcile numeric ROCK
-codes against the project catalogue. The source workbook's extra columns,
-formulas and placeholders require review before conversion.
+with the four original Data header rows and the supported A:AD fields.
+Review extra columns, formulas and placeholders in the original before
+preparing that copy. Reconcile numeric ROCK codes against the project
+catalogue.
 
 Automated tests use actual XLSX archives and cover insertion among existing
 records, sorting across duplicate A/B anchors, reordering and adding fault
@@ -180,3 +304,116 @@ Exchange XLSX, preview and file coordination, and the durable ledger. The
 Simulator `build-for-testing` succeeded. The focused XLSX tests simulated
 Excel insertion and sorting by relocating full worksheet rows and their cell
 addresses while retaining the original hidden sheet.
+
+The production XLSX fix passed 100 focused SwiftPM tests. One opt-in
+independent workbook fixture was skipped. The cases include bounded synthetic
+Office archives, invalid ZIP and XML, worksheet and package limits, preview
+diagnostics, and duplicate-free application and replay of 20 new observations
+and five revisions. Xcode 26.6 built the app for the generic iOS Simulator
+destination. Full regression and physical-device import were outside this run.
+
+The PR #82 streaming follow-up passed 80 focused SwiftPM tests with one
+opt-in fixture skipped. The generic iOS Simulator build succeeded on
+Xcode 26.6. Tests cover a valid worksheet above 32 MiB, CRC failure at the
+end of a stream, a DTD token crossing a chunk boundary, size and cell
+budgets, and refusal of a blocked preview before storage. Supported A:AD
+imports still verify explicit DXF context, 20 creations, five revisions,
+and duplicate-free replay through the durable ledger.
+
+The initial streaming probe read 19,998 worksheet rows and found 11
+candidates at rows 5–15. That version refused writes until a source-backed
+observation type was available. Its macOS debug probe used about 63 MiB of
+peak resident memory.
+
+
+The automatic import probe reconciled the original production XLSX with
+an empty in-memory project. It scanned 19,998 worksheet rows, parsed 11
+source observations, proposed and accepted all 11, and reported zero
+invalid rows, conflicts or initial matches. All 11 UUIDs and source IDs
+were distinct. All destinations remained unresolved because the probe had
+no verified project geometry or elevation ranges. Every picket remained
+empty. Independent ZIP/XML extraction matched the exact decimal spelling
+of all 11 saved Z cells. Replaying the input matched all 11 records as
+unchanged and proposed zero new observations. The journal was serialized,
+decoded and validated in memory. Peak resident memory in the macOS debug
+probe was approximately 63.3 MiB.
+
+131 focused SwiftPM tests passed and one opt-in fixture was skipped.
+The tests cover two explicitly verified DXF excavations on
+different horizons, inclined segment elevation, ambiguous ranges, unknown
+frame metadata, duplicate input, dataset scope, stable reassignment,
+revision replay and transaction rollback. Xcode 26.6 successfully built
+the production preview and source journal for the generic iOS Simulator. Physical-device
+verification and full regression were outside this run.
+
+## Editing imported observations and mixed Excel sync
+
+Source-backed rows appear in the mapping journal and on a matching DXF
+horizon. Open **Исправить геологические данные** from the source detail
+to edit supported fields F:N and P:AC. The editor shares the project
+lithology picker, lossless numeric input, published category tables and
+angle bounds. It preserves missing angle components and the unknown north
+reference of source data. An empty value in the editor clears that field.
+Schema 8 keeps original evidence, the last accepted production baseline,
+effective local values and append-only versions with their origin and save
+time. Versions created before local editing use their saved cells as the
+baseline. Offline backup and restore carry the whole source history. Dates,
+pickets, source identities and XYZ retain their provenance. SD and GSI
+remain read-only.
+
+Production imports compare the last accepted source baseline, the effective
+journal values and the incoming source values. An unchanged incoming field
+preserves a local edit. Edits to separate fields merge, and equal edits
+resolve together. Divergent edits to the same field show all three values
+and require **Оставить значение журнала** or **Принять Excel**. Cancelling
+the preview leaves the journal untouched. For production imports, an
+explicit resolution advances the accepted source baseline. Blank cells
+retain values and `#CLEAR` explicitly clears a supported field.
+
+Regulatory export writes effective source geology and exact retained
+coordinate text into the four-header Data!A:AD contract. Native rows
+retain their own revision baselines. Each source binding carries the
+project, dataset, source ID, UUID and archived version fingerprint in
+`_FieldForge`. An edited generated workbook uses its exported snapshot as
+the merge base and leaves the independent production baseline available
+for later production imports. A source-only export made before version
+fingerprints can be read when its archived baseline is unambiguous.
+
+Mixed imports show native and source proposals in one preview. They
+verify the workbook hash and journal generation and stage both row types
+before one atomic journal save. The same save records approved native
+update receipts, source edits and their immutable revisions. Reimport
+into the journal that contains the exported UUIDs and archived revisions.
+Source rows retain their context. Keep the original row order, native row
+group boundaries, IDs and pickets in mixed files. Use a native-only
+workbook for native picket changes and row creation. Missing rows,
+inconsistent hidden identities and overlapping identity fields that make
+an edit ambiguous require a fresh or narrower export. The native-only
+workflow retains its usual matching and recovery behavior.
+
+Keep the original production XLSX for supplementary fields AE:CP. A
+generated A:AD workbook carries the supported fields and hidden
+identity metadata. Use a copy to edit exported data. Excel may rewrite
+high-precision numbers when saving. A change to a source-bound XYZ cell
+blocks the generated workbook import with a cell diagnostic. The journal
+and its backups preserve the original coordinate spelling.
+
+Focused regression results for this integration: the source batch test passed
+for two verified inclined DXF horizons, and the local production workbook test
+passed. The latter parsed 11 rows, saved 11 stable IDs with unresolved
+locations, replayed the source with 11 unchanged records, exported the
+source-only Data!A:AD workbook with `_FieldForge` source identity bindings, and
+reimported it with zero new rows and 11 unchanged records. The production test
+took about 53 seconds on this machine.
+
+The bidirectional follow-up passed 96 focused SwiftPM tests with one
+opt-in fixture skipped. The production workbook test parsed all 11 source
+observations, saved an RQD edit, preserved it on unchanged replay, merged
+a separate UCS change and checked both choices for a competing RQD edit.
+It round-tripped source-only and mixed exports without new records.
+A synthetic mixed XLSX verified one atomic update to both row types,
+refusal of unapproved changes, durable UUIDs and replay without a new
+journal generation. A synthetic backup and restore preserved effective
+geology, the accepted source baseline and coordinate spelling.
+The generic iOS Simulator build succeeded. Physical iPhone and production
+DXF verification were outside this run.

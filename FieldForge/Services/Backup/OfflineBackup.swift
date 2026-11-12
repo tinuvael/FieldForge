@@ -68,7 +68,7 @@ enum OfflineBackup {
                                 }))
             let manifest = BackupManifest(formatVersion: BackupManifest.version, mappingSchemaVersion: MappingJournal.currentSchemaVersion,
                 applicationVersion: applicationVersion, createdAtUTC: MappingCSVExport.iso(Date()),
-                projectCount: journal.projects.count, observationCount: journal.observations.count,
+                projectCount: journal.projects.count, observationCount: journal.totalObservationCount,
                 measurementIDs: independent.0.map(\.id), independentJournalPresent: measurements.expectedBytes != nil,
                 files: files.sorted { $0.path < $1.path }, attachments: attachments, pendingOperationPaths: pending, completenessStatus: report.complete ? "complete" : "incomplete", report: report)
             let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]

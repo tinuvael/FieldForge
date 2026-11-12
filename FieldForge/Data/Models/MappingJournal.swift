@@ -4,6 +4,7 @@ struct MappingProject: Codable, Equatable, Identifiable, Sendable {
     let id: UUID
     var name: String
     var lithologies: [RockLithology]? = nil
+    var regulatoryGeometryRules: [UUID: RegulatorySourceImport.GeometryRule]? = nil
 }
 
 struct MappingHorizon: Codable, Equatable, Identifiable, Sendable {
@@ -12,6 +13,7 @@ struct MappingHorizon: Codable, Equatable, Identifiable, Sendable {
     var name: String
     var elevationMeters: Double?
     var elevationDatum: String
+    var regulatoryElevationRange: RegulatorySourceImport.ElevationRange? = nil
     var displayName: String { elevationMeters.map { ElevationInput.label($0) } ?? name }
 }
 
@@ -137,11 +139,13 @@ struct MappingJournal: Codable, Equatable, Sendable {
     var selection = MappingContext()
     var measurements: [Measurement] = []
     var importLedger: MappingImportLedger?
+    var regulatorySourceObservations: [RegulatorySourceObservation]?
+    var totalObservationCount: Int { observations.count + (regulatorySourceObservations?.count ?? 0) }
 
     init() {}
     private enum CodingKeys: String, CodingKey {
         case schemaVersion, projects, horizons, excavations, plans, observations, selection, measurements, revisions, photos, photoAttachments, photoRevisions
-        case importLedger
+        case importLedger, regulatorySourceObservations
     }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -161,6 +165,9 @@ struct MappingJournal: Codable, Equatable, Sendable {
         // Schema-8 journals created before Stage 4a omit the key. A present field
         // must decode in full, including its format version and integrity digest.
         if c.contains(.importLedger) { importLedger = try c.decode(MappingImportLedger.self, forKey: .importLedger) }
+        if c.contains(.regulatorySourceObservations) {
+            regulatorySourceObservations = try c.decode([RegulatorySourceObservation].self, forKey: .regulatorySourceObservations)
+        }
     }
 
     func measurements(for observation: MappingObservation) -> [Measurement] {
@@ -198,6 +205,7 @@ struct MappingJournal: Codable, Equatable, Sendable {
             }
         }
         try PlanCoordinateCompatibility.validate(plans)
+        try RegulatorySourceImport.validate(journal: self, context: context)
         let geologyIDs = observations.flatMap { observation in
             (observation.geology?.jointSets.map(\.id) ?? []) + (observation.geology?.tectonicStructures.map(\.id) ?? [])
         }

@@ -91,6 +91,10 @@ struct MappingExportView: View {
             Section {
                 Text(format == .exchange ? "Обмен: подтверждённый снимок после ранее принятых сохранений." : "Подтверждённый снимок журнала при открытии выгрузки. Незавершённые сохранения не включены.").font(.caption).foregroundStyle(.secondary)
                 Text("Наблюдений: \(selectedCount)").accessibilityIdentifier("mappingExportPointCount")
+                if format == .enterpriseGeotechnical {
+                    Text("Исходные строки Excel включаются по проекту и назначенному контексту; фильтр полевой даты к ним не применяется, поскольку дата в источнике не задана.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 if format == .enterpriseGeotechnical, let report = preview?.enterpriseReport, report.requiresReview {
                     regulatoryWarnings(report)
                 }
@@ -210,10 +214,17 @@ struct MappingExportView: View {
     }
     private var selectedCount: Int {
         guard let selection, let bounds = try? selection.bounds() else { return 0 }
-        return committed.observations(projectID: selection.projectID).filter {
+        let fieldCount = committed.observations(projectID: selection.projectID).filter {
             $0.projectID == selection.projectID && (horizonID == nil || $0.horizonID == horizonID) &&
             (excavationID == nil || $0.excavationID == excavationID) && $0.observedAt >= bounds.start && $0.observedAt < bounds.end
         }.count
+        guard format == .enterpriseGeotechnical else { return fieldCount }
+        let sourceCount = (journal.regulatorySourceObservations ?? []).filter {
+            $0.key.projectID == selection.projectID &&
+                (horizonID == nil || $0.latest?.destination.horizonID == horizonID) &&
+                (excavationID == nil || $0.latest?.destination.excavationID == excavationID)
+        }.count
+        return fieldCount + sourceCount
     }
     private func shareExchange() {
         guard !busy, !sharing, let selection else { return }

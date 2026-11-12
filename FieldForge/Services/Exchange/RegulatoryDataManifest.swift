@@ -16,9 +16,23 @@ struct RegulatoryDataManifest: Codable, Sendable {
         let graphFingerprint: String
     }
 
+    struct SourceBinding: Codable, Sendable {
+        let sourceObservationID: UUID
+        let projectID: UUID
+        let dataset: String
+        let sourceID: String
+        let row: Int
+        let frame: RegulatorySourceImport.Frame
+        let destination: MappingContext
+        let explicitlyAssigned: Bool
+        var revision: Int? = nil
+        var fingerprint: String? = nil
+    }
+
     let workbookID: UUID
     let exportedAt: Date
     let bindings: [Binding]
+    var sourceBindings: [SourceBinding]? = nil
 
     init(export: MappingCSVExport, committed: MappingCommittedSnapshot) throws {
         guard let report = export.enterpriseReport else { throw StorageError.invalidRecord }
@@ -41,7 +55,16 @@ struct RegulatoryDataManifest: Codable, Sendable {
                 graphFingerprint: try MappingExchangeExport.fingerprint(id, in: committed)))
             offset += count
         }
-        guard offset == report.table.rows.count else { throw StorageError.invalidRecord }
+        // Source-backed rows follow the mapped field rows and intentionally have
+        // no native MappingObservation baseline; their stable source identity is
+        // preserved in Data!A and the journal's source-history table.
+        guard offset <= report.table.rows.count else { throw StorageError.invalidRecord }
+        sourceBindings = report.sourceRows.map { row in
+            SourceBinding(sourceObservationID: row.id, projectID: row.key.projectID, dataset: row.key.dataset,
+                sourceID: row.key.sourceID, row: row.firstRow, frame: row.frame,
+                destination: row.destination, explicitlyAssigned: row.explicitlyAssigned,
+                revision: row.revision, fingerprint: row.fingerprint)
+        }
         self.bindings = bindings
     }
 
@@ -55,10 +78,24 @@ struct RegulatoryDataManifest: Codable, Sendable {
             guard binding.firstRow == next, binding.rowCount > 0, binding.rowCount <= rowLimit + 5 - next else { throw error }
             next += binding.rowCount
         }
+        var sourceIDs = Set(bindings.map(\.target.observationID))
+        var sourceRows = Set<Int>(), sourceKeys = Set<RegulatorySourceObservation.Key>()
+        for source in sourceBindings ?? [] {
+            let key = RegulatorySourceObservation.Key(projectID: source.projectID, dataset: source.dataset, sourceID: source.sourceID)
+            guard sourceIDs.insert(source.sourceObservationID).inserted, sourceRows.insert(source.row).inserted,
+                  sourceKeys.insert(key).inserted, source.row == next, source.row <= rowLimit + 4,
+                  !source.dataset.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  source.dataset.utf8.count <= 256, !source.sourceID.isEmpty, source.sourceID.utf8.count <= 256,
+                  source.frame.valid, source.destination.projectID == source.projectID,
+                  (source.revision == nil) == (source.fingerprint == nil),
+                  source.revision.map({ $0 >= 0 }) ?? true,
+                  source.fingerprint.map({ $0.range(of: #"^[a-f0-9]{64}$"#, options: .regularExpression) != nil }) ?? true else { throw error }
+            next += 1
+        }
     }
 
-    private init(workbookID: UUID, exportedAt: Date, bindings: [Binding]) {
-        self.workbookID = workbookID; self.exportedAt = exportedAt; self.bindings = bindings
+    private init(workbookID: UUID, exportedAt: Date, bindings: [Binding], sourceBindings: [SourceBinding]?) {
+        self.workbookID = workbookID; self.exportedAt = exportedAt; self.bindings = bindings; self.sourceBindings = sourceBindings
     }
 
     private struct Header: Codable {
@@ -70,6 +107,7 @@ struct RegulatoryDataManifest: Codable, Sendable {
         let header = try MappingExchangeExport.json(Header(workbookID: workbookID, exportedAt: exportedAt))
         var table = MappingCSVExport.Table(name: Self.sheetName, columns: [Self.column], rows: [[.text(header)]])
         for binding in bindings { table.rows.append([.text(try MappingExchangeExport.json(binding))]) }
+        for binding in sourceBindings ?? [] { table.rows.append([.text(try MappingExchangeExport.json(binding))]) }
         return table
     }
 
@@ -79,10 +117,19 @@ struct RegulatoryDataManifest: Codable, Sendable {
             throw ExchangeImportError("Повреждён скрытый лист идентификаторов FieldForge.")
         }
         let info = try ExchangeBaseline.decode(Header.self, header)
-        let bindings = try sheet.rows.dropFirst().map { row in
-            try ExchangeBaseline.decode(Binding.self, row[column] ?? "")
+        var bindings: [Binding] = [], sourceBindings: [SourceBinding] = []
+        for row in sheet.rows.dropFirst() {
+            let raw = row[column] ?? ""
+            let native = try? ExchangeBaseline.decode(Binding.self, raw)
+            let source = try? ExchangeBaseline.decode(SourceBinding.self, raw)
+            switch (native, source) {
+            case (let binding?, nil) where sourceBindings.isEmpty: bindings.append(binding)
+            case (nil, let binding?): sourceBindings.append(binding)
+            default: throw ExchangeImportError("Скрытый лист содержит неизвестную или неоднозначную запись идентификатора.")
+            }
         }
-        let value = Self(workbookID: info.workbookID, exportedAt: info.exportedAt, bindings: bindings)
+        let value = Self(workbookID: info.workbookID, exportedAt: info.exportedAt, bindings: bindings,
+                         sourceBindings: sourceBindings.isEmpty ? nil : sourceBindings)
         try value.validate(documentID: documentID, rowLimit: rowLimit)
         guard bindings.allSatisfy({ $0.excavation != nil && $0.picket != nil }) else {
             throw ExchangeImportError("В скрытом листе отсутствует контекст исходных строк.")

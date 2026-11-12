@@ -128,11 +128,21 @@ enum MappingExchangeImport {
     struct Batch: Sendable {
         let source: MappingImportSource
         let items: [Item]
+        let generationID: UUID
+        let mixed: Bool
+        var atomicUpdateIDs: Set<UUID> {
+            Set(items.compactMap { item in
+                guard case .execute(let operation, _) = item.action, operation.kind == .update else { return nil }
+                return operation.id
+            })
+        }
 
-        init(preview: MappingExchangePreview, bytes: Data, selection: Selection, now: Date) throws {
-            guard !preview.workbookBlocked, let expected = preview.source else {
+        init(preview: MappingExchangePreview, bytes: Data, selection: Selection, now: Date, mixed: Bool = false) throws {
+            guard !preview.workbookBlocked, mixed == (preview.productionInput != nil), let expected = preview.source else {
                 throw ExchangeImportError("Эту книгу нельзя импортировать. Проверьте ошибки на защищённых листах.")
             }
+            self.mixed = mixed
+            generationID = preview.generationID
             source = MappingImportSource(kind: expected.kind, documentID: expected.documentID, bytes: bytes)
             guard source == expected else { throw ExchangeImportError("Файл изменился после проверки. Выберите книгу и проверьте её снова.") }
             let confirmsChanges = selection.hasAction(in: preview)
@@ -141,6 +151,39 @@ enum MappingExchangeImport {
                     confirmsChanges: confirmsChanges, now: now))
             }
         }
+    }
+
+    /// Stage both row types on one generation. The storage owner persists
+    /// the returned journal once, after every native operation succeeds.
+    static func applyingMixed(_ batch: Batch, sourcePlan: RegulatorySourceImport.Plan,
+                              to snapshot: MappingCommittedSnapshot) throws -> MappingJournal {
+        guard batch.mixed, batch.generationID == snapshot.generationID,
+              batch.source.fingerprint == sourcePlan.workbookSHA256 else {
+            throw StorageError.changedFile
+        }
+        var journal = try RegulatorySourceImport.applying(sourcePlan, to: snapshot)
+        for item in batch.items {
+            try Task.checkCancellation()
+            switch item.action {
+            case .report(let status, _):
+                guard status == .unchanged || status == .alreadyApplied else {
+                    throw ExchangeImportError("Проверьте обычные наблюдения перед сохранением смешанной книги.")
+                }
+            case .execute(let operation, let proposal):
+                guard operation.kind == .update else {
+                    throw ExchangeImportError("Сначала подтвердите все изменения обычных наблюдений.")
+                }
+                let outcome = try MappingImportApply.execute(operation, source: batch.source, proposal: proposal,
+                    current: .init(journal), save: { journal = $0 }, checkpoint: { _ in })
+                guard outcome == .applied else {
+                    throw ExchangeImportError("Обычное наблюдение изменилось. Проверьте смешанную книгу снова.")
+                }
+            case .rejectPending:
+                throw ExchangeImportError("Завершите ранее начатый импорт обычных наблюдений.")
+            }
+        }
+        try journal.validate()
+        return journal
     }
 
     private static func action(_ record: MappingExchangePreview.Record, source: MappingImportSource,

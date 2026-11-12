@@ -13,10 +13,22 @@ struct EnterpriseGeotechnicalWorkbook: Sendable {
         let rmr: String
     }
 
+    struct SourceRow: Sendable {
+        let id: UUID
+        let key: RegulatorySourceObservation.Key
+        let firstRow: Int
+        let frame: RegulatorySourceImport.Frame
+        let destination: MappingContext
+        let explicitlyAssigned: Bool
+        let revision: Int
+        let fingerprint: String
+    }
+
     let observationIDs: [UUID]
     let table: Table
     let rqdConflicts: [RQDConflict]
     let spatialWarnings: [String]
+    let sourceRows: [SourceRow]
     var requiresReview: Bool { !rqdConflicts.isEmpty || !spatialWarnings.isEmpty }
 
     private static let joints = JointSetIdentifier.routine
@@ -41,7 +53,8 @@ struct EnterpriseGeotechnicalWorkbook: Sendable {
     ]
     static let merges = ["A1:AD1", "A2:E2", "F2:H2", "I2:J2", "K2:L2", "M2:R2", "S2:U2", "V2:AC2", "C3:E3"]
 
-    static func prepare(points: [MappingObservation], journal: MappingJournal) throws -> Self {
+    static func prepare(points: [MappingObservation], journal: MappingJournal,
+                        sourceRecords: [RegulatorySourceObservation] = []) throws -> Self {
         let excavations = Dictionary(uniqueKeysWithValues: journal.excavations.map { ($0.id, $0.name) })
         var report = Table(name: "Data", columns: columns)
         var rqdConflicts: [RQDConflict] = []
@@ -93,7 +106,25 @@ struct EnterpriseGeotechnicalWorkbook: Sendable {
                 ] + afterFault)
             }
         }
-        return Self(observationIDs: points.map(\.id), table: report, rqdConflicts: rqdConflicts, spatialWarnings: spatial.warnings)
+        // Source-backed observations already use the regulatory Data!A:AD layout.
+        // Export effective values, including corrections, and retain the exact
+        // coordinate spelling from the accepted source.
+        let firstSourceDataIndex = report.rows.count
+        var sourceRows: [SourceRow] = []
+        for (offset, record) in sourceRecords.enumerated() {
+            try Task.checkCancellation()
+            guard let version = record.latest, version.cells.count == columns.count else { throw StorageError.invalidRecord }
+            report.rows.append(version.cells.enumerated().map { index, value in
+                guard !value.isEmpty else { return .empty }
+                let isNumericColumn = (2...4).contains(index) || (6...29).contains(index)
+                return isNumericColumn && RegulatoryDataWorkbook.sourceNumber(value) != nil ? .rawNumber(value) : .text(value)
+            })
+            sourceRows.append(.init(id: record.id, key: record.key, firstRow: firstSourceDataIndex + offset + 5,
+                frame: version.frame, destination: version.destination, explicitlyAssigned: version.explicitlyAssigned,
+                revision: record.versions.count - 1, fingerprint: try MappingImportLedger.fingerprint(version)))
+        }
+        return Self(observationIDs: points.map(\.id), table: report, rqdConflicts: rqdConflicts,
+                    spatialWarnings: spatial.warnings, sourceRows: sourceRows)
     }
 
     private struct SpatialReferences {

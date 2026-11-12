@@ -61,7 +61,7 @@ import zlib
         return try .prepare(url: files.urls[0], committed: .init(journal))
     }
     private func parts(_ export: MappingExchangeExport) throws -> [String: Data] {
-        let files = try export.write(); return try ExchangeArchive(url: files.urls[0], limits: .init()).parts
+        let files = try export.write(); return try archiveParts(Data(contentsOf: files.urls[0]))
     }
     private func newPoint(_ export: MappingExchangeExport, token: UUID? = nil) -> MappingExchangeExport {
         var tables = export.tables, table = export.tables.first { $0.name == "points" }!
@@ -337,7 +337,7 @@ import zlib
         XCTAssertEqual(updated.latestRevisions[id(7)]?.author, "Инженер")
 
         let reexport = try bytes(export(updated.journal))
-        let reexported = try workbook(ExchangeArchive(data: reexport, limits: .init()).parts)
+        let reexported = try workbook(archiveParts(reexport))
         let rows = try XCTUnwrap(reexported.sheets["points"]?.rows)
         let exported = try XCTUnwrap(rows.first { $0["point_id"] == id(7).uuidString })
         XCTAssertEqual(exported["notes"], "Уточнение по журналу 🪨")
@@ -466,7 +466,7 @@ import zlib
             selection: .init(accepted: [id(7).uuidString]), now: time.addingTimeInterval(30))
         let (after, report) = try await owner.applyExchange(batch)
         XCTAssertEqual(report.count(.applied), 1)
-        let reexported = try self.workbook(ExchangeArchive(data: bytes(export(after.journal)), limits: .init()).parts)
+        let reexported = try self.workbook(archiveParts(bytes(export(after.journal))))
         let q = try XCTUnwrap(reexported.sheets["assessments"]?.rows.first { $0["kind"] == "Q" })
         XCTAssertEqual(q["method"], QMethod.version)
         XCTAssertEqual(q["rqd_text"], "87")
@@ -725,8 +725,8 @@ import zlib
         let names = matches.map { (book as NSString).substring(with: $0.range) }
         for (match, replacement) in Swift.zip(matches.reversed(), names) { book.replaceSubrange(Range(match.range, in: book)!, with: replacement) }
         rewritten["xl/workbook.xml"] = Data(book.utf8)
-        let archive = try ExchangeArchive(data: zip(rewritten.sorted { $0.key < $1.key }, deflated: true), limits: .init())
-        let p = try MappingExchangePreview.prepare(workbook: workbook(archive.parts), committed: .init(j))
+        let parts = try archiveParts(zip(rewritten.sorted { $0.key < $1.key }, deflated: true))
+        let p = try MappingExchangePreview.prepare(workbook: workbook(parts), committed: .init(j))
         let old = try MappingExchangePreview.prepare(workbook: workbook(original), committed: .init(j))
         XCTAssertEqual(p.count(.unchanged), 1); XCTAssertFalse(p.hasBlockingRecords); XCTAssertEqual(p.proposalDigest, old.proposalDigest)
     }
@@ -821,15 +821,15 @@ import zlib
             XCTAssertThrowsError(try ExchangeArchive(data: zip(entries), limits: .init()))
         }
         var limits = ExchangeLimits(); limits.partBytes = 100
-        XCTAssertThrowsError(try ExchangeArchive(data: zip([("a", Data(repeating: 65, count: 10_000))], deflated: true), limits: limits))
+        XCTAssertThrowsError(try archiveParts(zip([("a", Data(repeating: 65, count: 10_000))], deflated: true), limits: limits))
         limits = .init(); limits.compressionRatio = 2
-        XCTAssertThrowsError(try ExchangeArchive(data: zip([("a", Data(repeating: 65, count: 10_000))], deflated: true), limits: limits))
+        XCTAssertThrowsError(try archiveParts(zip([("a", Data(repeating: 65, count: 10_000))], deflated: true), limits: limits))
         limits = .init(); limits.entries = 1
         XCTAssertThrowsError(try ExchangeArchive(data: zip([("a", bytes), ("b", bytes)]), limits: limits))
         var encrypted = try zip([("a", bytes)]); encrypted[6] |= 1
         XCTAssertThrowsError(try ExchangeArchive(data: encrypted, limits: .init()))
         var corrupt = try zip([("a", bytes)]); corrupt[31] ^= 1
-        XCTAssertThrowsError(try ExchangeArchive(data: corrupt, limits: .init()))
+        XCTAssertThrowsError(try archiveParts(corrupt))
     }
     func testCommittedGenerationStalenessNoMutationFailureOrCancellation() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("B2b-tests-\(UUID())")
@@ -855,6 +855,11 @@ import zlib
         let current = try await owner.exchangePreviewIsCurrent(p.generationID); XCTAssertFalse(current)
         await owner.retire()
         do { _ = try await owner.exchangePreviewIsCurrent(p.generationID); XCTFail("Retired owner") } catch {}
+    }
+
+    private func archiveParts(_ data: Data, limits: ExchangeLimits = .init()) throws -> [String: Data] {
+        var archive = try ExchangeArchive(data: data, limits: limits)
+        return try archive.readAll()
     }
 
     /// Independent tiny ZIP fixture encoder, including deliberate unsafe names/duplicates.
@@ -894,11 +899,12 @@ extension MappingExchangePreviewTests {
             selection: .init(projectID: id(1), firstDay: time, lastDay: time, timeZoneID: "UTC"),
             now: time, id: token ?? id(99), includeEnterprise: true)
         let files = try MappingExportFiles.write(snapshot, format: .enterpriseGeotechnical, includeRegulatoryIdentity: identity)
+        defer { files.cleanup() }
         return try Data(contentsOf: files.urls[0])
     }
 
     private func editData(_ data: Data, _ transform: (String) throws -> String) throws -> Data {
-        var parts = try ExchangeArchive(data: data, limits: .init()).parts
+        var parts = try archiveParts(data)
         let path = "xl/worksheets/sheet1.xml"
         parts[path] = try Data(transform(String(decoding: XCTUnwrap(parts[path]), as: UTF8.self)).utf8)
         return try zip(parts.sorted { $0.key < $1.key }, deflated: true)
@@ -1008,6 +1014,274 @@ extension MappingExchangePreviewTests {
         XCTAssertEqual(stable.journal, after.journal)
     }
 
+    private func withOfficeParts(_ workbook: Data, extraWorksheet: Data, calcChain: Data) throws -> [String: Data] {
+        var parts = try archiveParts(workbook)
+        let book = "xl/workbook.xml", rels = "xl/_rels/workbook.xml.rels", types = "[Content_Types].xml"
+        func insert(_ part: String, before anchor: String, _ text: String) throws {
+            let xml = String(decoding: try XCTUnwrap(parts[part]), as: UTF8.self)
+            XCTAssertTrue(xml.contains(anchor))
+            parts[part] = Data(xml.replacingOccurrences(of: anchor, with: text + anchor).utf8)
+        }
+        let workbookXML = String(decoding: try XCTUnwrap(parts[book]), as: UTF8.self)
+        XCTAssertTrue(workbookXML.contains("<sheets>"))
+        parts[book] = Data(workbookXML.replacingOccurrences(of: "<sheets>",
+            with: #"<sheets><sheet name="Filter" sheetId="14" state="hidden" r:id="filter"/>"#).utf8)
+        let office = ExchangeWorkbook.documentRelationships
+        try insert(rels, before: "</Relationships>", """
+            <Relationship Id="filter" Type="\(office)worksheet" Target="worksheets/filter.xml"/>
+            <Relationship Id="calc" Type="\(office)calcChain" Target="calcChain.xml"/>
+            """)
+        let content = "application/vnd.openxmlformats-officedocument.spreadsheetml."
+        try insert(types, before: "</Types>", """
+            <Override PartName="/xl/worksheets/filter.xml" ContentType="\(content)worksheet+xml"/>
+            <Override PartName="/xl/calcChain.xml" ContentType="\(content)calcChain+xml"/>
+            """)
+        parts["xl/worksheets/filter.xml"] = extraWorksheet
+        parts["xl/calcChain.xml"] = calcChain
+        return parts
+    }
+
+    private func addSharedStrings(_ data: Data, to parts: inout [String: Data]) throws {
+        let rels = "xl/_rels/workbook.xml.rels", types = "[Content_Types].xml"
+        let sstType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"
+        parts[rels] = Data(String(decoding: try XCTUnwrap(parts[rels]), as: UTF8.self)
+            .replacingOccurrences(of: "</Relationships>", with: """
+                <Relationship Id="strings" Type="\(ExchangeWorkbook.documentRelationships)sharedStrings" Target="sharedStrings.xml"/></Relationships>
+                """).utf8)
+        parts[types] = Data(String(decoding: try XCTUnwrap(parts[types]), as: UTF8.self)
+            .replacingOccurrences(of: "</Types>", with: """
+                <Override PartName="/xl/sharedStrings.xml" ContentType="\(sstType)"/></Types>
+                """).utf8)
+        parts["xl/sharedStrings.xml"] = data
+    }
+
+    func testRegulatorySelectiveReadSkipsLargeOfficePartsAndUsesNamedData() throws {
+        let journal = try fixture()
+        let book = try regulatoryExport(journal)
+        let ns = ExchangeWorkbook.spreadsheet
+        let auxRows = (1...15_000).map { "<row r=\"\($0)\"><c r=\"A\($0)\"><f>1+1</f><v>2</v></c></row>" }.joined()
+        let chain = (1...60_000).map { "<c r=\"A\($0)\" i=\"14\"/>" }.joined()
+        var parts = try withOfficeParts(book,
+            extraWorksheet: Data("<worksheet xmlns=\"\(ns)\"><sheetData>\(auxRows)</sheetData></worksheet>".utf8),
+            calcChain: Data("<calcChain xmlns=\"\(ns)\">\(chain)</calcChain>".utf8))
+        let dataPath = "xl/worksheets/sheet1.xml"
+        let data = String(decoding: try XCTUnwrap(parts[dataPath]), as: UTF8.self)
+        // Office-converted dimensions can be stale. Import the actual cell addresses.
+        // Formatted empty rows make the required worksheet larger and highly compressible.
+        let emptyRows = (6...2500).map { "<row r=\"\($0)\"><c r=\"AD\($0)\"/></row>" }.joined()
+        let revised = try cells(data, ["A4": " t=\"s\"><v>0</v></c>"])
+            .replacingOccurrences(of: #"<dimension ref="[^"]*"/>"#, with: #"<dimension ref="A1"/>"#, options: .regularExpression)
+            .replacingOccurrences(of: "</sheetData>", with: emptyRows + "</sheetData>")
+        parts[dataPath] = Data(revised.utf8)
+        XCTAssertTrue(revised.contains(#"<dimension ref="A1"/>"#))
+        try addSharedStrings(Data("<sst xmlns=\"\(ns)\"><si><t>ID</t></si></sst>".utf8), to: &parts)
+        let bytes = try zip(parts.sorted { $0.key < $1.key }, deflated: true)
+        var limits = ExchangeLimits()
+        limits.partBytes = 128 * 1024
+        limits.expandedBytes = 192 * 1024
+        XCTAssertGreaterThan(try XCTUnwrap(parts["xl/calcChain.xml"]).count, limits.expandedBytes)
+        XCTAssertGreaterThan(try XCTUnwrap(parts["xl/worksheets/filter.xml"]).count, limits.expandedBytes)
+        let parsed = try RegulatoryDataWorkbook.Read(bytes: bytes, limits: limits)
+        XCTAssertEqual(parsed.rows.map(\.number), [5])
+        XCTAssertNotNil(parsed.manifest)
+        XCTAssertEqual(try RegulatoryDataImport.prepare(bytes: bytes, committed: .init(journal), limits: limits).count(.unchanged), 1)
+
+        limits.dataSheetBytes = try XCTUnwrap(parts[dataPath]).count - 1
+        XCTAssertThrowsError(try RegulatoryDataWorkbook.Read(bytes: bytes, limits: limits)) {
+            XCTAssertTrue($0.localizedDescription.contains("Обязательный лист «Data»"), $0.localizedDescription)
+        }
+        limits.dataSheetBytes = 128 * 1024
+        limits.expandedBytes = try XCTUnwrap(parts[dataPath]).count
+        XCTAssertThrowsError(try RegulatoryDataWorkbook.Read(bytes: bytes, limits: limits)) {
+            XCTAssertTrue($0.localizedDescription.contains("Суммарный размер распаковываемых частей"), $0.localizedDescription)
+        }
+        limits.regulatoryDeclaredBytes = 192 * 1024
+        XCTAssertThrowsError(try RegulatoryDataWorkbook.Read(bytes: bytes, limits: limits)) {
+            XCTAssertTrue($0.localizedDescription.contains("Суммарный заявленный размер"), $0.localizedDescription)
+        }
+
+        var cellLimits = ExchangeLimits()
+        cellLimits.dataSheetCells = 100
+        XCTAssertThrowsError(try RegulatoryDataWorkbook.Read(bytes: bytes, limits: cellLimits)) {
+            XCTAssertTrue($0.localizedDescription.contains("предел ячеек листа Data"), $0.localizedDescription)
+        }
+        cellLimits = .init()
+        cellLimits.dataSheetRetainedCells = 20
+        XCTAssertThrowsError(try RegulatoryDataWorkbook.Read(bytes: bytes, limits: cellLimits)) {
+            XCTAssertTrue($0.localizedDescription.contains("предел значимых ячеек листа Data"), $0.localizedDescription)
+        }
+    }
+
+    func testRegulatorySkipsUnreferencedSharedStringsAndStyles() throws {
+        let book = try editData(regulatoryExport(fixture(), identity: false)) { xml in
+            try cells(xml, ["J5": "/>", "I5": "/>", "K5": "/>"])
+                .replacingOccurrences(of: #"<v>[^<]*</v>"#, with: "", options: .regularExpression)
+        }
+        var parts = try archiveParts(book)
+        try addSharedStrings(Data("unread shared strings".utf8), to: &parts)
+        parts["xl/styles.xml"] = Data("unread styles".utf8)
+        let bytes = try zip(parts.sorted { $0.key < $1.key }, deflated: true)
+        XCTAssertEqual(try RegulatoryDataWorkbook.Read(bytes: bytes, limits: .init()).rows.count, 1)
+    }
+
+    func testRegulatoryRejectsPopulatedColumnsPastADAndRequiresVisibleData() async throws {
+        let book = try regulatoryExport(fixture(), identity: false)
+        for (row, cell) in [(4, #"<c r="AE4" t="inlineStr"><is><t>Q</t></is></c>"#),
+                            (5, #"<c r="AE5" t="str"><f>1+1</f></c>"#)] {
+            let invalid = try editData(book) { xml in
+                let range = try XCTUnwrap(xml.range(of: #"<row r="\#(row)"[^>]*>.*?</row>"#, options: .regularExpression))
+                var result = xml
+                result.replaceSubrange(range, with: xml[range].replacingOccurrences(of: "</row>", with: cell + "</row>"))
+                return result
+            }
+            XCTAssertThrowsError(try RegulatoryDataWorkbook.Read(bytes: invalid, limits: .init())) {
+                XCTAssertTrue($0.localizedDescription.contains("Data!AE\(row)"), $0.localizedDescription)
+                XCTAssertTrue($0.localizedDescription.contains("Неподдерживаемая схема листа"), $0.localizedDescription)
+            }
+        }
+        var parts = try archiveParts(book)
+        let path = "xl/workbook.xml"
+        parts[path] = Data(String(decoding: try XCTUnwrap(parts[path]), as: UTF8.self)
+            .replacingOccurrences(of: #"name="Data""#, with: #"name="kart""#).utf8)
+        let unsupported = try zip(parts.sorted { $0.key < $1.key })
+        let committed = MappingCommittedSnapshot(try fixture())
+        let coordinator = MappingExchangePreviewCoordinator()
+        coordinator.activate(generation: committed.generationID)
+        let work = MappingExchangePreviewCoordinator.Work(snapshot: { committed },
+            read: { _, snapshot in try RegulatoryDataImport.prepare(bytes: unsupported, committed: snapshot) },
+            isCurrent: { $0 == committed.generationID })
+        let operation = try XCTUnwrap(coordinator.prepare(URL(fileURLWithPath: "/unused/legacy.xlsx"), work: work))
+        await operation.task.value
+        XCTAssertNil(coordinator.state.preview)
+        XCTAssertTrue(try XCTUnwrap(coordinator.state.message).contains("требуется видимый лист Data"))
+    }
+
+    func testRegulatoryStreamsWorksheetAboveBufferedPartLimit() throws {
+        let journal = try fixture()
+        let book = try regulatoryExport(journal)
+        var parts = try archiveParts(book)
+        let path = "xl/worksheets/sheet1.xml"
+        let source = try XCTUnwrap(parts[path])
+        let closing = try XCTUnwrap(source.range(of: Data("</worksheet>".utf8)))
+        // A deterministic low-entropy pattern with enough variation to keep the
+        // compression ratio below the security threshold.
+        let alphabet = Array("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789".utf8)
+        var state: UInt32 = 42
+        let comment = Data("<!--".utf8) + Data((0..<16_384).map { _ in
+            state = state &* 1_664_525 &+ 1_013_904_223
+            return alphabet[Int(state >> 16) % alphabet.count]
+        }) + Data("-->".utf8)
+        var worksheet = Data(source[..<closing.lowerBound])
+        for _ in 0..<2_100 { worksheet.append(comment) }
+        worksheet.append(source[closing.lowerBound...])
+        let limits = ExchangeLimits()
+        XCTAssertGreaterThan(worksheet.count, limits.partBytes)
+        parts[path] = worksheet
+        let bytes = try zip(parts.sorted { $0.key < $1.key }, deflated: true)
+        let preview = try RegulatoryDataImport.prepare(bytes: bytes, committed: .init(journal))
+        XCTAssertEqual(preview.rowsProcessed, 1)
+        XCTAssertEqual(preview.count(.unchanged), 1)
+        XCTAssertFalse(preview.workbookBlocked)
+    }
+
+    func testProductionLayoutExposesSourceCandidateAndExclusionsBeforeAnyWrite() throws {
+        let journal = try fixture()
+        let book = try regulatoryExport(journal, identity: false)
+        let production = try editData(book) { xml in
+            var result = try cells(xml, ["B5": #" t="inlineStr"><is><t>-</t></is></c>"#,
+                                         "AD5": #" t="str"><f>1+1</f><v>-</v></c>"#,
+                                         "C5": #"><v>540000.10000000001</v></c>"#])
+            let headers = [
+                (1, #"<c r="BI1" t="inlineStr"><is><t>Ошибки в пополнении БД по картированию выработок</t></is></c>"#),
+                (3, #"<c r="AI3" t="inlineStr"><is><t>№ точки наблюдения</t></is></c><c r="AJ3" t="inlineStr"><is><t>Примечание</t></is></c><c r="CP3" t="inlineStr"><is><t>Проверка угла и азимута 4 системы</t></is></c>"#),
+                (4, #"<c r="AE4" t="inlineStr"><is><t>Q'</t></is></c><c r="AH4" t="inlineStr"><is><t>RMR76</t></is></c>"#)
+            ]
+            for (row, cells) in headers {
+                let range = try XCTUnwrap(result.range(of: #"<row r="\#(row)"[^>]*>.*?</row>"#, options: .regularExpression))
+                result.replaceSubrange(range, with: result[range].replacingOccurrences(of: "</row>", with: cells + "</row>"))
+            }
+            let placeholder = #"<row r="6"><c r="A6" t="inlineStr"><is><t>-</t></is></c><c r="AD6" t="str"><f>1+1</f><v>-</v></c><c r="AI6"><v>2</v></c></row>"#
+            return result.replacingOccurrences(of: "A1:AD1", with: "A1:AJ1")
+                .replacingOccurrences(of: "</sheetData>", with: placeholder + "</sheetData>")
+                .replacingOccurrences(of: "</worksheet>", with: #"<conditionalFormatting sqref="A5"><cfRule type="expression" priority="1"><formula>1+1</formula></cfRule></conditionalFormatting></worksheet>"#)
+        }
+        let committed = MappingCommittedSnapshot(journal)
+        let preview = try RegulatoryDataImport.prepare(bytes: production, committed: committed)
+        XCTAssertTrue(preview.workbookBlocked)
+        XCTAssertEqual(preview.worksheetRowsScanned, 6)
+        XCTAssertEqual(preview.rowsProcessed, 1)
+        XCTAssertEqual(preview.productionInput?.rows.first?.number, 5)
+        XCTAssertEqual(preview.productionInput?.rows.first?.values[2], "540000.10000000001")
+        XCTAssertEqual(preview.productionInput?.rows.first?.issues, [])
+        XCTAssertFalse(preview.records.contains(where: \.canApply))
+        XCTAssertTrue(preview.workbookBlockReasons.contains { $0.contains("Data!A3:A4") })
+        XCTAssertTrue(preview.workbookBlockReasons.contains { $0.contains("AE:AH") && $0.contains("BI:CP") })
+        XCTAssertThrowsError(try MappingExchangeImport.Batch(preview: preview, bytes: production,
+            selection: .init(accepted: Set(preview.records.map(\.id))), now: time))
+        XCTAssertEqual(committed.journal, journal)
+    }
+
+    func testWorksheetStreamRejectsSplitDTDAndCorruptFinalCRC() throws {
+        let journal = try fixture()
+        let book = try regulatoryExport(journal)
+        let malicious = try editData(book) { xml in
+            let root = try XCTUnwrap(xml.range(of: "<worksheet"))
+            return String(repeating: " ", count: 1020) + "<!DOCTYPE worksheet>" + xml[root.lowerBound...]
+        }
+        XCTAssertThrowsError(try RegulatoryDataWorkbook.Read(bytes: malicious, limits: .init())) {
+            XCTAssertTrue($0.localizedDescription.contains("DTD"), $0.localizedDescription)
+        }
+
+        // The archive directory is consistent. The CRC still has to be checked
+        // at the end of the decoded stream, beyond the XML prefix.
+        let xml = Data(("<worksheet><!--" + String(repeating: "x", count: 95_000) + "--></worksheet>").utf8)
+        var invalid = try zip([("data.xml", xml)], deflated: true)
+        let central = try XCTUnwrap(invalid.range(of: Data([0x50, 0x4b, 0x01, 0x02]))).lowerBound
+        invalid[14] ^= 1
+        invalid[central + 16] ^= 1
+        var archive = try ExchangeArchive(data: invalid, limits: .init(), regulatory: true)
+        let stream = try archive.streamDataSheet("data.xml")
+        _ = try stream.preparePrefix()
+        stream.open()
+        defer { stream.close() }
+        var buffer = [UInt8](repeating: 0, count: 32_768)
+        var count = 0
+        while true {
+            let read = stream.read(&buffer, maxLength: buffer.count)
+            if read <= 0 { break }
+            count += read
+        }
+        XCTAssertGreaterThan(count, 32_768)
+        XCTAssertThrowsError(try stream.verifyCompletion()) {
+            XCTAssertTrue($0.localizedDescription.contains("CRC-32"), $0.localizedDescription)
+        }
+    }
+
+    func testSelectiveZIPRejectsSkippedEntryRatioAndRequiredPartOverrun() throws {
+        var limits = ExchangeLimits()
+        let bomb = try zip([("xl/calcChain.xml", Data(repeating: 65, count: 2 * 1024 * 1024))], deflated: true)
+        XCTAssertThrowsError(try ExchangeArchive(data: bomb, limits: limits, regulatory: true)) {
+            XCTAssertTrue($0.localizedDescription.contains("Коэффициент сжатия"), $0.localizedDescription)
+        }
+        limits.fileBytes = bomb.count - 1
+        XCTAssertThrowsError(try ExchangeArchive(data: bomb, limits: limits, regulatory: true)) {
+            XCTAssertTrue($0.localizedDescription.contains("Размер сжатого файла"), $0.localizedDescription)
+        }
+
+        // A one-entry archive with matching local/central sizes that understate output.
+        var malformed = try zip([("required.xml", Data("<xml/>".utf8))], deflated: true)
+        let central = try XCTUnwrap(malformed.range(of: Data([0x50, 0x4b, 0x01, 0x02]))).lowerBound
+        malformed[22] = 5
+        malformed[central + 24] = 5
+        var archive = try ExchangeArchive(data: malformed, limits: .init(), regulatory: true)
+        XCTAssertThrowsError(try archive.read("required.xml")) {
+            XCTAssertTrue($0.localizedDescription.contains("DEFLATE"), $0.localizedDescription)
+        }
+        malformed[6] |= 1
+        malformed[central + 8] |= 1
+        XCTAssertThrowsError(try ExchangeArchive(data: malformed, limits: .init(), regulatory: true))
+    }
+
     func testRegulatoryStructuralAndCellDiagnostics() throws {
         let journal = try fixture(includeRegulatory: true)
         let committed = MappingCommittedSnapshot(journal)
@@ -1015,7 +1289,13 @@ extension MappingExchangePreviewTests {
         for edit in [["AD4": "/>"], ["A4": " t=\"inlineStr\"><is><t>PK</t></is></c>", "B4": " t=\"inlineStr\"><is><t>ID</t></is></c>"],
                      ["B4": " t=\"inlineStr\"><is><t>ID</t></is></c>"]] {
             let malformed = try editData(book) { try cells($0, edit) }
-            XCTAssertThrowsError(try RegulatoryDataImport.prepare(bytes: malformed, committed: committed))
+            XCTAssertThrowsError(try RegulatoryDataImport.prepare(bytes: malformed, committed: committed)) {
+                XCTAssertTrue($0.localizedDescription.contains("несовместимые заголовки"), $0.localizedDescription)
+            }
+        }
+        let invalidXML = try editData(book) { $0.replacingOccurrences(of: "</worksheet>", with: "</unknown>") }
+        XCTAssertThrowsError(try RegulatoryDataImport.prepare(bytes: invalidXML, committed: committed)) {
+            XCTAssertTrue($0.localizedDescription.contains("Некорректный XML XLSX"), $0.localizedDescription)
         }
         for (address, body) in [
             ("G5", "><f>1+2</f><v>3</v></c>"), ("G5", "><v>2</v></c>"),
@@ -1049,7 +1329,7 @@ extension MappingExchangePreviewTests {
         try ambiguous.validate()
         let current = MappingCommittedSnapshot(ambiguous)
         let book = try regulatoryExport(journal, identity: false)
-        var package = try ExchangeArchive(data: book, limits: .init()).parts
+        var package = try archiveParts(book)
         let core = "docProps/core.xml"
         let metadata = String(decoding: try XCTUnwrap(package[core]), as: UTF8.self)
         package[core] = Data(metadata.replacingOccurrences(of: #"<dc:identifier>.*?</dc:identifier>"#,
@@ -1220,8 +1500,8 @@ extension MappingExchangePreviewTests {
         let book = try regulatoryExport(journal)
         let legacy = try regulatoryExport(journal, identity: false)
         let dataPart = "xl/worksheets/sheet1.xml"
-        let package = try ExchangeArchive(data: book, limits: .init()).parts
-        XCTAssertEqual(package[dataPart], try ExchangeArchive(data: legacy, limits: .init()).parts[dataPart])
+        let package = try archiveParts(book)
+        XCTAssertEqual(package[dataPart], try archiveParts(legacy)[dataPart])
         XCTAssertTrue(String(decoding: try XCTUnwrap(package["xl/workbook.xml"]), as: UTF8.self).contains("state=\"hidden\""))
         let source = try RegulatoryDataWorkbook.Read(bytes: book, limits: .init())
         XCTAssertEqual(source.rows.count, 100)
@@ -1240,7 +1520,12 @@ extension MappingExchangePreviewTests {
              "U": .number(0.35), "V": .number(40), "W": .number(120)]
         }
         rows[19].removeValue(forKey: "D")
-        let expanded = try appendDataRows(edited, rows: rows, start: 105)
+        let newRows = try appendDataRows(edited, rows: rows, start: 105)
+        let ns = ExchangeWorkbook.spreadsheet
+        let office = try withOfficeParts(newRows,
+            extraWorksheet: Data("<worksheet xmlns=\"\(ns)\"><sheetData/></worksheet>".utf8),
+            calcChain: Data("<calcChain xmlns=\"\(ns)\"/>".utf8))
+        let expanded = try zip(office.sorted { $0.key < $1.key }, deflated: true)
         var review = RegulatoryDataImport.Review()
         review.assignment = assignmentForData(plan: plan.id)
         let uncertain = try RegulatoryDataImport.prepare(bytes: expanded, review: review, committed: before)
@@ -1400,8 +1685,8 @@ extension MappingExchangePreviewTests {
         // Excel sorts full rows, leaving the separate hidden sheet unchanged.
         let sorted = try reorderData(inserted, order: [8, 9, 7, 5, 6])
         let hidden = "xl/worksheets/sheet2.xml"
-        XCTAssertEqual(try ExchangeArchive(data: sorted, limits: .init()).parts[hidden],
-                       try ExchangeArchive(data: book, limits: .init()).parts[hidden])
+        XCTAssertEqual(try archiveParts(sorted)[hidden],
+                       try archiveParts(book)[hidden])
         var review = RegulatoryDataImport.Review()
         review.assignment = assignmentForData(plan: plan.id)
         let initial = try RegulatoryDataImport.prepare(bytes: sorted, review: review, committed: before)
@@ -1583,5 +1868,370 @@ extension MappingExchangePreviewTests {
         let changed = try editData(sorted) { try cells($0, ["I6": "><v>12</v></c>"]) }
         _ = try await publish(changed, using: review, snapshot: latest)
         XCTAssertEqual(screen.state.selection.accepted, [second.id])
+    }
+}
+
+extension MappingExchangePreviewTests {
+    private func sourceRow(_ source: String, row: Int, x: Double = 2.5, y: Double = 1, z: Double) -> RegulatoryDataWorkbook.Row {
+        var values = Array(repeating: "", count: RegulatoryDataWorkbook.columns.count)
+        values[0] = source
+        values[2] = String(x)
+        values[3] = String(y)
+        values[4] = String(z)
+        return .init(number: row, values: values, issues: [])
+    }
+
+    func testSourceBatchReusesVerifiedInclinedDXFAndPreservesUnassignedIdentity() throws {
+        var journal = MappingJournal()
+        let project = MappingProject(id: id(1), name: "Project")
+        let first = MappingHorizon(id: id(2), projectID: project.id, name: "Upper", elevationMeters: 400, elevationDatum: "survey datum")
+        let second = MappingHorizon(id: id(3), projectID: project.id, name: "Lower", elevationMeters: 300, elevationDatum: "survey datum")
+        let upper = MappingExcavation(id: id(4), projectID: project.id, name: "A", horizonIDs: [first.id])
+        let lower = MappingExcavation(id: id(5), projectID: project.id, name: "B", horizonIDs: [second.id])
+        journal.projects = [project]
+        journal.horizons = [first, second]
+        journal.excavations = [upper, lower]
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("FF82-plans-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let files = ManagedPlanStore(root: root)
+        func plan(horizon: MappingHorizon, from: Double, through: Double) throws -> MappingPlanReference {
+            let line = "0\nLINE\n10\n0\n20\n0\n30\n\(from)\n11\n10\n21\n0\n31\n\(through)\n"
+            return try files.stage(data: DXFFixtures.drawing(line, units: 6), filename: "survey.dxf", horizonID: horizon.id,
+                version: horizon.name, units: .meters, crs: "mine grid", axes: "WCS XYZ")
+        }
+        let firstPlan = try plan(horizon: first, from: 390, through: 430)
+        let secondPlan = try plan(horizon: second, from: 290, through: 330)
+        journal.plans = [firstPlan, secondPlan]
+        let snapshot = MappingCommittedSnapshot(journal)
+        let frame = RegulatorySourceImport.Frame(crs: "mine grid", axes: "WCS XYZ", xyUnits: "m", verticalDatum: "survey datum")
+        var review = RegulatorySourceImport.Review(projectID: project.id, dataset: "survey", frame: frame, frameConfirmed: true)
+        review.geometryRules = [
+            firstPlan.id: .init(horizonID: first.id, excavationID: upper.id, frame: frame, maximumXYMeters: 1.5, maximumZMeters: 0),
+            secondPlan.id: .init(horizonID: second.id, excavationID: lower.id, frame: frame, maximumXYMeters: 1.5, maximumZMeters: 0)
+        ]
+        review.ranges = [
+            first.id: .init(minimum: 280, maximum: 440, datum: frame.verticalDatum),
+            second.id: .init(minimum: 280, maximum: 440, datum: frame.verticalDatum)
+        ]
+        let rows = [sourceRow("P1", row: 5, z: 400), sourceRow("P2", row: 6, x: 7.5, z: 320),
+                    sourceRow("P3", row: 7, z: 350)]
+        let input = RegulatorySourceImport.Input(rows: rows, workbookSHA256: String(repeating: "a", count: 64))
+        let plan = try RegulatorySourceImport.prepare(input, review: review, snapshot: snapshot, plans: files, now: time)
+        XCTAssertEqual(plan.count(.new), 3)
+        XCTAssertEqual(plan.changes.map(\.destination.horizonID), [first.id, second.id, nil])
+        XCTAssertEqual(plan.changes.map(\.destination.excavationID), [upper.id, lower.id, nil])
+        var override = review
+        override.assignments["P1"] = .init(projectID: project.id, horizonID: second.id)
+        let corrected = try RegulatorySourceImport.prepare(input, review: override, snapshot: snapshot, plans: files)
+        XCTAssertEqual(corrected.changes.first?.destination.horizonID, second.id)
+        XCTAssertNil(corrected.changes.first?.destination.excavationID)
+        let saved = try RegulatorySourceImport.applying(plan, to: snapshot)
+        try saved.validate()
+        let original = try XCTUnwrap(saved.regulatorySourceObservations)
+        XCTAssertEqual(original.map { $0.latest?.xyz[2] }, [400, 320, 350])
+        XCTAssertTrue(original.allSatisfy { $0.latest?.cells[1].isEmpty == true })
+        XCTAssertEqual(MappingCommittedSnapshot(saved).sourcePoints(on: firstPlan).map(\.id), [original[0].id])
+        XCTAssertEqual(MappingCommittedSnapshot(saved).sourcePoints(on: secondPlan).map(\.id), [original[1].id])
+        let dataProjection = try EnterpriseGeotechnicalWorkbook.prepare(points: [], journal: saved, sourceRecords: original)
+        XCTAssertEqual(dataProjection.table.rows.count, 3)
+        XCTAssertEqual(dataProjection.table.rows[0][0].csv, MappingCSVExport.Cell.text("P1").csv)
+        XCTAssertEqual(dataProjection.table.rows[0][4].csv, MappingCSVExport.Cell.text(try XCTUnwrap(original[0].latest?.cells[4])).csv)
+        let reassigned = try RegulatorySourceImport.assigning([original[2].id],
+            destination: .init(projectID: project.id, horizonID: second.id), journal: saved, now: time.addingTimeInterval(1))
+        try reassigned.validate()
+        let updated = try XCTUnwrap(reassigned.regulatorySourceObservations)
+        XCTAssertEqual(updated.map(\.id), original.map(\.id))
+        XCTAssertEqual(updated[2].versions.first, original[2].latest)
+        XCTAssertEqual(updated[2].latest?.destination.horizonID, second.id)
+        let replay = try RegulatorySourceImport.prepare(input, review: review, snapshot: .init(reassigned), plans: files)
+        XCTAssertEqual(replay.count(.unchanged), 3)
+        XCTAssertFalse(replay.canApply)
+        var anotherDataset = review
+        anotherDataset.dataset = "separate survey"
+        XCTAssertEqual(try RegulatorySourceImport.prepare(input, review: anotherDataset, snapshot: .init(reassigned), plans: files).count(.new), 3)
+
+
+        let edit = RegulatorySourceImport.Input(rows: [rows[0], rows[1], sourceRow("P3", row: 12, z: 351)],
+                                                workbookSHA256: String(repeating: "b", count: 64))
+        let beforeEdit = MappingCommittedSnapshot(reassigned)
+        let edited = try RegulatorySourceImport.prepare(edit, review: review, snapshot: beforeEdit, plans: files)
+        XCTAssertEqual(edited.count(.correction), 1)
+        let revised = try RegulatorySourceImport.applying(edited, to: beforeEdit)
+        XCTAssertEqual(revised.regulatorySourceObservations?.last?.id, original[2].id)
+        XCTAssertEqual(revised.regulatorySourceObservations?.last?.latest?.xyz[2], 351)
+        XCTAssertEqual(revised.regulatorySourceObservations?.last?.latest?.destination.horizonID, second.id)
+        XCTAssertEqual(try RegulatorySourceImport.prepare(input, review: review, snapshot: .init(revised), plans: files).count(.conflict), 1)
+    }
+
+    func testSourceBatchRequiresMetadataConfirmationAndRollsBackAsOneTransaction() async throws {
+        let journal = try fixture()
+        let (root, owner, snapshot) = try await makeOwner(journal)
+        let workflow = try MappingWorkflow(store: FileMappingStore(url: root.appendingPathComponent("mapping.json")))
+        let source = sourceRow("source-1", row: 5, z: 400.1234)
+        let input = RegulatorySourceImport.Input(rows: [source], workbookSHA256: String(repeating: "c", count: 64))
+        var review = RegulatorySourceImport.Review(projectID: id(1), dataset: "survey")
+        XCTAssertThrowsError(try RegulatorySourceImport.prepare(input, review: review, snapshot: snapshot))
+        review.frameConfirmed = true
+        let duplicate = RegulatorySourceImport.Input(rows: [source, sourceRow("source-1", row: 6, z: 402)], workbookSHA256: input.workbookSHA256)
+        let invalid = try RegulatorySourceImport.prepare(duplicate, review: review, snapshot: snapshot)
+        XCTAssertFalse(invalid.canApply)
+        XCTAssertThrowsError(try RegulatorySourceImport.applying(invalid, to: snapshot))
+        let plan = try RegulatorySourceImport.prepare(input, review: review, snapshot: snapshot)
+        XCTAssertEqual(plan.count(.new), 1)
+        XCTAssertNil(plan.changes.first?.destination.horizonID)
+        do {
+            let _: (MappingWorkflow.Snapshot, Bool) = try await owner.transaction(snapshot: workflow.snapshot) { workflow in
+                try workflow.commit(RegulatorySourceImport.applying(plan, to: workflow.committed))
+                throw CancellationError()
+            }
+            XCTFail("Expected cancellation")
+        } catch is CancellationError {}
+        let after = try await owner.exchangeSnapshot()
+        XCTAssertEqual(after.journal, journal)
+        XCTAssertEqual(try FileMappingStore(url: root.appendingPathComponent("mapping.json")).load(), journal)
+        let (saved, _) = try await owner.transaction(snapshot: workflow.snapshot) { workflow in
+            try workflow.commit(RegulatorySourceImport.applying(plan, to: workflow.committed))
+        }
+        let reopened = try FileMappingStore(url: root.appendingPathComponent("mapping.json")).load()
+        XCTAssertEqual(reopened, saved.journal)
+        XCTAssertEqual(reopened.regulatorySourceObservations?.first?.latest?.xyz[2], 400.1234)
+        XCTAssertThrowsError(try RegulatorySourceImport.applying(plan, to: saved.committed))
+    }
+
+    func testSourceThreeWayConflictRequiresFieldDecision() throws {
+        let snapshot = MappingCommittedSnapshot(try fixture())
+        let review = RegulatorySourceImport.Review(projectID: id(1), dataset: "survey", frameConfirmed: true)
+        let row = sourceRow("three-way", row: 5, z: 400)
+        func input(_ rqd: String, _ hash: String) -> RegulatorySourceImport.Input {
+            var cells = row.values
+            cells[10] = rqd
+            return .init(rows: [.init(number: row.number, values: cells, issues: [])],
+                         workbookSHA256: String(repeating: hash, count: 64))
+        }
+        let original = input("65", "a")
+        let imported = try RegulatorySourceImport.applying(
+            RegulatorySourceImport.prepare(original, review: review, snapshot: snapshot), to: snapshot)
+        let record = try XCTUnwrap(imported.regulatorySourceObservations?.first)
+        var fields = try XCTUnwrap(record.latest?.cells)
+        fields[10] = "72"
+        let local = MappingCommittedSnapshot(try RegulatorySourceImport.editing(record, fields: fields, journal: imported))
+        XCTAssertFalse(try RegulatorySourceImport.prepare(original, review: review, snapshot: local).canApply)
+        let excel = input("81", "b")
+        let check = try RegulatorySourceImport.prepare(excel, review: review, snapshot: local)
+        XCTAssertThrowsError(try RegulatorySourceImport.applying(check, to: local))
+        let conflict = try XCTUnwrap(check.changes.first?.conflicts.first)
+        XCTAssertEqual(conflict.column, 10)
+        XCTAssertEqual([conflict.baseline, conflict.local, conflict.incoming], ["65", "72", "81"])
+        var choice = review
+        choice.resolutions[conflict] = .keepLocal
+        let merged = try RegulatorySourceImport.applying(
+            RegulatorySourceImport.prepare(excel, review: choice, snapshot: local), to: local)
+        let latest = try XCTUnwrap(merged.regulatorySourceObservations?.first?.latest)
+        XCTAssertEqual(latest.cells[10], "72")
+        XCTAssertEqual(latest.sourceBaseline[10], "81")
+        XCTAssertFalse(try RegulatorySourceImport.prepare(excel, review: review, snapshot: .init(merged)).canApply)
+    }
+
+    func testMixedWorkbookAtomicallyReplaysAndRevisesBothRowTypes() async throws {
+        let nativeJournal = try fixture()
+        let baseline = MappingCommittedSnapshot(nativeJournal)
+        var row = sourceRow("EXT-1", row: 5, z: 409.1234567890123)
+        var source = row.values
+        source[10] = "65"
+        row = .init(number: row.number, values: source, issues: [])
+        let input = RegulatorySourceImport.Input(rows: [row], workbookSHA256: String(repeating: "a", count: 64))
+        let review = RegulatorySourceImport.Review(projectID: id(1), dataset: "test survey", frameConfirmed: true)
+        let plan = try RegulatorySourceImport.prepare(input, review: review, snapshot: baseline, now: time)
+        let journal = try RegulatorySourceImport.applying(plan, to: baseline)
+        let sourceRecord = try XCTUnwrap(journal.regulatorySourceObservations?.first)
+        let nativeID = try XCTUnwrap(journal.observations.first?.id)
+        let (root, owner, committed) = try await makeOwner(journal)
+        let workbook = try regulatoryExport(journal)
+        let unchanged = try RegulatoryDataImport.prepare(bytes: workbook, committed: committed)
+        let sourceInput = try XCTUnwrap(unchanged.productionInput)
+        XCTAssertEqual(unchanged.count(.unchanged), 1)
+        let replay = try RegulatorySourceImport.prepare(sourceInput, review: .init(), snapshot: committed)
+        XCTAssertEqual(replay.count(.unchanged), 1)
+        let replayBatch = try MappingExchangeImport.Batch(preview: unchanged, bytes: workbook, selection: .init(), now: time, mixed: true)
+        XCTAssertEqual(try MappingExchangeImport.applyingMixed(replayBatch, sourcePlan: replay, to: committed), journal)
+
+        let edited = try editData(workbook) { try cells($0, ["I5": "><v>7</v></c>", "K6": "><v>80</v></c>"]) }
+        var nativeReview = RegulatoryDataImport.Review()
+        let resolved = try confirmedData(edited, committed: committed, review: &nativeReview)
+        XCTAssertEqual(resolved.count(.correction), 1)
+        let pending = try RegulatorySourceImport.prepare(XCTUnwrap(resolved.productionInput), review: .init(), snapshot: committed)
+        XCTAssertEqual(pending.count(.correction), 1)
+        let empty = try MappingExchangeImport.Batch(preview: resolved, bytes: edited, selection: .init(), now: time, mixed: true)
+        do {
+            _ = try await owner.applyMixedExchange(empty, sourcePlan: pending)
+            XCTFail("Expected mixed batch refusal")
+        } catch is ExchangeImportError {}
+        XCTAssertEqual(try FileMappingStore(url: root.appendingPathComponent("mapping.json")).load(), journal)
+
+        let approved = try MappingExchangeImport.Batch(preview: resolved, bytes: edited,
+            selection: .init(accepted: Set(resolved.records.filter(\.canApply).map(\.id))), now: time, mixed: true)
+        let staged = try MappingExchangeImport.applyingMixed(approved, sourcePlan: pending, to: committed)
+        XCTAssertThrowsError(try FileMappingStore(url: root.appendingPathComponent("mapping.json")).save(staged))
+        let committedEdit = try await owner.applyMixedExchange(approved, sourcePlan: pending)
+        let updated = try FileMappingStore(url: root.appendingPathComponent("mapping.json")).load()
+        XCTAssertEqual(updated, committedEdit.journal)
+        XCTAssertEqual(updated.observations.map(\.id), journal.observations.map(\.id))
+        XCTAssertEqual(updated.revisions.last?.observationID, nativeID)
+        let changed = try XCTUnwrap(updated.regulatorySourceObservations?.first)
+        XCTAssertEqual(changed.id, sourceRecord.id)
+        XCTAssertEqual(changed.key, sourceRecord.key)
+        XCTAssertEqual(changed.latest?.cells[10], "80")
+        XCTAssertEqual(changed.latest?.sourceBaseline[10], "65")
+        XCTAssertEqual(changed.latest?.destination, sourceRecord.latest?.destination)
+        XCTAssertEqual(changed.latest?.cells[4], source[4])
+        let replayEdited = try RegulatoryDataImport.prepare(bytes: edited, committed: committedEdit)
+        let replaySource = try RegulatorySourceImport.prepare(XCTUnwrap(replayEdited.productionInput), review: .init(), snapshot: committedEdit)
+        let replayedBatch = try MappingExchangeImport.Batch(preview: replayEdited, bytes: edited, selection: .init(), now: time, mixed: true)
+        let replayed = try await owner.applyMixedExchange(replayedBatch, sourcePlan: replaySource)
+        XCTAssertEqual(replayed.generationID, committedEdit.generationID)
+        XCTAssertEqual(replayed.journal, updated)
+        let tampered = try editData(workbook) { try cells($0, ["A6": #" t="inlineStr"><is><t>another-source</t></is></c>"#]) }
+        XCTAssertThrowsError(try RegulatoryDataImport.prepare(bytes: tampered, committed: committed))
+        let rounded = try editData(workbook) { try cells($0, ["E6": "><v>409.1234567890124</v></c>"]) }
+        let roundedPreview = try RegulatoryDataImport.prepare(bytes: rounded, committed: committed)
+        let roundedPlan = try RegulatorySourceImport.prepare(XCTUnwrap(roundedPreview.productionInput), review: .init(), snapshot: committed)
+        XCTAssertEqual(roundedPlan.count(.invalid), 1)
+
+        var parts = try archiveParts(workbook)
+        let path = "xl/worksheets/sheet2.xml"
+        var metadata = String(decoding: try XCTUnwrap(parts[path]), as: UTF8.self)
+        let range = try XCTUnwrap(metadata.range(of: #"<row r="4"[^>]*>.*?</row>"#, options: .regularExpression))
+        let duplicate = metadata[range].replacingOccurrences(of: #"<row r="4""#, with: #"<row r="5""#)
+            .replacingOccurrences(of: #"<c r="A4""#, with: #"<c r="A5""#)
+        metadata.insert(contentsOf: duplicate, at: range.upperBound)
+        parts[path] = Data(metadata.utf8)
+        XCTAssertThrowsError(try RegulatoryDataImport.prepare(bytes: zip(parts.sorted { $0.key < $1.key }, deflated: true), committed: committed))
+    }
+
+    func testActualProductionWorkbookImportsAndReplaysElevenSourceRows() throws {
+        let url = ProcessInfo.processInfo.environment["FIELD_FORGE_PRODUCTION_XLSX"].map { URL(fileURLWithPath: $0) }
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads/БД_ПГР.xlsx")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw XCTSkip("Set FIELD_FORGE_PRODUCTION_XLSX to the original production workbook.")
+        }
+        let bytes = try Data(contentsOf: url, options: .mappedIfSafe)
+        let base = try fixture()
+        let baseSnapshot = MappingCommittedSnapshot(base)
+        let preview = try RegulatoryDataImport.prepare(bytes: bytes, committed: baseSnapshot)
+        let input = try XCTUnwrap(preview.productionInput)
+        XCTAssertEqual(input.rows.count, 11)
+        let review = RegulatorySourceImport.Review(projectID: id(1), dataset: "production-db-pgr", frameConfirmed: true)
+        let plan = try RegulatorySourceImport.prepare(input, review: review, snapshot: baseSnapshot)
+        XCTAssertEqual(plan.count(.new), 11)
+        XCTAssertEqual(plan.count(.invalid), 0)
+        let saved = try RegulatorySourceImport.applying(plan, to: baseSnapshot)
+        try saved.validate()
+        let records = try XCTUnwrap(saved.regulatorySourceObservations)
+        XCTAssertEqual(records.count, 11)
+        XCTAssertEqual(Set(records.map(\.id)).count, 11)
+        XCTAssertTrue(records.allSatisfy { $0.latest?.destination.horizonID == nil && $0.latest?.destination.excavationID == nil })
+        let replay = try RegulatorySourceImport.prepare(input, review: review, snapshot: MappingCommittedSnapshot(saved))
+        XCTAssertEqual(replay.count(.unchanged), 11)
+        XCTAssertEqual(replay.count(.new), 0)
+
+        let original = records[0]
+        let originalVersion = try XCTUnwrap(original.latest)
+        let localRQD = originalVersion.cells[10] == "77.75" ? "79.25" : "77.75"
+        var localFields = originalVersion.cells
+        localFields[10] = localRQD
+        var invalidFields = localFields
+        invalidFields[10] = "101"
+        XCTAssertThrowsError(try RegulatorySourceImport.editing(original, fields: invalidFields, journal: saved))
+        invalidFields = localFields
+        invalidFields[2] = "0"
+        XCTAssertThrowsError(try RegulatorySourceImport.editing(original, fields: invalidFields, journal: saved))
+        let locallyEdited = try RegulatorySourceImport.editing(original, fields: localFields, journal: saved, now: time)
+        let localSnapshot = MappingCommittedSnapshot(locallyEdited)
+        let unchangedSource = try RegulatorySourceImport.prepare(input, review: review, snapshot: localSnapshot)
+        XCTAssertEqual(unchangedSource.count(.unchanged), 11)
+        XCTAssertFalse(unchangedSource.canApply)
+        XCTAssertEqual(locallyEdited.regulatorySourceObservations?.first?.versions.first, originalVersion)
+
+        func amendment(_ changes: [Int: String], hash: String) -> RegulatorySourceImport.Input {
+            let modified = input.rows.map { row -> RegulatoryDataWorkbook.Row in
+                guard row.number == input.rows.first?.number else { return row }
+                var values = row.values
+                for (column, value) in changes { values[column] = value }
+                return .init(number: row.number, values: values, issues: row.issues)
+            }
+            return .init(rows: modified, workbookSHA256: String(repeating: hash, count: 64))
+        }
+        let strength = originalVersion.cells[9] == "56.25" ? "55.25" : "56.25"
+        let differentField = amendment([9: strength], hash: "a")
+        let merge = try RegulatorySourceImport.prepare(differentField, review: review, snapshot: localSnapshot)
+        XCTAssertEqual(merge.count(.correction), 1)
+        let merged = try RegulatorySourceImport.applying(merge, to: localSnapshot)
+        let mergedRecord = try XCTUnwrap(merged.regulatorySourceObservations?.first)
+        XCTAssertEqual(mergedRecord.latest?.cells[9], strength)
+        XCTAssertEqual(mergedRecord.latest?.cells[10], localRQD)
+        let mergedSnapshot = MappingCommittedSnapshot(merged)
+        let sameField = amendment([9: strength, 10: "63.125"], hash: "b")
+        let conflict = try RegulatorySourceImport.prepare(sameField, review: review, snapshot: mergedSnapshot)
+        XCTAssertTrue(conflict.blocked)
+        XCTAssertThrowsError(try RegulatorySourceImport.applying(conflict, to: mergedSnapshot))
+        let field = try XCTUnwrap(conflict.changes.flatMap(\.conflicts).first)
+        XCTAssertEqual(field.column, 10)
+        XCTAssertEqual(field.baseline, originalVersion.cells[10])
+        XCTAssertEqual(field.local, localRQD)
+        XCTAssertEqual(field.incoming, "63.125")
+        var resolvedReview = review
+        resolvedReview.resolutions[field] = .keepLocal
+        let keep = try RegulatorySourceImport.prepare(sameField, review: resolvedReview, snapshot: mergedSnapshot)
+        let kept = try RegulatorySourceImport.applying(keep, to: mergedSnapshot)
+        XCTAssertEqual(kept.regulatorySourceObservations?.first?.latest?.cells[10], localRQD)
+        XCTAssertEqual(kept.regulatorySourceObservations?.first?.latest?.sourceBaseline[10], "63.125")
+        resolvedReview.resolutions[field] = .acceptExcel
+        let accept = try RegulatorySourceImport.prepare(sameField, review: resolvedReview, snapshot: mergedSnapshot)
+        let accepted = try RegulatorySourceImport.applying(accept, to: mergedSnapshot)
+        XCTAssertEqual(accepted.regulatorySourceObservations?.first?.latest?.cells[10], "63.125")
+        let identicalField = amendment([9: strength, 10: localRQD], hash: "c")
+        let identical = try RegulatorySourceImport.prepare(identicalField, review: review, snapshot: mergedSnapshot)
+        XCTAssertFalse(identical.blocked)
+        XCTAssertEqual(identical.count(.correction), 1)
+        let converged = try RegulatorySourceImport.applying(identical, to: mergedSnapshot)
+        XCTAssertFalse(try XCTUnwrap(converged.regulatorySourceObservations?.first?.latest).hasLocalEdits)
+
+        var sourceOnlyJournal = kept
+        sourceOnlyJournal.observations = []
+        sourceOnlyJournal.revisions = []
+        sourceOnlyJournal.measurements = []
+        let export = try MappingCSVExport.prepare(journal: sourceOnlyJournal,
+            selection: .init(projectID: id(1), firstDay: time, lastDay: time, timeZoneID: "UTC"),
+            now: time, includeEnterprise: true)
+        let files = try MappingExportFiles.write(export, format: .enterpriseGeotechnical)
+        defer { files.cleanup() }
+        let exportedPreview = try RegulatoryDataImport.prepare(bytes: Data(contentsOf: try XCTUnwrap(files.urls.first)),
+            committed: MappingCommittedSnapshot(kept))
+        let exportedInput = try XCTUnwrap(exportedPreview.productionInput)
+        XCTAssertEqual(exportedInput.suggestedProjectID, id(1))
+        XCTAssertEqual(exportedInput.suggestedDataset, "production-db-pgr")
+        let exportedReview = RegulatorySourceImport.Review(projectID: exportedInput.suggestedProjectID,
+            dataset: try XCTUnwrap(exportedInput.suggestedDataset), frame: try XCTUnwrap(exportedInput.suggestedFrame), frameConfirmed: true)
+        let exportReplay = try RegulatorySourceImport.prepare(exportedInput, review: exportedReview,
+            snapshot: MappingCommittedSnapshot(kept))
+        let sourceByID = Dictionary(uniqueKeysWithValues: (kept.regulatorySourceObservations ?? []).map { ($0.key.sourceID, $0.latest!.cells) })
+        let changedColumns = exportedInput.rows.compactMap { row -> String? in
+            guard let original = sourceByID[row.values[0]] else { return "unknown-source" }
+            let indexes = original.indices.filter { original[$0] != row.values[$0] }
+            return indexes.isEmpty ? nil : "row\(row.number):" + indexes.map(String.init).joined(separator: ",")
+        }
+        XCTAssertEqual(exportReplay.count(.unchanged), 11, "Changed A:AD columns: \(changedColumns)")
+        XCTAssertEqual(exportReplay.count(.new), 0)
+        XCTAssertFalse(exportReplay.canApply)
+        XCTAssertEqual(exportedInput.rows.first?.values[10], localRQD)
+
+        let mixedBytes = try regulatoryExport(kept)
+        let mixedSnapshot = MappingCommittedSnapshot(kept)
+        let mixed = try RegulatoryDataImport.prepare(bytes: mixedBytes, committed: mixedSnapshot)
+        let mixedSource = try RegulatorySourceImport.prepare(XCTUnwrap(mixed.productionInput), review: .init(), snapshot: mixedSnapshot)
+        XCTAssertEqual(mixed.count(.unchanged), kept.observations.filter { $0.projectID == id(1) }.count)
+        XCTAssertEqual(mixedSource.count(.unchanged), 11)
+        let mixedBatch = try MappingExchangeImport.Batch(preview: mixed, bytes: mixedBytes, selection: .init(), now: time, mixed: true)
+        XCTAssertEqual(try MappingExchangeImport.applyingMixed(mixedBatch, sourcePlan: mixedSource, to: mixedSnapshot), kept)
     }
 }
