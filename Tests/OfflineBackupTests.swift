@@ -463,6 +463,42 @@ extension OfflineBackupTests {
         XCTAssertTrue(captured.manifest.report.complete)
         XCTAssertTrue(captured.manifest.files.contains { $0.path.hasPrefix("mapping/recovery/restored/") })
     }
+    func testRestorePreservesSourceGeologicalEditsAndAcceptedBaseline() async throws {
+        let f = try seed()
+        let project = try XCTUnwrap(f.journal.projects.first)
+        var original = Array(repeating: "", count: RegulatoryDataWorkbook.columns.count)
+        original[0] = "external-1"
+        original[4] = "405.123456789012345"
+        original[10] = "66"
+        let row = RegulatoryDataWorkbook.Row(number: 5, values: original, issues: [])
+        let input = RegulatorySourceImport.Input(rows: [row], workbookSHA256: String(repeating: "1", count: 64))
+        let snapshot = MappingCommittedSnapshot(f.journal)
+        let review = RegulatorySourceImport.Review(projectID: project.id, dataset: "Survey", frameConfirmed: true)
+        let plan = try RegulatorySourceImport.prepare(input, review: review, snapshot: snapshot)
+        let imported = try RegulatorySourceImport.applying(plan, to: snapshot)
+        let record = try XCTUnwrap(imported.regulatorySourceObservations?.first)
+        var fields = original
+        fields[10] = "77"
+        let edited = try RegulatorySourceImport.editing(record, fields: fields, journal: imported)
+        let store = FileMappingStore(url: f.sources.mapping)
+        try store.save(edited)
+        let fixture = Fixture(root: f.root, journal: edited, sources: f.sources, measurementSource: f.measurementSource,
+                              mappingBytes: try Data(contentsOf: store.url))
+        let backup = try await package(fixture)
+        defer { backup.files.cleanup() }
+        let preview = try await Task.detached { try OfflineRestore.prepare(backup.files.urls[0]) }.value
+        defer { preview.cleanup() }
+        let live = try await restoreLive(parent: f.root)
+        let pending = try await live.owner.restore(preview, measurements: live.measurements.backupSource())
+        try OfflineRestore.finalize(pending)
+        let restored = try FileMappingStore(url: live.url.appendingPathComponent(OfflineRestore.mappingName)).load()
+        XCTAssertEqual(restored, edited)
+        let latest = try XCTUnwrap(restored.regulatorySourceObservations?.first?.latest)
+        XCTAssertEqual(latest.sourceBaseline, original)
+        XCTAssertEqual(latest.cells, fields)
+        XCTAssertEqual(try RegulatorySourceImport.prepare(input, review: review, snapshot: .init(restored)).count(.unchanged), 1)
+    }
+
     func testRestoreCrashAtEveryActivationCheckpoint() async throws {
         let f = try seed(), backup = try await package(f); defer { backup.files.cleanup() }
         let preview = try OfflineRestore.prepare(backup.files.urls[0]); defer { preview.cleanup() }

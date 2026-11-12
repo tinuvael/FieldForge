@@ -20,6 +20,8 @@ struct EnterpriseGeotechnicalWorkbook: Sendable {
         let frame: RegulatorySourceImport.Frame
         let destination: MappingContext
         let explicitlyAssigned: Bool
+        let revision: Int
+        let fingerprint: String
     }
 
     let observationIDs: [UUID]
@@ -105,8 +107,8 @@ struct EnterpriseGeotechnicalWorkbook: Sendable {
             }
         }
         // Source-backed observations already use the regulatory Data!A:AD layout.
-        // Preserve their exact imported cells; do not fabricate mapping dates,
-        // pickets, excavation names, interpreted ratings, or geology.
+        // Export effective values, including corrections, and retain the exact
+        // coordinate spelling from the accepted source.
         let firstSourceDataIndex = report.rows.count
         var sourceRows: [SourceRow] = []
         for (offset, record) in sourceRecords.enumerated() {
@@ -118,7 +120,8 @@ struct EnterpriseGeotechnicalWorkbook: Sendable {
                 return isNumericColumn && RegulatoryDataWorkbook.sourceNumber(value) != nil ? .rawNumber(value) : .text(value)
             })
             sourceRows.append(.init(id: record.id, key: record.key, firstRow: firstSourceDataIndex + offset + 5,
-                frame: version.frame, destination: version.destination, explicitlyAssigned: version.explicitlyAssigned))
+                frame: version.frame, destination: version.destination, explicitlyAssigned: version.explicitlyAssigned,
+                revision: record.versions.count - 1, fingerprint: try MappingImportLedger.fingerprint(version)))
         }
         return Self(observationIDs: points.map(\.id), table: report, rqdConflicts: rqdConflicts,
                     spatialWarnings: spatial.warnings, sourceRows: sourceRows)

@@ -16,6 +16,9 @@ enum ManualEntryError: LocalizedError {
 
 /// Original field text is retained, including 360° and decimal-comma spelling.
 struct ManualOrientationInput: Codable, Equatable, Sendable {
+    static let dipAngleRange = 0.0...90.0
+    static let dipDirectionRange = 0.0...360.0
+
     var dipAngleText = ""
     var dipDirectionText = ""
     var reference = GeographicReference.unknown
@@ -29,12 +32,12 @@ struct ManualOrientationInput: Codable, Equatable, Sendable {
     }
 
     func validated() throws -> (orientation: PlaneOrientation, meaning: DipDirectionMeaning) {
-        guard let dip = number(dipAngleText), (0...90).contains(dip) else { throw ManualEntryError.dipAngle }
+        guard let dip = number(dipAngleText), Self.dipAngleRange.contains(dip) else { throw ManualEntryError.dipAngle }
         guard GeographicReference.manualChoices.contains(reference) else { throw ManualEntryError.northReference }
         let hasDirection = !dipDirectionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let direction = number(dipDirectionText)
         if hasDirection {
-            guard let direction, (0...360).contains(direction) else { throw ManualEntryError.dipDirection }
+            guard let direction, Self.dipDirectionRange.contains(direction) else { throw ManualEntryError.dipDirection }
         }
         if dip == 0 && hasDirection { throw ManualEntryError.horizontalDirection }
         if dip > 0 && dip < 90 && !hasDirection { throw ManualEntryError.missingDirection }
@@ -62,10 +65,10 @@ struct ManualOrientationInput: Codable, Equatable, Sendable {
         let hasDirection = !dipDirectionText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         let dip = number(dipAngleText), direction = number(dipDirectionText)
         if hasDip {
-            guard let dip, (0...90).contains(dip) else { throw ManualEntryError.dipAngle }
+            guard let dip, Self.dipAngleRange.contains(dip) else { throw ManualEntryError.dipAngle }
         }
         if hasDirection {
-            guard let direction, (0...360).contains(direction) else { throw ManualEntryError.dipDirection }
+            guard let direction, Self.dipDirectionRange.contains(direction) else { throw ManualEntryError.dipDirection }
         }
         guard GeographicReference.manualChoices.contains(reference) else { throw ManualEntryError.northReference }
         if hasDip && hasDirection {

@@ -25,6 +25,8 @@ struct RegulatoryDataManifest: Codable, Sendable {
         let frame: RegulatorySourceImport.Frame
         let destination: MappingContext
         let explicitlyAssigned: Bool
+        var revision: Int? = nil
+        var fingerprint: String? = nil
     }
 
     let workbookID: UUID
@@ -60,7 +62,8 @@ struct RegulatoryDataManifest: Codable, Sendable {
         sourceBindings = report.sourceRows.map { row in
             SourceBinding(sourceObservationID: row.id, projectID: row.key.projectID, dataset: row.key.dataset,
                 sourceID: row.key.sourceID, row: row.firstRow, frame: row.frame,
-                destination: row.destination, explicitlyAssigned: row.explicitlyAssigned)
+                destination: row.destination, explicitlyAssigned: row.explicitlyAssigned,
+                revision: row.revision, fingerprint: row.fingerprint)
         }
         self.bindings = bindings
     }
@@ -75,14 +78,18 @@ struct RegulatoryDataManifest: Codable, Sendable {
             guard binding.firstRow == next, binding.rowCount > 0, binding.rowCount <= rowLimit + 5 - next else { throw error }
             next += binding.rowCount
         }
-        var sourceIDs = Set<UUID>(), sourceRows = Set<Int>(), sourceKeys = Set<String>()
+        var sourceIDs = Set(bindings.map(\.target.observationID))
+        var sourceRows = Set<Int>(), sourceKeys = Set<RegulatorySourceObservation.Key>()
         for source in sourceBindings ?? [] {
-            let key = "\(source.projectID.uuidString)/\(source.dataset)/\(source.sourceID)"
+            let key = RegulatorySourceObservation.Key(projectID: source.projectID, dataset: source.dataset, sourceID: source.sourceID)
             guard sourceIDs.insert(source.sourceObservationID).inserted, sourceRows.insert(source.row).inserted,
                   sourceKeys.insert(key).inserted, source.row == next, source.row <= rowLimit + 4,
                   !source.dataset.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   source.dataset.utf8.count <= 256, !source.sourceID.isEmpty, source.sourceID.utf8.count <= 256,
-                  source.frame.valid, source.destination.projectID == source.projectID else { throw error }
+                  source.frame.valid, source.destination.projectID == source.projectID,
+                  (source.revision == nil) == (source.fingerprint == nil),
+                  source.revision.map({ $0 >= 0 }) ?? true,
+                  source.fingerprint.map({ $0.range(of: #"^[a-f0-9]{64}$"#, options: .regularExpression) != nil }) ?? true else { throw error }
             next += 1
         }
     }
@@ -113,9 +120,13 @@ struct RegulatoryDataManifest: Codable, Sendable {
         var bindings: [Binding] = [], sourceBindings: [SourceBinding] = []
         for row in sheet.rows.dropFirst() {
             let raw = row[column] ?? ""
-            if let binding = try? ExchangeBaseline.decode(Binding.self, raw) { bindings.append(binding) }
-            else if let source = try? ExchangeBaseline.decode(SourceBinding.self, raw) { sourceBindings.append(source) }
-            else { throw ExchangeImportError("Скрытый лист содержит неизвестную запись идентификатора.") }
+            let native = try? ExchangeBaseline.decode(Binding.self, raw)
+            let source = try? ExchangeBaseline.decode(SourceBinding.self, raw)
+            switch (native, source) {
+            case (let binding?, nil) where sourceBindings.isEmpty: bindings.append(binding)
+            case (nil, let binding?): sourceBindings.append(binding)
+            default: throw ExchangeImportError("Скрытый лист содержит неизвестную или неоднозначную запись идентификатора.")
+            }
         }
         let value = Self(workbookID: info.workbookID, exportedAt: info.exportedAt, bindings: bindings,
                          sourceBindings: sourceBindings.isEmpty ? nil : sourceBindings)

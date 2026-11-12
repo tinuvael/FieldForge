@@ -170,10 +170,10 @@ Schema 8 stores these source-backed observations in an optional field
 of the same project journal. Existing schema-8 files and backups decode
 with an empty source collection. New backups include the source records
 and count them in the manifest. The source journal shows retained input
-fields and assignment history. Promotion to field-capture observations,
-linked photography, plan point rendering and export of source records
-through the established A:AD assessment projection require further
-integration. The current journal uses whole-state JSON validation and
+fields and assignment history. Source markers appear on compatible DXF
+plans, and regulatory export includes effective source-backed records.
+Promotion to field-capture observations and linked photography remain
+separate work. The current journal uses whole-state JSON validation and
 atomic replacement. XLSX decoding is streamed and input limits remain
 bounded. Reconciliation and commit hold a bounded in-memory batch and
 journal snapshot, with phase-level progress and cancellation before
@@ -346,20 +346,57 @@ revision replay and transaction rollback. Xcode 26.6 successfully built
 the production preview and source journal for the generic iOS Simulator. Physical-device
 verification and full regression were outside this run.
 
-## Final integration update
+## Editing imported observations and mixed Excel sync
 
-Source-backed rows are also listed in the main mapping journal. They retain
-their source ID, raw A:AD cells, confirmed coordinate frame, destination and
-append-only versions; absent field dates, pickets, or excavation assignments
-remain unknown. Context assignment is available from the same journal screen.
-They are not coerced into native observations with invented field metadata.
+Source-backed rows appear in the mapping journal and on a matching DXF
+horizon. Open **Исправить геологические данные** from the source detail
+to edit supported fields F:N and P:AC. The editor shares the project
+lithology picker, lossless numeric input, published category tables and
+angle bounds. It preserves missing angle components and the unknown north
+reference of source data. An empty value in the editor clears that field.
+Schema 8 keeps original evidence, the last accepted production baseline,
+effective local values and append-only versions with their origin and save
+time. Versions created before local editing use their saved cells as the
+baseline. Offline backup and restore carry the whole source history. Dates,
+pickets, source identities and XYZ retain their provenance. SD and GSI
+remain read-only.
 
-The regulatory Data export appends selected source-backed A:AD rows after
-native observations without interpreting or rewriting their values. The
-existing hidden identity manifest continues to bind native rows; source rows
-remain identifiable by their source IDs in column A. DXF source markers are
-shown only for the matching assigned horizon when the confirmed source frame
-matches the DXF CRS, axes, XY units, and horizon datum.
+Production imports compare the last accepted source baseline, the effective
+journal values and the incoming source values. An unchanged incoming field
+preserves a local edit. Edits to separate fields merge, and equal edits
+resolve together. Divergent edits to the same field show all three values
+and require **Оставить значение журнала** or **Принять Excel**. Cancelling
+the preview leaves the journal untouched. For production imports, an
+explicit resolution advances the accepted source baseline. Blank cells
+retain values and `#CLEAR` explicitly clears a supported field.
+
+Regulatory export writes effective source geology and exact retained
+coordinate text into the four-header Data!A:AD contract. Native rows
+retain their own revision baselines. Each source binding carries the
+project, dataset, source ID, UUID and archived version fingerprint in
+`_FieldForge`. An edited generated workbook uses its exported snapshot as
+the merge base and leaves the independent production baseline available
+for later production imports. A source-only export made before version
+fingerprints can be read when its archived baseline is unambiguous.
+
+Mixed imports show native and source proposals in one preview. They
+verify the workbook hash and journal generation and stage both row types
+before one atomic journal save. The same save records approved native
+update receipts, source edits and their immutable revisions. Reimport
+into the journal that contains the exported UUIDs and archived revisions.
+Source rows retain their context. Keep the original row order, native row
+group boundaries, IDs and pickets in mixed files. Use a native-only
+workbook for native picket changes and row creation. Missing rows,
+inconsistent hidden identities and overlapping identity fields that make
+an edit ambiguous require a fresh or narrower export. The native-only
+workflow retains its usual matching and recovery behavior.
+
+Keep the original production XLSX for supplementary fields AE:CP. A
+generated A:AD workbook carries the supported fields and hidden
+identity metadata. Use a copy to edit exported data. Excel may rewrite
+high-precision numbers when saving. A change to a source-bound XYZ cell
+blocks the generated workbook import with a cell diagnostic. The journal
+and its backups preserve the original coordinate spelling.
 
 Focused regression results for this integration: the source batch test passed
 for two verified inclined DXF horizons, and the local production workbook test
@@ -369,12 +406,14 @@ source-only Data!A:AD workbook with `_FieldForge` source identity bindings, and
 reimported it with zero new rows and 11 unchanged records. The production test
 took about 53 seconds on this machine.
 
-Remaining limits: imported geological measurements are presented read-only
-with explicit source labels; editing supported geological measurements with
-append-only local edits and conflict handling is not implemented. Source-only
-exports round-trip through the source importer. A workbook mixing native
-mapping rows and source-backed rows is explicitly blocked on import until one
-preview can approve both record types atomically. Supplementary production
-columns AE:CP are not copied into a generated export. No actual project DXF or
-physical-device test was available; simulator compilation is reported
-separately.
+The bidirectional follow-up passed 96 focused SwiftPM tests with one
+opt-in fixture skipped. The production workbook test parsed all 11 source
+observations, saved an RQD edit, preserved it on unchanged replay, merged
+a separate UCS change and checked both choices for a competing RQD edit.
+It round-tripped source-only and mixed exports without new records.
+A synthetic mixed XLSX verified one atomic update to both row types,
+refusal of unapproved changes, durable UUIDs and replay without a new
+journal generation. A synthetic backup and restore preserved effective
+geology, the accepted source baseline and coordinate spelling.
+The generic iOS Simulator build succeeded. Physical iPhone and production
+DXF verification were outside this run.

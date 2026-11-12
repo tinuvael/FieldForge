@@ -65,24 +65,44 @@ enum RegulatoryDataImport {
         let documentID = workbook.documentID ?? manifest?.workbookID
         let source = MappingImportSource(kind: .regulatoryData,
             documentID: documentID?.uuidString ?? ExchangeBaseline.hash(bytes), bytes: bytes)
+        var boundInput: RegulatorySourceImport.Input?
+        var rows = workbook.rows
+        let originalBindings = manifest?.bindings ?? []
+        var mixedGroups: [UUID: [Row]]?
         if let bindings = manifest?.sourceBindings, !bindings.isEmpty {
             let byRow = Dictionary(uniqueKeysWithValues: bindings.map { ($0.row, $0) })
-            let selected = workbook.rows.filter { byRow[$0.number] != nil }
-            let sourceOnly = manifest?.bindings.isEmpty == true && selected.count == workbook.rows.count &&
-                selected.allSatisfy { byRow[$0.number]?.sourceID == $0.values[0] }
-            guard sourceOnly, let first = bindings.first,
-                  bindings.allSatisfy({ $0.projectID == first.projectID && $0.dataset == first.dataset && $0.frame == first.frame }) else {
-                return .init(source: source, rowsProcessed: workbook.rows.count, workbookBlocked: true,
-                    workbookBlockReasons: ["Книга содержит одновременно исходные строки и обычные наблюдения либо изменённые идентификаторы источников. Разделите типы строк и повторите экспорт."],
-                    worksheetRowsScanned: workbook.worksheetRowCount, workbookID: documentID ?? UUID(),
-                    generationID: committed.generationID, exportedAt: manifest?.exportedAt ?? .distantPast,
-                    projectName: "", metadata: [:], records: [], proposalDigest: source.fingerprint)
+            let selected = rows.filter { byRow[$0.number] != nil }
+            let sourceIDs = Set(bindings.map(\.sourceID))
+            let nativeRowCount = originalBindings.reduce(0) { $0 + $1.rowCount }
+            rows.removeAll { byRow[$0.number] != nil }
+            guard selected.count == bindings.count, sourceIDs.count == bindings.count,
+                  selected.allSatisfy({ byRow[$0.number]?.sourceID == $0.values[0] }),
+                  rows.count == nativeRowCount,
+                  rows.allSatisfy({ (5..<(5 + nativeRowCount)).contains($0.number) }) else {
+                throw ExchangeImportError("Неоднозначные строки Data. Сверьте ID и исходный порядок строк со скрытым листом или выгрузите книгу заново.")
             }
-            let input = RegulatorySourceImport.Input(rows: selected, workbookSHA256: source.fingerprint,
-                suggestedProjectID: first.projectID, suggestedDataset: first.dataset, suggestedFrame: first.frame)
-            return productionPreview(workbook, source: source, committed: committed, input: input)
-        }
-        if workbook.productionLayout {
+            let first = bindings[0]
+            boundInput = .init(rows: selected, workbookSHA256: source.fingerprint,
+                               suggestedProjectID: first.projectID, suggestedDataset: first.dataset,
+                               suggestedFrame: first.frame, bindings: bindings, exportedAt: manifest?.exportedAt)
+            if rows.isEmpty { return productionPreview(workbook, source: source, committed: committed, input: boundInput) }
+            let sourceAnchors = Set(selected.map { Anchor($0.values) })
+            var groups: [UUID: [Row]] = [:]
+            for binding in originalBindings {
+                let start = binding.firstRow - 5
+                let group = Array(rows[start..<(start + binding.rowCount)])
+                let anchor = Anchor(binding.excavation ?? "", binding.picket ?? "")
+                guard group.allSatisfy({ Anchor($0.values) == anchor }),
+                      !sourceAnchors.contains(anchor),
+                      group.allSatisfy({ row in
+                          RegulatoryDataWorkbook.common.allSatisfy { row.values[$0] == group[0].values[$0] }
+                      }) else {
+                    throw ExchangeImportError("Data!A\(binding.firstRow): проверьте ID, PK, порядок и общие поля группы обычного наблюдения. При совпадении ID и PK выгрузите типы строк отдельно.")
+                }
+                groups[binding.target.observationID] = group
+            }
+            mixedGroups = groups
+        } else if workbook.productionLayout {
             return productionPreview(workbook, source: source, committed: committed)
         }
         let scope = reviewDocumentID(source)
@@ -95,10 +115,9 @@ enum RegulatoryDataImport {
             ChainageKey(excavation: committed.excavations[$0.excavationID]?.name ?? "",
                 convention: $0.picketConvention ?? .legacyMeters, metres: $0.chainageMeters)
         }
-        let originalBindings = manifest?.bindings ?? []
         let byAnchor = Dictionary(grouping: originalBindings) { Anchor($0.excavation ?? "", $0.picket ?? "") }
         let bindingsByID = Dictionary(uniqueKeysWithValues: originalBindings.map { ($0.target.observationID, $0) })
-        let grouped = Dictionary(grouping: workbook.rows) { row -> [String] in
+        let grouped = Dictionary(grouping: rows) { row -> [String] in
             // A missing A or B provides no common observation key.
             let common = RegulatoryDataWorkbook.common.map { row.values[$0] } + [row.numericRock ? "numeric-rock" : "text-rock"]
             return row.values[0].isEmpty || row.values[1].isEmpty ? common + [String(row.number)] : common
@@ -133,10 +152,38 @@ enum RegulatoryDataImport {
                let saved = try? ExchangeBaseline.decode(RegulatoryDataProposal.Assignment.self, note),
                let key = saved.reviewKey { exactReceipts[key] = entry }
         }
-        let duplicateNumbers = Set(Dictionary(grouping: workbook.rows.filter { $0.issues.isEmpty }, by: \.values)
+        let duplicateNumbers = Set(Dictionary(grouping: rows.filter { $0.issues.isEmpty }, by: \.values)
             .values.filter { $0.count > 1 }.flatMap { $0.map(\.number) })
         var records: [Record] = []
-        for allRows in grouped.values.sorted(by: { $0[0].number < $1[0].number }) {
+        if let mixedGroups {
+            let repeatedAnchors = Set(byAnchor.filter { $0.value.count > 1 }.keys)
+            for binding in originalBindings {
+                try Task.checkCancellation()
+                let id = binding.target.observationID
+                guard let rows = mixedGroups[id], let projection = originalProjections[id],
+                      let point = committed.observation(id: id), projection.rows.count == rows.count else {
+                    throw ExchangeImportError("Data!A\(binding.firstRow): UUID или исходная версия обычного наблюдения не найдены. Выгрузите книгу из этого журнала.")
+                }
+                let key = try rowKey(rows)
+                let unchanged = !rows.contains(where: \.numericRock) &&
+                    projection.rows.sorted(by: lexicographic) == rows.map(\.values).sorted(by: lexicographic)
+                if !unchanged && repeatedAnchors.contains(Anchor(rows[0].values)) {
+                    throw ExchangeImportError("Data!A\(binding.firstRow): несколько обычных наблюдений имеют один ID и PK. Выгрузите изменяемое наблюдение отдельно.")
+                }
+                let prior = receipts[boundKey(id)] ?? []
+                let receipt = exactReceipts[key] ?? prior.last { $0.operation.isMutation && $0.operation.source == source }
+                guard receipt == nil || receipt?.operation.target.observationID == id else {
+                    throw ExchangeImportError("Data!A\(binding.firstRow): история импорта не соответствует UUID обычного наблюдения.")
+                }
+                let record = try compare(key: key, rows: rows, suggestions: [point], binding: binding,
+                    originalProjection: projection, unchanged: unchanged ? id : nil, choice: nil,
+                    missingOriginals: false, duplicate: false, receipt: receipt, previous: prior,
+                    source: source, review: review, current: committed, fixedTarget: id)
+                records.append(record)
+            }
+        }
+        let legacyGroups = mixedGroups == nil ? grouped.values.sorted(by: { $0[0].number < $1[0].number }) : []
+        for allRows in legacyGroups {
             try Task.checkCancellation()
             let groupKey = try rowKey(allRows)
             let priorSplit = try allRows.count > 1 && allRows.contains { row in
@@ -214,18 +261,19 @@ enum RegulatoryDataImport {
             proposalDigest: source.fingerprint)
         preview.source = source
         preview.rowsProcessed = workbook.rows.count
+        preview.productionInput = boundInput
         return preview
     }
 
     private static func productionPreview(_ workbook: RegulatoryDataWorkbook.Read, source: MappingImportSource,
                                           committed: MappingCommittedSnapshot,
                                           input: RegulatorySourceImport.Input? = nil) -> Preview {
-        let reasons = [
+        let reasons = input == nil ? [
             "Data!A3:A4 «Место картирования» (ID) содержит идентификаторы источника. Они сохраняются отдельно от выработки.",
             "Data!B3:B4 «Пикетаж» (PK) может быть пустым. Укажите метаданные координат C:E для всего набора.",
             "Data!AD (GSI) содержит расчётные формулы. Data!O (SD) содержит сводное расстояние между трещинами. Эти поля требуют исходных данных для записи в журнал.",
             "В исходной книге остаются AE:AH (Q′, Q, RMR89, RMR76), AI (номер точки), AJ (примечание), AK:BB (вспомогательные оценки и входы), BI:CP (формулы проверки)."
-        ]
+        ] : ["Исходные строки сопоставляются с UUID и версиями журнала по листу _FieldForge."]
         return Preview(source: source, rowsProcessed: workbook.rows.count, workbookBlocked: true,
                        workbookBlockReasons: reasons, worksheetRowsScanned: workbook.worksheetRowCount,
                        productionInput: input ?? .init(rows: workbook.rows, workbookSHA256: source.fingerprint),
@@ -244,13 +292,14 @@ enum RegulatoryDataImport {
                                 originalProjection: (point: MappingObservation, rows: [[String]])?,
                                 unchanged: UUID?, choice: UUID?, missingOriginals: Bool, duplicate: Bool,
                                 receipt: MappingImportLedger.Entry?, previous: [MappingImportLedger.Entry],
-                                source: MappingImportSource, review: Review, current: MappingCommittedSnapshot) throws -> Record {
+                                source: MappingImportSource, review: Review, current: MappingCommittedSnapshot,
+                                fixedTarget: UUID? = nil) throws -> Record {
         let first = rows[0]
         let numbers = rows.map { String($0.number) }.joined(separator: ", ")
         let location = "Data · строки \(numbers.prefix(400))"
         let label = "\(first.values[0]) · \(first.values[1])"
         let existingIDs = Set(suggestions.map(\.id))
-        let userCreation = review.createSeparately.contains(key)
+        let userCreation = fixedTarget == nil && review.createSeparately.contains(key)
         var assignment = review.assignments[key] ?? review.assignment
         assignment.reviewKey = key
         assignment.picketOverride = review.pickets[key] ?? ""
@@ -259,7 +308,7 @@ enum RegulatoryDataImport {
         assignment.canonicalFaultOrder = true
         if let receipt, receipt.outcome == .pending, let note = receipt.operation.note,
            let saved = try? ExchangeBaseline.decode(RegulatoryDataProposal.Assignment.self, note) { assignment = saved }
-        let selected = choice.flatMap { existingIDs.contains($0) ? $0 : nil } ?? unchanged
+        let selected = fixedTarget ?? choice.flatMap { existingIDs.contains($0) ? $0 : nil } ?? unchanged
         let currentID = receipt?.operation.target.observationID ?? (userCreation ? nil : selected)
         let point = currentID.flatMap { current.observation(id: $0) }
         let retryAfterConflict: Bool
@@ -270,16 +319,16 @@ enum RegulatoryDataImport {
             }
         } else { retryAfterConflict = false }
         let activeReceipt = retryAfterConflict ? nil : receipt
-        let options = unchanged != nil || receipt != nil ? [] : Set(suggestions.map(\.id)).sorted { $0.uuidString < $1.uuidString }.compactMap { id in
+        let options = fixedTarget != nil || unchanged != nil || receipt != nil ? [] : Set(suggestions.map(\.id)).sorted { $0.uuidString < $1.uuidString }.compactMap { id in
             current.observation(id: id).map { Preview.MatchCandidate(id: id, label: contextLabel($0, in: current)) }
         }
         let context = point.map { contextLabel($0, in: current) } ?? label
         let boundID = point.flatMap { binding?.target.observationID == $0.id ? boundKey($0.id) : nil }
         let id = receipt?.operation.sourceRecordID ?? boundID ?? key
-        let uncertainCreation = unchanged == nil && (!options.isEmpty || missingOriginals)
+        let uncertainCreation = fixedTarget == nil && unchanged == nil && (!options.isEmpty || missingOriginals)
         var actions = Actions(canCreateSeparately: uncertainCreation && receipt == nil,
-            canSplit: rows.count > 1 && receipt == nil && (point == nil || rows.count > max(1, point?.geology?.tectonicStructures.count ?? 0)), needsPicket: point == nil && first.values[1].isEmpty,
-            canFindExisting: unchanged == nil && receipt == nil && !review.findExisting.contains(key))
+            canSplit: fixedTarget == nil && rows.count > 1 && receipt == nil && (point == nil || rows.count > max(1, point?.geology?.tectonicStructures.count ?? 0)), needsPicket: point == nil && first.values[1].isEmpty,
+            canFindExisting: fixedTarget == nil && unchanged == nil && receipt == nil && !review.findExisting.contains(key))
         func result(_ classification: Preview.Classification, _ reason: String,
                     changes: [Preview.Change] = [], proposed: MappingObservation? = nil,
                     baseline: MappingImportBaseline? = nil, graph: String? = nil) -> Record {
@@ -584,9 +633,15 @@ struct RegulatorySourceObservation: Codable, Equatable, Identifiable, Sendable {
     }
 
     struct Version: Codable, Equatable, Sendable {
+        enum Origin: String, Codable, Sendable { case sourceImport, localEdit, workbookEdit, assignment }
+
         let workbookSHA256: String
         let sourceRow: Int
-        let cells: [String]
+        var cells: [String]
+        var acceptedCells: [String]? = nil
+        var importedCells: [String]? = nil
+        var origin: Origin? = nil
+        var sourceBaseline: [String] { acceptedCells ?? cells }
         let frame: RegulatorySourceImport.Frame
         var destination: MappingContext
         var explicitlyAssigned: Bool
@@ -594,22 +649,21 @@ struct RegulatorySourceObservation: Codable, Equatable, Identifiable, Sendable {
         var savedAt: Date
 
         var xyz: [Double?] { cells[2...4].map { Double($0) } }
-        func sameEvidence(as other: Self) -> Bool {
-            guard cells.count == other.cells.count, frame == other.frame else { return false }
-            return cells.indices.allSatisfy { index in
-                if (2...4).contains(index) { return Self.sameCoordinate(cells[index], other.cells[index]) }
-                return cells[index] == other.cells[index]
-            }
+        var hasLocalEdits: Bool { cells.indices.contains(where: isLocallyEdited) }
+
+        func isLocallyEdited(_ column: Int) -> Bool {
+            !Self.equal(cells[column], sourceBaseline[column], column: column)
         }
 
-        private static func sameCoordinate(_ lhs: String, _ rhs: String) -> Bool {
+        static func equal(_ lhs: String, _ rhs: String, column: Int) -> Bool {
             if lhs == rhs { return true }
-            if let left = RegulatoryDataWorkbook.sourceNumber(lhs), let right = RegulatoryDataWorkbook.sourceNumber(rhs), left == right {
-                return true
-            }
-            guard let left = Decimal(string: lhs, locale: Locale(identifier: "en_US_POSIX")),
-                  let right = Decimal(string: rhs, locale: Locale(identifier: "en_US_POSIX")) else { return false }
-            return left == right
+            guard column >= 2, column != 5,
+                  let left = RegulatoryDataWorkbook.sourceNumber(lhs),
+                  let right = RegulatoryDataWorkbook.sourceNumber(rhs), left == right else { return false }
+            let locale = Locale(identifier: "en_US_POSIX")
+            guard let exactLeft = Decimal(string: lhs, locale: locale),
+                  let exactRight = Decimal(string: rhs, locale: locale) else { return false }
+            return exactLeft == exactRight
         }
     }
 
@@ -662,6 +716,7 @@ enum RegulatorySourceImport {
     enum Resolution: Codable, Equatable, Sendable {
         case elevationRange(ElevationRange)
         case geometry(planID: UUID, sha256: String, rule: GeometryRule)
+        case retained
     }
 
     private struct Geometry {
@@ -684,6 +739,8 @@ enum RegulatorySourceImport {
         var suggestedProjectID: UUID? = nil
         var suggestedDataset: String? = nil
         var suggestedFrame: Frame? = nil
+        var bindings: [RegulatoryDataManifest.SourceBinding] = []
+        var exportedAt: Date? = nil
     }
 
     struct Review: Sendable {
@@ -694,6 +751,17 @@ enum RegulatorySourceImport {
         var ranges: [UUID: ElevationRange] = [:]
         var geometryRules: [UUID: GeometryRule] = [:]
         var assignments: [String: MappingContext] = [:]
+        var resolutions: [FieldConflict: Choice] = [:]
+    }
+
+    enum Choice: String, CaseIterable, Sendable { case keepLocal, acceptExcel }
+
+    struct FieldConflict: Hashable, Sendable {
+        let observationID: UUID
+        let column: Int
+        let baseline: String
+        let local: String
+        let incoming: String
     }
 
     struct Change: Identifiable, Sendable {
@@ -703,6 +771,7 @@ enum RegulatorySourceImport {
         let kind: MappingExchangePreview.Classification
         let destination: MappingContext
         let reason: String
+        var conflicts: [FieldConflict] = []
     }
 
     struct Plan: Sendable {
@@ -714,14 +783,16 @@ enum RegulatorySourceImport {
         fileprivate let projectID: UUID
         fileprivate let geometryRules: [UUID: GeometryRule]
 
-        var canApply: Bool {
-            (!replacements.isEmpty || !ranges.isEmpty || !geometryRules.isEmpty) && !changes.contains { $0.kind == .conflict || $0.kind == .invalid }
-        }
+        var blocked: Bool { changes.contains { $0.kind == .conflict || $0.kind == .invalid } }
+        var canApply: Bool { !blocked && (!replacements.isEmpty || !ranges.isEmpty || !geometryRules.isEmpty) }
         func count(_ kind: MappingExchangePreview.Classification) -> Int { changes.filter { $0.kind == kind }.count }
     }
 
     static func prepare(_ input: Input, review: Review, snapshot: MappingCommittedSnapshot, plans: ManagedPlanStore? = nil,
                         now: Date = Date()) throws -> Plan {
+        if !input.bindings.isEmpty {
+            return try prepareBound(input, review: review, snapshot: snapshot, now: now)
+        }
         let dataset = review.dataset.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let projectID = review.projectID, snapshot.projects[projectID] != nil,
               !dataset.isEmpty, dataset.utf8.count <= 256, review.frameConfirmed, review.frame.valid else {
@@ -783,9 +854,10 @@ enum RegulatorySourceImport {
             if let assigned = review.assignments[sourceID] {
                 destination = assigned
                 explicit = true
-            } else if let old = existing?.latest, old.explicitlyAssigned {
+            } else if let old = existing?.latest {
                 destination = old.destination
-                explicit = true
+                explicit = old.explicitlyAssigned
+                resolution = old.resolution
             } else if let z = Double(row.values[4]) {
                 let candidates: [Geometry]
                 if let x = Double(row.values[2]), let y = Double(row.values[3]) {
@@ -811,7 +883,7 @@ enum RegulatorySourceImport {
                     }
                 }
             }
-            let version = RegulatorySourceObservation.Version(workbookSHA256: input.workbookSHA256, sourceRow: row.number,
+            var version = RegulatorySourceObservation.Version(workbookSHA256: input.workbookSHA256, sourceRow: row.number,
                 cells: row.values, frame: review.frame, destination: destination, explicitlyAssigned: explicit, resolution: resolution, savedAt: now)
             let kind: MappingExchangePreview.Classification
             let reason: String
@@ -820,23 +892,21 @@ enum RegulatorySourceImport {
                 kind = .invalid
                 reason = row.issues.isEmpty ? "Требуется уникальный текстовый ID источника." : row.issues.joined(separator: "\n")
             } else if let existing, let old = existing.latest {
-                if version.sameEvidence(as: old) && version.destination == old.destination &&
-                    version.explicitlyAssigned == old.explicitlyAssigned {
-                    kind = .unchanged
-                    reason = "Источник уже сохранён."
-                } else if !version.sameEvidence(as: old) && existing.versions.dropLast().contains(where: { $0.sameEvidence(as: version) }) {
-                    kind = .conflict
-                    reason = "Источник совпадает с предыдущей версией наблюдения."
-                } else {
-                    kind = .correction
-                    reason = "Будет добавлена версия с сохранением исходного наблюдения."
-                    var revised = existing
-                    revised.versions.append(version)
-                    replacements[id] = revised
-                }
+                let result = try reconcile(existing, incoming: version, comparison: old.sourceBaseline,
+                                           exported: false, resolutions: review.resolutions, journal: snapshot.journal)
+                if let revision = result.record { replacements[id] = revision }
+                changes.append(result.change)
+                continue
             } else {
                 kind = .new
                 reason = destination.horizonID == nil ? "Горизонт ожидает назначения." : "Горизонт определён по подтверждённым данным проекта."
+                version.origin = .sourceImport
+                if row.values.contains(ExchangeObservationProposal.clear) {
+                    version.importedCells = row.values
+                    for column in RegulatoryDataWorkbook.editable where version.cells[column] == ExchangeObservationProposal.clear {
+                        version.cells[column] = ""
+                    }
+                }
                 replacements[id] = .init(id: id, key: key, versions: [version])
             }
             changes.append(.init(sourceID: sourceID, row: row.number, kind: kind, destination: destination, reason: reason))
@@ -847,12 +917,184 @@ enum RegulatorySourceImport {
                     projectID: projectID, geometryRules: review.geometryRules.filter { savedRules[$0.key] != $0.value })
     }
 
+    private static func prepareBound(_ input: Input, review: Review, snapshot: MappingCommittedSnapshot, now: Date) throws -> Plan {
+        let records = Dictionary(uniqueKeysWithValues: (snapshot.journal.regulatorySourceObservations ?? []).map { ($0.id, $0) })
+        let rows = Dictionary(uniqueKeysWithValues: input.rows.map { ($0.number, $0) })
+        let sharedSourceAnchors = Set(Dictionary(grouping: input.rows) { Array($0.values[0...4]) }
+            .filter { $0.value.count > 1 }.keys)
+        var changes: [Change] = []
+        var replacements: [UUID: RegulatorySourceObservation] = [:]
+        for binding in input.bindings {
+            try Task.checkCancellation()
+            guard let row = rows[binding.row], let record = records[binding.sourceObservationID], let old = record.latest,
+                  record.key == .init(projectID: binding.projectID, dataset: binding.dataset, sourceID: binding.sourceID),
+                  row.values[0] == record.key.sourceID else {
+                throw ExchangeImportError("Data!A\(binding.row): исходный UUID или ID не соответствует журналу. Выгрузите книгу из этого журнала.")
+            }
+            let candidates: [RegulatorySourceObservation.Version]
+            if let revision = binding.revision, record.versions.indices.contains(revision) {
+                candidates = [record.versions[revision]]
+            } else if binding.revision == nil, let exportedAt = input.exportedAt {
+                candidates = record.versions.filter {
+                    $0.savedAt <= exportedAt && $0.frame == binding.frame && $0.destination == binding.destination &&
+                        $0.explicitlyAssigned == binding.explicitlyAssigned
+                }
+            } else { candidates = [] }
+            guard let base = candidates.first, base.frame == binding.frame, base.destination == binding.destination,
+                  base.explicitlyAssigned == binding.explicitlyAssigned,
+                  candidates.allSatisfy({ $0.cells == base.cells }),
+                  try binding.fingerprint.map({ try MappingImportLedger.fingerprint(base) == $0 }) ?? true else {
+                throw ExchangeImportError("Data!A\(binding.row): исходную версию Excel нельзя определить. Выгрузите книгу заново.")
+            }
+            guard row.issues.isEmpty else {
+                changes.append(.init(sourceID: record.key.sourceID, row: row.number, kind: .invalid,
+                                     destination: old.destination, reason: row.issues.joined(separator: "\n")))
+                continue
+            }
+            if sharedSourceAnchors.contains(Array(row.values[0...4])),
+               row.values.indices.contains(where: { !row.values[$0].isEmpty &&
+                   !RegulatorySourceObservation.Version.equal(row.values[$0], base.cells[$0], column: $0) }) {
+                throw ExchangeImportError("Data!A\(binding.row): несколько исходных записей имеют одинаковые ID, PK и XYZ. Выгрузите изменяемые записи отдельно.")
+            }
+            let incoming = RegulatorySourceObservation.Version(workbookSHA256: input.workbookSHA256, sourceRow: row.number,
+                cells: row.values, frame: old.frame, destination: old.destination, explicitlyAssigned: old.explicitlyAssigned,
+                resolution: old.resolution, savedAt: now)
+            let result = try reconcile(record, incoming: incoming, comparison: base.cells, exported: true,
+                                       resolutions: review.resolutions, journal: snapshot.journal)
+            if let record = result.record { replacements[record.id] = record }
+            changes.append(result.change)
+        }
+        return Plan(generationID: snapshot.generationID, workbookSHA256: input.workbookSHA256, changes: changes,
+                    replacements: replacements, ranges: [:], projectID: input.bindings[0].projectID, geometryRules: [:])
+    }
+
+    private static func reconcile(_ record: RegulatorySourceObservation, incoming: RegulatorySourceObservation.Version,
+                                  comparison: [String], exported: Bool, resolutions: [FieldConflict: Choice],
+                                  journal: MappingJournal) throws -> (change: Change, record: RegulatorySourceObservation?) {
+        guard let old = record.latest else { throw StorageError.invalidRecord }
+        typealias Version = RegulatorySourceObservation.Version
+        if exported && record.versions.contains(where: {
+            $0.origin == .workbookEdit && $0.workbookSHA256 == incoming.workbookSHA256
+        }) {
+            return (.init(sourceID: record.key.sourceID, row: incoming.sourceRow, kind: .unchanged,
+                          destination: old.destination, reason: "Эта версия книги уже проверена."), nil)
+        }
+        var next = incoming
+        var retainedConflict = false
+        var effective = old.cells
+        var source = old.sourceBaseline
+        var conflicts: [FieldConflict] = []
+        let olderSource = !exported && record.versions.dropLast().contains { version in
+            comparison.indices.allSatisfy { Version.equal(version.sourceBaseline[$0], incoming.cells[$0], column: $0) }
+        }
+        for column in comparison.indices {
+            let raw = incoming.cells[column]
+            // A blank worksheet cell leaves saved evidence intact. #CLEAR is explicit.
+            if raw.isEmpty && (!exported || editableFields.contains(column)) { continue }
+            let value = raw == ExchangeObservationProposal.clear ? "" : raw
+            let base = comparison[column], local = old.cells[column]
+            if Version.equal(value, base, column: column) { continue }
+            if exported && !editableFields.contains(column) {
+                return (.init(sourceID: record.key.sourceID, row: incoming.sourceRow, kind: .invalid,
+                              destination: old.destination, reason: "Data!\(RegulatoryDataWorkbook.address(column, incoming.sourceRow)): поле исходных данных защищено."), nil)
+            }
+            let same = Version.equal(local, value, column: column)
+            if !same && (olderSource || !Version.equal(local, base, column: column)) {
+                let conflict = FieldConflict(observationID: record.id, column: column, baseline: base, local: local, incoming: value)
+                guard let choice = resolutions[conflict] else { conflicts.append(conflict); continue }
+                if choice == .acceptExcel { effective[column] = value }
+                else { retainedConflict = true }
+            } else if !same { effective[column] = value }
+            // A generated workbook is another local editing surface. Its untouched
+            // cells and its edits do not replace the independent production baseline.
+            if !exported { source[column] = value }
+        }
+        let location = next.destination
+        if !conflicts.isEmpty {
+            return (.init(sourceID: record.key.sourceID, row: incoming.sourceRow, kind: .conflict,
+                          destination: location, reason: "Выберите значение для каждого конфликта.", conflicts: conflicts), nil)
+        }
+        if exported {
+            do {
+                try validateEdits(effective, previous: old.cells, projectID: record.key.projectID, journal: journal,
+                                  row: incoming.sourceRow)
+            } catch {
+                return (.init(sourceID: record.key.sourceID, row: incoming.sourceRow, kind: .invalid,
+                              destination: location, reason: error.localizedDescription), nil)
+            }
+        }
+        if !(exported && retainedConflict) && effective == old.cells && source == old.sourceBaseline && next.frame == old.frame &&
+            location == old.destination && next.explicitlyAssigned == old.explicitlyAssigned && next.resolution == old.resolution {
+            return (.init(sourceID: record.key.sourceID, row: incoming.sourceRow, kind: .unchanged,
+                          destination: location, reason: "Наблюдение без изменений."), nil)
+        }
+        switch next.resolution {
+        case .elevationRange(let range) where next.frame.verticalDatum != range.datum ||
+            Double(effective[4]).map(range.contains) != true:
+            next.resolution = .retained
+        case .geometry where next.frame != old.frame || effective[2...4] != old.cells[2...4]:
+            next.resolution = .retained
+        default: break
+        }
+        next.cells = effective
+        next.acceptedCells = source
+        next.origin = exported ? .workbookEdit : .sourceImport
+        next.importedCells = incoming.cells == effective ? nil : incoming.cells
+        var revised = record
+        revised.versions.append(next)
+        return (.init(sourceID: record.key.sourceID, row: incoming.sourceRow, kind: .correction,
+                      destination: location, reason: "Будет сохранена новая версия наблюдения."), revised)
+    }
+
+    static let editableFields = [5, 6, 7, 8, 9, 10, 11, 12, 13] + Array(15...28)
+
+    private static func validateEdits(_ cells: [String], previous: [String], projectID: UUID,
+                                      journal: MappingJournal, row: Int) throws {
+        for column in editableFields where cells[column] != previous[column] && !cells[column].isEmpty {
+            let raw = cells[column]
+            let field = "Data!\(RegulatoryDataWorkbook.address(column, row))"
+            if column == 5 {
+                guard journal.projects.first(where: { $0.id == projectID })?.lithologies?.contains(where: { $0.code == raw }) == true else {
+                    throw ExchangeImportError("\(field): выберите код литологии из справочника проекта.")
+                }
+            } else {
+                try RegulatoryDataProposal.validateSourceValue(raw, column: column, field: field)
+            }
+        }
+    }
+
+    static func editing(_ record: RegulatorySourceObservation, fields: [String], journal: MappingJournal,
+                        now: Date = Date()) throws -> MappingJournal {
+        var next = journal
+        guard let index = next.regulatorySourceObservations?.firstIndex(where: { $0.id == record.id }),
+              var stored = next.regulatorySourceObservations?[index], stored == record, var version = stored.latest,
+              fields.count == version.cells.count,
+              fields.indices.allSatisfy({ editableFields.contains($0) || fields[$0] == version.cells[$0] }) else {
+            throw ExchangeImportError("Наблюдение изменилось. Откройте редактор снова.")
+        }
+        var edited = version.cells
+        for column in editableFields where !RegulatorySourceObservation.Version.equal(fields[column], version.cells[column], column: column) {
+            edited[column] = fields[column]
+        }
+        guard edited != version.cells else { return journal }
+        try validateEdits(edited, previous: version.cells, projectID: stored.key.projectID, journal: journal, row: version.sourceRow)
+        version.acceptedCells = version.sourceBaseline
+        version.cells = edited
+        version.importedCells = nil
+        version.origin = .localEdit
+        version.savedAt = now
+        stored.versions.append(version)
+        next.regulatorySourceObservations?[index] = stored
+        return next
+    }
+
     static func applying(_ plan: Plan, to snapshot: MappingCommittedSnapshot) throws -> MappingJournal {
         try Task.checkCancellation()
-        guard plan.canApply, plan.generationID == snapshot.generationID else {
+        guard !plan.blocked, plan.generationID == snapshot.generationID else {
             throw ExchangeImportError("Проверьте книгу снова перед сохранением.")
         }
         var next = snapshot.journal
+        if !plan.canApply { return next }
         let originals = next.regulatorySourceObservations ?? []
         let originalIDs = Set(originals.map(\.id))
         next.regulatorySourceObservations = originals.map { plan.replacements[$0.id] ?? $0 } +
@@ -881,6 +1123,8 @@ enum RegulatorySourceImport {
             version.destination = destination
             version.explicitlyAssigned = true
             version.resolution = nil
+            version.importedCells = nil
+            version.origin = .assignment
             version.savedAt = now
             observations[i].versions.append(version)
         }
@@ -906,15 +1150,22 @@ enum RegulatorySourceImport {
                   record.key.dataset.utf8.count <= 256,
                   !record.key.sourceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   record.key.sourceID.utf8.count <= 256 else { throw StorageError.invalidRecord }
-            for version in record.versions {
+            for (index, version) in record.versions.enumerated() {
                 guard version.cells.count == RegulatoryDataWorkbook.columns.count,
                       version.cells[0] == record.key.sourceID,
+                      version.sourceBaseline.count == version.cells.count,
+                      version.sourceBaseline[0] == record.key.sourceID,
+                      version.sourceBaseline.allSatisfy({ $0.utf16.count <= 32_767 }),
+                      version.sourceBaseline[2...4].allSatisfy({ $0.isEmpty || RegulatoryDataWorkbook.sourceNumber($0) != nil }),
+                      version.importedCells.map({ $0.count == version.cells.count && $0[0] == record.key.sourceID &&
+                          $0.allSatisfy { $0.utf16.count <= 32_767 } }) ?? true,
                       version.cells.allSatisfy({ $0.utf16.count <= 32_767 }),
                       version.destination.projectID == record.key.projectID, context.validContext(version.destination),
                       version.frame.valid, version.savedAt.timeIntervalSinceReferenceDate.isFinite,
                       (5...1_048_576).contains(version.sourceRow),
                       version.workbookSHA256.range(of: #"^[a-f0-9]{64}$"#, options: .regularExpression) != nil,
-                      version.cells[2...4].allSatisfy({ $0.isEmpty || RegulatoryDataWorkbook.sourceNumber($0) != nil }) else {
+                      version.cells[2...4].allSatisfy({ $0.isEmpty || RegulatoryDataWorkbook.sourceNumber($0) != nil }),
+                      version.sourceBaseline[2...4].allSatisfy({ $0.isEmpty || RegulatoryDataWorkbook.sourceNumber($0) != nil }) else {
                     throw StorageError.invalidRecord
                 }
                 switch version.resolution {
@@ -930,6 +1181,10 @@ enum RegulatorySourceImport {
                           version.destination.excavationID == nil || version.destination.excavationID == rule.excavationID else {
                         throw StorageError.invalidRecord
                     }
+                case .retained:
+                    guard !version.explicitlyAssigned, version.destination.horizonID != nil, index > 0,
+                          record.versions[index - 1].destination == version.destination,
+                          record.versions[index - 1].resolution != nil else { throw StorageError.invalidRecord }
                 case nil:
                     guard version.explicitlyAssigned || version.destination.horizonID == nil else { throw StorageError.invalidRecord }
                 }

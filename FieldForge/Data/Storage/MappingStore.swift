@@ -38,13 +38,16 @@ final class FileMappingStore: MappingStore {
     func requireUnchanged() throws {
         guard loaded, !blocked, try bytes() == loadedBytes else { throw StorageError.changedFile }
     }
-    func save(_ journal: MappingJournal) throws {
+    func save(_ journal: MappingJournal) throws { try save(journal, atomicUpdates: []) }
+
+    // The mixed-workbook command stages and validates these updates together.
+    func save(_ journal: MappingJournal, atomicUpdates: Set<UUID>) throws {
         guard !blocked else { throw StorageError.writesBlocked }
         if !loaded { _ = try load() }
         try journal.validate()
         guard try bytes() == loadedBytes else { throw StorageError.changedFile }
         let previous = try loadedBytes.map { try JSONDecoder().decode(MappingJournal.self, from: $0) }
-        guard (journal.importLedger ?? MappingImportLedger()).preserves(previous?.importLedger ?? MappingImportLedger()) else {
+        guard (journal.importLedger ?? MappingImportLedger()).preserves(previous?.importLedger ?? MappingImportLedger(), atomicUpdates: atomicUpdates) else {
             throw StorageError.invalidRecord
         }
         // Original observations are append-only; names/metadata can be managed separately.

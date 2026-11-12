@@ -76,10 +76,11 @@ enum RegulatoryDataWorkbook {
             guard headerIssues.isEmpty else {
                 throw ExchangeImportError("Data!A1:AD4: отсутствующие или несовместимые заголовки регламента. " + headerIssues.joined(separator: "; "))
             }
+            let sourceRows = Set((parsedManifest?.sourceBindings ?? []).map(\.row))
             rows = try data.keys.filter { $0 > 4 }.sorted().compactMap { number -> Row? in
                 try Task.checkCancellation()
                 let cells = data[number] ?? [:]
-                let sourceBoundRow = parsedManifest?.sourceBindings?.contains { $0.row == number } == true
+                let sourceBoundRow = sourceRows.contains(number)
                 // Empty and all-dash report placeholders do not represent observations.
                 if cells.allSatisfy({ $0.key < columns.count && $0.value == .text("-") }) { return nil }
                 var issues: [String] = []
@@ -97,7 +98,7 @@ enum RegulatoryDataWorkbook {
                         values[column] = value
                     case .text(let raw) where (productionLayout || sourceBoundRow) && (2...4).contains(column),
                          .number(let raw) where (productionLayout || sourceBoundRow) && (2...4).contains(column),
-                         .number(let raw) where productionLayout && (!isText || column == 5):
+                         .number(let raw) where (productionLayout || sourceBoundRow) && (!isText || column == 5):
                         // Retain Excel's exact decimal spelling as source evidence.
                         // Spatial comparisons use the finite numeric interpretation.
                         if RegulatoryDataWorkbook.sourceNumber(raw) != nil {

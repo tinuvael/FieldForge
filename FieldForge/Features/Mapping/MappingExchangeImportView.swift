@@ -44,7 +44,8 @@ struct MappingExchangeImportView: View {
                         .foregroundStyle(.orange)
                 }
             }
-            if kind == .regulatoryData, selectedURL != nil, state.preview?.productionInput == nil, let workflow = mapping.workflow {
+            if kind == .regulatoryData, selectedURL != nil,
+               state.preview?.productionInput == nil || state.preview?.workbookBlocked == false, let workflow = mapping.workflow {
                 assignmentSection(workflow.journal)
             }
             if let report {
@@ -53,7 +54,12 @@ struct MappingExchangeImportView: View {
                     Button("Проверить эту книгу снова") { prepare(selectedURL) }.disabled(applying)
                 }
             } else if let preview = state.preview, let selectedURL, let input = preview.productionInput {
-                RegulatorySourceImportSection(input: input, notices: preview.workbookBlockReasons, url: selectedURL)
+                if !preview.workbookBlocked {
+                    previewSections(preview, stale: state.stale, mixed: true)
+                }
+                RegulatorySourceImportSection(input: input, notices: preview.workbookBlockReasons, url: selectedURL,
+                                              native: preview.workbookBlocked ? nil : preview,
+                                              nativePreviewCurrent: !state.stale && !state.busy)
                     .id(input.workbookSHA256)
             } else if let preview = state.preview {
                 previewSections(preview, stale: state.stale)
@@ -113,7 +119,7 @@ struct MappingExchangeImportView: View {
         .onDisappear { coordinator.deactivate() }
     }
 
-    @ViewBuilder private func previewSections(_ preview: MappingExchangePreview, stale: Bool) -> some View {
+    @ViewBuilder private func previewSections(_ preview: MappingExchangePreview, stale: Bool, mixed: Bool = false) -> some View {
         let canChoose = !stale && !preview.workbookBlocked && !applying
         Section("Предварительная проверка") {
             if kind == .exchange { LabeledContent("Проект", value: preview.projectName) }
@@ -169,15 +175,15 @@ struct MappingExchangeImportView: View {
                                     }
                                 }.font(.caption)
                             }
-                            if record.canApply {
+                            if record.canApply && !mixed {
                                 Toggle(record.receipt?.outcome == .pending ? "Продолжить импорт" : "Принять изменение",
                                        isOn: decision(record.id, accepting: true))
                                     .disabled(!canChoose)
                             }
-                            if record.canRejectPending {
+                            if record.canRejectPending && !mixed {
                                 Toggle("Отклонить незавершённую строку", isOn: decision(record.id, accepting: false))
                                     .disabled(!canChoose)
-                            } else if record.canRejectConflict {
+                            } else if record.canRejectConflict && !mixed {
                                 Toggle("Сохранить решение об отклонении", isOn: conflictDecision(record.id))
                                     .disabled(!canChoose)
                             }
@@ -191,7 +197,7 @@ struct MappingExchangeImportView: View {
                 }
             }
         }
-        if preview.records.contains(where: { $0.canApply || $0.classification == .conflict || $0.receipt?.outcome == .pending }) {
+        if !mixed, preview.records.contains(where: { $0.canApply || $0.classification == .conflict || $0.receipt?.outcome == .pending }) {
             Section {
                 if kind == .regulatoryData, preview.records.contains(where: \.canApply) {
                     Button("Отметить все готовые наблюдения") {
@@ -418,6 +424,14 @@ private struct RegulatorySourceImportSection: View {
     let input: RegulatorySourceImport.Input
     let notices: [String]
     let url: URL
+    let native: MappingExchangePreview?
+    let nativePreviewCurrent: Bool
+    private var nativeReady: Bool {
+        guard let native else { return true }
+        return nativePreviewCurrent && native.records.allSatisfy {
+            $0.canApply || $0.classification == .unchanged || $0.receipt?.outcome == .applied
+        }
+    }
     @State private var review = RegulatorySourceImport.Review()
     @State private var plan: RegulatorySourceImport.Plan?
     @State private var task: Task<Void, Never>?
@@ -436,8 +450,10 @@ private struct RegulatorySourceImportSection: View {
     @State private var selectedSources: Set<String> = []
     @State private var confirm = false
 
-    init(input: RegulatorySourceImport.Input, notices: [String], url: URL) {
-        self.input = input; self.notices = notices; self.url = url
+    init(input: RegulatorySourceImport.Input, notices: [String], url: URL, native: MappingExchangePreview?,
+         nativePreviewCurrent: Bool) {
+        self.input = input; self.notices = notices; self.url = url; self.native = native
+        self.nativePreviewCurrent = nativePreviewCurrent
         _review = State(initialValue: RegulatorySourceImport.Review(projectID: input.suggestedProjectID,
             dataset: input.suggestedDataset ?? "", frame: input.suggestedFrame ?? .init(),
             frameConfirmed: input.suggestedFrame != nil))
@@ -449,6 +465,11 @@ private struct RegulatorySourceImportSection: View {
     }
 
     var body: some View {
+        if input.bindings.isEmpty { sourceSetupSections }
+        importSection
+    }
+
+    @ViewBuilder private var sourceSetupSections: some View {
         Section("Набор наблюдений") {
             LabeledContent("Исходные наблюдения", value: String(input.rows.count))
             Picker("Проект", selection: $review.projectID) {
@@ -467,8 +488,15 @@ private struct RegulatorySourceImportSection: View {
                 .textInputAutocapitalization(.never)
                 .onChange(of: review.dataset) { _, _ in
                     review.assignments = [:]
+                    review.resolutions = [:]
+                    review.frameConfirmed = false
                     selectedSources = []
                     plan = nil
+                    let dataset = review.dataset.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let savedFrames = (snapshot?.journal.regulatorySourceObservations ?? []).compactMap { record in
+                        record.key.projectID == review.projectID && record.key.dataset == dataset ? record.latest?.frame : nil
+                    }
+                    if let frame = savedFrames.first, savedFrames.allSatisfy({ $0 == frame }) { review.frame = frame }
                 }
             let datasets = Set((snapshot?.journal.regulatorySourceObservations ?? [])
                 .filter { $0.key.projectID == review.projectID }.map { $0.key.dataset })
@@ -532,6 +560,9 @@ private struct RegulatorySourceImportSection: View {
             geometrySection
         }
 
+    }
+
+    private var importSection: some View {
         Section("Проверка импорта") {
             ForEach(notices, id: \.self) { Text($0).font(.caption) }
             if let message { Text(message) }
@@ -539,7 +570,7 @@ private struct RegulatorySourceImportSection: View {
                 ProgressView("Обработка набора…")
                 Button("Отменить", role: .cancel) { task?.cancel() }.disabled(mapping.isSaving)
             }
-            Button("Сопоставить набор") { compare() }.disabled(task != nil || !review.frameConfirmed)
+            Button("Сопоставить набор") { compare() }.disabled(task != nil || (input.bindings.isEmpty && !review.frameConfirmed))
             if let plan {
                 LabeledContent("Назначен горизонт", value: String(plan.changes.filter { $0.destination.horizonID != nil }.count))
                 LabeledContent("Назначена выработка", value: String(plan.changes.filter { $0.destination.excavationID != nil }.count))
@@ -549,9 +580,16 @@ private struct RegulatorySourceImportSection: View {
                 ForEach([MappingExchangePreview.Classification.new, .correction, .unchanged, .conflict, .invalid], id: \.self) {
                     LabeledContent($0.title, value: String(plan.count($0)))
                 }
-                bulkControls(plan)
+                if input.bindings.isEmpty { bulkControls(plan) }
+                else {
+                    ForEach(plan.changes.filter { $0.kind == .invalid }, id: \.id) { change in
+                        LabeledContent(change.sourceID, value: change.reason)
+                    }
+                }
+                conflictControls(plan)
+                if !nativeReady { Text("Сначала разрешите замечания к обычным наблюдениям.").foregroundStyle(.orange) }
                 Button("Сохранить набор") { confirm = true }
-                    .disabled(!plan.canApply || snapshot?.generationID != plan.generationID || task != nil || mapping.isSaving)
+                    .disabled(!canSave(plan))
             }
         }
         .alert("Сохранить наблюдения одним пакетом?", isPresented: $confirm) {
@@ -560,6 +598,35 @@ private struct RegulatorySourceImportSection: View {
         }
         .onAppear { if review.projectID == nil { review.projectID = mapping.workflow?.context.projectID } }
         .onDisappear { task?.cancel() }
+    }
+
+    private func canSave(_ plan: RegulatorySourceImport.Plan) -> Bool {
+        !plan.blocked && (plan.canApply || native?.records.contains(where: \.canApply) == true)
+            && nativeReady && snapshot?.generationID == plan.generationID && task == nil && !mapping.isSaving
+    }
+
+    @ViewBuilder private func conflictControls(_ plan: RegulatorySourceImport.Plan) -> some View {
+        let conflicts = plan.changes.flatMap(\.conflicts)
+        if !conflicts.isEmpty {
+            ForEach(conflicts, id: \.self) { conflict in
+                let sourceID = plan.changes.first { $0.conflicts.contains(conflict) }?.sourceID ?? ""
+                DisclosureGroup("\(sourceID) · \(RegulatoryDataWorkbook.columns[conflict.column])") {
+                    LabeledContent("Исходное", value: conflict.baseline.isEmpty ? "Пусто" : conflict.baseline)
+                    LabeledContent("В журнале", value: conflict.local.isEmpty ? "Пусто" : conflict.local)
+                    LabeledContent("В Excel", value: conflict.incoming.isEmpty ? "Пусто" : conflict.incoming)
+                    Picker("Решение", selection: Binding(get: { review.resolutions[conflict] }, set: { review.resolutions[conflict] = $0 })) {
+                        Text("Выберите").tag(RegulatorySourceImport.Choice?.none)
+                        Text("Оставить значение журнала").tag(Optional(RegulatorySourceImport.Choice.keepLocal))
+                        Text("Принять Excel").tag(Optional(RegulatorySourceImport.Choice.acceptExcel))
+                    }
+                }
+            }
+            Button("Проверить решения") { compare() }
+            Button("Отменить импорт", role: .cancel) {
+                review.resolutions.removeAll()
+                self.plan = nil
+            }
+        }
     }
 
     private func bulkControls(_ plan: RegulatorySourceImport.Plan) -> some View {
@@ -676,21 +743,31 @@ private struct RegulatorySourceImportSection: View {
     }
 
     private func apply() {
-        guard task == nil, let plan else { return }
+        guard let plan, canSave(plan) else { return }
         let url = self.url
+        let native = self.native
         task = Task {
             defer { task = nil }
             do {
                 let work = Task.detached(priority: .userInitiated) {
-                    ExchangeBaseline.hash(try await MappingExchangeFileRead.data(url: url))
+                    let bytes = try await MappingExchangeFileRead.data(url: url)
+                    guard ExchangeBaseline.hash(bytes) == plan.workbookSHA256 else {
+                        throw ExchangeImportError("Файл изменился после проверки. Выберите книгу снова.")
+                    }
+                    return try native.map { preview in
+                        try MappingExchangeImport.Batch(preview: preview, bytes: bytes,
+                            selection: .init(accepted: Set(preview.records.filter(\.canApply).map(\.id))),
+                            now: Date(), mixed: true)
+                    }
                 }
-                let hash = try await withTaskCancellationHandler { try await work.value } onCancel: { work.cancel() }
+                let batch = try await withTaskCancellationHandler { try await work.value } onCancel: { work.cancel() }
                 try Task.checkCancellation()
-                guard hash == plan.workbookSHA256 else {
-                    throw ExchangeImportError("Файл изменился после проверки. Выберите книгу снова.")
-                }
-                try await mapping.persist { workflow in
-                    try workflow.commit(RegulatorySourceImport.applying(plan, to: workflow.committed))
+                if let batch {
+                    try await mapping.applyMixedExchange(batch, sourcePlan: plan)
+                } else {
+                    try await mapping.persist { workflow in
+                        try workflow.commit(RegulatorySourceImport.applying(plan, to: workflow.committed))
+                    }
                 }
                 self.plan = nil
                 message = "Набор сохранён. Наблюдения доступны в журнале проекта."

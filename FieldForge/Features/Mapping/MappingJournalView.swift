@@ -366,6 +366,10 @@ private struct RegulatorySourceJournalView: View {
                     } label: {
                         VStack(alignment: .leading) {
                             Text(record.key.sourceID).font(.headline)
+                            if record.latest?.hasLocalEdits == true {
+                                Label("Есть правки журнала", systemImage: "pencil")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
                             let destination = record.latest?.destination
                             Text(destination?.horizonID.flatMap { mapping.workflow?.committed.horizons[$0]?.displayName } ?? "Горизонт не назначен")
                             Text(destination?.excavationID.flatMap { mapping.workflow?.committed.excavations[$0]?.name } ?? "Выработка не назначена")
@@ -401,7 +405,13 @@ private struct RegulatorySourceJournalView: View {
 }
 
 struct RegulatorySourceObservationDetail: View {
-    let record: RegulatorySourceObservation
+    @EnvironmentObject private var mapping: MappingModel
+    @State private var editing: RegulatorySourceObservation?
+    private let snapshot: RegulatorySourceObservation
+    init(record: RegulatorySourceObservation) { snapshot = record }
+    private var record: RegulatorySourceObservation {
+        mapping.workflow?.journal.regulatorySourceObservations?.first { $0.id == snapshot.id } ?? snapshot
+    }
 
     var body: some View {
         List {
@@ -409,18 +419,23 @@ struct RegulatorySourceObservationDetail: View {
                 LabeledContent("Набор", value: record.key.dataset)
                 LabeledContent("Исходный ID", value: record.key.sourceID)
                 LabeledContent("UUID", value: record.id.uuidString)
+                Button("Исправить геологические данные") { editing = record }.disabled(mapping.isSaving)
             }
             ForEach(record.versions.indices.reversed(), id: \.self) { index in
                 let version = record.versions[index]
                 DisclosureGroup("Версия \(index + 1) · строка \(version.sourceRow)") {
                     LabeledContent("Сохранено", value: version.savedAt.formatted())
+                    LabeledContent("Источник версии", value: versionOrigin(version))
+                    LabeledContent("SHA-256 книги", value: version.workbookSHA256)
                     LabeledContent("Датум Z", value: version.frame.verticalDatum.isEmpty ? "Неизвестен" : version.frame.verticalDatum)
                     LabeledContent("Система координат XY", value: version.frame.crs.isEmpty ? "Неизвестна" : version.frame.crs)
                     LabeledContent("Оси XY", value: version.frame.axes.isEmpty ? "Неизвестны" : version.frame.axes)
                     LabeledContent("Единицы XY", value: version.frame.xyUnits.isEmpty ? "Неизвестны" : MappingCoordinateText.xyUnit(version.frame.xyUnits))
+                    LabeledContent("X источника", value: version.cells[2].isEmpty ? "Не указана" : version.cells[2])
+                    LabeledContent("Y источника", value: version.cells[3].isEmpty ? "Не указана" : version.cells[3])
                     LabeledContent("Z источника, м", value: version.cells[4].isEmpty ? "Не указана" : version.cells[4])
                 }
-                Section("Геологические данные · исходные значения") {
+                Section(index == record.versions.count - 1 ? "Текущие геологические данные" : "Геологические данные версии") {
                     sourceField(version, 5, "Литология (ROCK)")
                     sourceField(version, 6, "Выветривание (A45)")
                     sourceField(version, 7, "Обводнённость (JW)")
@@ -445,14 +460,132 @@ struct RegulatorySourceObservationDetail: View {
                         LabeledContent("GSI в Excel · формульное поле", value: version.cells[29])
                         Text("Сохранено как исходная ячейка; не считается независимо измеренным значением.").font(.caption).foregroundStyle(.secondary)
                     }
-                    Text("Поля доступны только для просмотра. Неизвестные единицы, дата или привязка не восполняются автоматически.")
+                    Text("Дата, координаты и исходные расчётные поля сохраняются в истории.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
         }.navigationTitle("Исходное наблюдение")
+            .sheet(item: $editing) { record in
+                NavigationStack { RegulatorySourceCorrectionEditor(record: record) }
+            }
+    }
+
+    private func versionOrigin(_ version: RegulatorySourceObservation.Version) -> String {
+        switch version.origin {
+        case .sourceImport: "Импорт исходной книги"
+        case .localEdit: "Правка в журнале"
+        case .workbookEdit: "Правка в выгрузке Excel"
+        case .assignment: "Назначение места наблюдения"
+        case nil: "Архивная версия"
+        }
     }
 
     @ViewBuilder private func sourceField(_ version: RegulatorySourceObservation.Version, _ index: Int, _ label: String) -> some View {
-        if !version.cells[index].isEmpty { LabeledContent(label, value: version.cells[index]) }
+        let locallyEdited = version.isLocallyEdited(index)
+        if !version.cells[index].isEmpty || locallyEdited {
+            LabeledContent(label, value: version.cells[index].isEmpty ? "Пусто" : version.cells[index])
+            if locallyEdited {
+                LabeledContent("Изменено в журнале · исходное", value: version.sourceBaseline[index].isEmpty ? "Пусто" : version.sourceBaseline[index])
+                    .font(.caption)
+            }
+        }
+    }
+}
+
+private struct RegulatorySourceCorrectionEditor: View {
+    @EnvironmentObject private var mapping: MappingModel
+    @Environment(\.dismiss) private var dismiss
+    let record: RegulatorySourceObservation
+    @State private var cells: [String]
+    @State private var activeColumn: Int?
+    @State private var error: String?
+
+    init(record: RegulatorySourceObservation) {
+        self.record = record
+        _cells = State(initialValue: record.latest?.cells ?? [])
+    }
+
+    var body: some View {
+        Form {
+            if cells.count == RegulatoryDataWorkbook.columns.count {
+                RockLithologyField(rock: Binding(get: {
+                    guard !cells[5].isEmpty else { return nil }
+                    return RockLithology(code: cells[5], name: nil)
+                }, set: { cells[5] = $0?.code ?? "" }), projectID: record.key.projectID)
+                Section {
+                    ForEach(RegulatorySourceImport.editableFields.filter { $0 != 5 }, id: \.self) { column in
+                        field(column)
+                    }
+                } header: {
+                    Text("Измерения и категории Data")
+                } footer: {
+                    Text("Пустое поле сохраняется без значения. Углы сохраняются как данные источника с неизвестным типом севера.")
+                }
+            }
+            if let error { Text(error).foregroundStyle(.red) }
+        }
+        .navigationTitle("Исправление наблюдения")
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) { Button("Отмена") { dismiss() } }
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Сохранить") { save() }.disabled(mapping.isSaving || cells == record.latest?.cells)
+            }
+        }
+    }
+
+    @ViewBuilder private func field(_ column: Int) -> some View {
+        let title = RegulatoryDataWorkbook.columns[column]
+        let options = categories(column)
+        if options.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                Text(EnterpriseGeotechnicalWorkbook.headerRows[2][column] + " · " + title).font(.subheadline)
+                LosslessNumericField(text: $cells[column], displayText: cells[column],
+                    focused: activeColumn == column, identifier: "regulatorySourceField-\(column)",
+                    placeholder: "Не указано", onFocus: { focused in
+                        if focused { activeColumn = column }
+                        else if activeColumn == column { activeColumn = nil }
+                    }).frame(minHeight: 44)
+            }
+        } else {
+            let selected = cells[column]
+            Picker(title, selection: $cells[column]) {
+                Text("Не указано").tag("")
+                ForEach(options, id: \.rating) { option in
+                    Text(option.title).tag(String(option.rating))
+                }
+                if !selected.isEmpty, !options.contains(where: { String($0.rating) == selected }) {
+                    Text("Из Excel · " + selected).tag(selected)
+                }
+            }
+        }
+    }
+
+    private func categories(_ column: Int) -> [(rating: Int, title: String)] {
+        switch column {
+        case 6: RegulatoryWallAlteration.allCases.map { ($0.rating, $0.selectionLabel) }
+        case 8: RegulatoryStrengthBand.allCases.map { ($0.rating, $0.selectionLabel) }
+        case 15: RMR89Parameter.aperture.choices(test: nil).map { ($0.rating, $0.title) }
+        case 16: JCond76Category.allCases.map { ($0.rating, $0.title) }
+        case 17: RMR89Parameter.persistence.choices(test: nil).map { ($0.rating, $0.title) }
+        default: []
+        }
+    }
+
+    private func save() {
+        activeColumn = nil
+        var edited = cells
+        for column in RegulatorySourceImport.editableFields where edited[column] != record.latest?.cells[column] {
+            edited[column] = edited[column].trimmingCharacters(in: .whitespacesAndNewlines)
+            if column != 5 { edited[column] = edited[column].replacingOccurrences(of: ",", with: ".") }
+        }
+        let fields = edited
+        Task {
+            do {
+                try await mapping.persist { workflow in
+                    try workflow.commit(RegulatorySourceImport.editing(record, fields: fields, journal: workflow.journal))
+                }
+                dismiss()
+            } catch { self.error = error.localizedDescription }
+        }
     }
 }
