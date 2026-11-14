@@ -472,8 +472,16 @@ extension OfflineBackupTests {
         original[10] = "66"
         let row = RegulatoryDataWorkbook.Row(number: 5, values: original, issues: [])
         let input = RegulatorySourceImport.Input(rows: [row], workbookSHA256: String(repeating: "1", count: 64))
-        let snapshot = MappingCommittedSnapshot(f.journal)
-        let review = RegulatorySourceImport.Review(projectID: project.id, dataset: "Survey", frameConfirmed: true)
+        var journal = f.journal
+        let dxf = try XCTUnwrap(journal.plans.first)
+        let file = try XCTUnwrap(dxf.file)
+        let index = try XCTUnwrap(journal.horizons.firstIndex { $0.id == dxf.horizonID })
+        journal.horizons[index].elevationDatum = "Survey datum"
+        let snapshot = MappingCommittedSnapshot(journal)
+        let frame = RegulatorySourceImport.Frame(crs: file.crs, axes: file.axes, xyUnits: file.units.coordinateUnits, verticalDatum: "Survey datum")
+        var review = RegulatorySourceImport.Review(projectID: project.id, dataset: "Survey", frame: frame, frameConfirmed: true,
+                                                    displayPlans: [dxf.id], north: .gridNorth)
+        review.ranges[dxf.horizonID] = .init(minimum: 400, maximum: 410, datum: frame.verticalDatum)
         let plan = try RegulatorySourceImport.prepare(input, review: review, snapshot: snapshot)
         let imported = try RegulatorySourceImport.applying(plan, to: snapshot)
         let record = try XCTUnwrap(imported.regulatorySourceObservations?.first)
@@ -496,6 +504,9 @@ extension OfflineBackupTests {
         let latest = try XCTUnwrap(restored.regulatorySourceObservations?.first?.latest)
         XCTAssertEqual(latest.sourceBaseline, original)
         XCTAssertEqual(latest.cells, fields)
+        XCTAssertEqual(latest.northReference, .gridNorth)
+        XCTAssertEqual(latest.destination.horizonID, dxf.horizonID)
+        XCTAssertEqual(restored.projects.first?.regulatoryDatasets?["Survey"]?.plans[dxf.id]?.sha256, file.sha256)
         XCTAssertEqual(try RegulatorySourceImport.prepare(input, review: review, snapshot: .init(restored)).count(.unchanged), 1)
     }
 

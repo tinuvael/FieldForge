@@ -357,13 +357,15 @@ struct HorizonPlanView: View {
     @State private var proposed: PlanPoint?
     @State private var filter: UUID?
     @State private var pointSelection: PlanPointSelection?
-    @State private var sourcePointSelection: SourcePlanPointSelection?
     @State private var properties = false
     @State private var reviewedUnits = PlanUnits.unknown
     @State private var error: String?
-    private var points: [MappingObservation] { mapping.workflow?.points(on: plan, excavationID: filter, restrictToSelection: selecting && onPointSelection == nil) ?? [] }
-    private var sourcePoints: [RegulatorySourceObservation] { mapping.workflow?.committed.sourcePoints(on: plan) ?? [] }
-    private func canvasDescription(_ viewport: PlanViewport, points: [MappingObservation]) -> String {
+    private var points: [JournalObservation] {
+        guard let workflow = mapping.workflow,
+              !selecting || onPointSelection != nil || workflow.plans.contains(plan) else { return [] }
+        return workflow.committed.journalPoints(on: plan, excavationID: filter)
+    }
+    private func canvasDescription(_ viewport: PlanViewport, points: [JournalObservation]) -> String {
         let visibleMarkers = points.filter { record in
             guard let x = record.coordinates?.x, let y = record.coordinates?.y else { return false }
             return viewport.containsScreenPoint(viewport.screen(PlanPoint(x: x, y: y)))
@@ -402,7 +404,6 @@ struct HorizonPlanView: View {
 
     var body: some View {
         let points = self.points
-        let sourcePoints = self.sourcePoints
         VStack(spacing: 0) {
             GeometryReader { geometry in
                 let viewport = PlanViewport(bounds: drawing.bounds, width: geometry.size.width, height: geometry.size.height,
@@ -438,13 +439,6 @@ struct HorizonPlanView: View {
                             context.draw(Text(record.displayPicket).font(.caption).foregroundColor(.blue), at: CGPoint(x: p.x + 10, y: p.y - 12), anchor: .leading)
                         }
                     }
-                    for record in sourcePoints {
-                        guard let version = record.latest, let x = Double(version.cells[2]), let y = Double(version.cells[3]) else { continue }
-                        let p = viewport.screen(PlanPoint(x: x, y: y))
-                        guard viewport.containsScreenPoint(p) else { continue }
-                        context.fill(Path(ellipseIn: CGRect(x: p.x - 7, y: p.y - 7, width: 14, height: 14)), with: .color(.green))
-                        context.draw(Text(record.key.sourceID).font(.caption).foregroundColor(.green), at: CGPoint(x: p.x + 10, y: p.y - 12), anchor: .leading)
-                    }
                     if let proposed {
                         let p = viewport.screen(proposed)
                         let rect = CGRect(x: p.x - 10, y: p.y - 10, width: 20, height: 20)
@@ -466,13 +460,7 @@ struct HorizonPlanView: View {
                             let p = viewport.screen(PlanPoint(x: x, y: y))
                             return hypot(p.x - location.x, p.y - location.y) <= 24
                         }
-                        let sourceHits = sourcePoints.filter { record in
-                            guard let version = record.latest, let x = Double(version.cells[2]), let y = Double(version.cells[3]) else { return false }
-                            let p = viewport.screen(PlanPoint(x: x, y: y))
-                            return hypot(p.x - location.x, p.y - location.y) <= 24
-                        }
-                        if !sourceHits.isEmpty { sourcePointSelection = SourcePlanPointSelection(records: sourceHits) }
-                        else if !hits.isEmpty { pointSelection = PlanPointSelection(records: hits) }
+                        if !hits.isEmpty { pointSelection = PlanPointSelection(records: hits) }
                         else if selecting { propose(viewport.drawing(location)) }
                     })
             }
@@ -481,9 +469,8 @@ struct HorizonPlanView: View {
                 Button("Вписать") { zoom = 1; pan = .zero }.accessibilityIdentifier("planFit")
                 Button("+") { zoom = min(100, zoom * 1.5) }.accessibilityIdentifier("planZoomIn")
                 Spacer()
-                Button("Точки: \(points.count + sourcePoints.count)") {
-                    if !sourcePoints.isEmpty { sourcePointSelection = SourcePlanPointSelection(records: sourcePoints) }
-                    else { pointSelection = PlanPointSelection(records: points) }
+                Button("Точки: \(points.count)") {
+                    pointSelection = PlanPointSelection(records: points)
                 }.accessibilityIdentifier("planPoints")
             }.buttonStyle(.bordered).controlSize(.regular).padding(.horizontal).padding(.top, 8).padding(.bottom, 16)
             if let proposed {
@@ -524,37 +511,21 @@ struct HorizonPlanView: View {
                 NavigationStack {
                     List(records) { record in
                         NavigationLink {
-                            MappingObservationDetail(record: record)
+                            JournalObservationDetail(observation: record)
                                .toolbar { ToolbarItem(placement: .cancellationAction) {
                                     Button("Закрыть") { pointSelection = nil }
                                 } }
                         } label: {
                             VStack(alignment: .leading) {
-                                Text(mapping.workflow?.journal.excavations.first { $0.id == record.excavationID }?.name ?? "Выработка").font(.headline)
+                                Text(mapping.workflow?.journal.excavations.first { $0.id == record.context.excavationID }?.name ?? "Выработка не назначена").font(.headline)
                                 Text(record.displayPicket).font(.subheadline)
-                                Text(MappingDateText.compact(record)).font(.caption)
+                                Text(record.dataset ?? record.journalDate.formatted(date: .numeric, time: .shortened)).font(.caption)
                             }
                         }.accessibilityIdentifier("planPoint-\(record.id.uuidString)")
                     }.navigationTitle("Наблюдения: \(records.count)")
                        .toolbar { ToolbarItem(placement: .cancellationAction) {
                             Button("Закрыть") { pointSelection = nil }
                         } }
-                }
-            }
-            .sheet(item: $sourcePointSelection) { selection in
-                NavigationStack {
-                    List(selection.records) { record in
-                        NavigationLink { RegulatorySourceObservationDetail(record: record) } label: {
-                            VStack(alignment: .leading) {
-                                Text("Источник · \(record.key.sourceID)").font(.headline)
-                                if let version = record.latest {
-                                    Text("X \(version.cells[2]) · Y \(version.cells[3]) · Z \(version.cells[4].isEmpty ? "—" : version.cells[4])")
-                                        .font(.caption)
-                                }
-                            }
-                        }
-                    }.navigationTitle("Источники: \(selection.records.count)")
-                        .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Закрыть") { sourcePointSelection = nil } } }
                 }
             }
             .sheet(isPresented: $properties) {
@@ -632,10 +603,5 @@ struct HorizonPlanView: View {
 
 private struct PlanPointSelection: Identifiable {
     let id = UUID()
-    let records: [MappingObservation]
-}
-
-private struct SourcePlanPointSelection: Identifiable {
-    let id = UUID()
-    let records: [RegulatorySourceObservation]
+    let records: [JournalObservation]
 }

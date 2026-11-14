@@ -5,6 +5,7 @@ struct MappingProject: Codable, Equatable, Identifiable, Sendable {
     var name: String
     var lithologies: [RockLithology]? = nil
     var regulatoryGeometryRules: [UUID: RegulatorySourceImport.GeometryRule]? = nil
+    var regulatoryDatasets: [String: RegulatorySourceImport.DatasetSettings]? = nil
 }
 
 struct MappingHorizon: Codable, Equatable, Identifiable, Sendable {

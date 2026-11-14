@@ -1894,13 +1894,13 @@ extension MappingExchangePreviewTests {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("FF82-plans-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }
         let files = ManagedPlanStore(root: root)
-        func plan(horizon: MappingHorizon, from: Double, through: Double) throws -> MappingPlanReference {
+        func stagePlan(horizon: MappingHorizon, from: Double, through: Double) throws -> MappingPlanReference {
             let line = "0\nLINE\n10\n0\n20\n0\n30\n\(from)\n11\n10\n21\n0\n31\n\(through)\n"
             return try files.stage(data: DXFFixtures.drawing(line, units: 6), filename: "survey.dxf", horizonID: horizon.id,
                 version: horizon.name, units: .meters, crs: "mine grid", axes: "WCS XYZ")
         }
-        let firstPlan = try plan(horizon: first, from: 390, through: 430)
-        let secondPlan = try plan(horizon: second, from: 290, through: 330)
+        let firstPlan = try stagePlan(horizon: first, from: 390, through: 430)
+        let secondPlan = try stagePlan(horizon: second, from: 290, through: 330)
         journal.plans = [firstPlan, secondPlan]
         let snapshot = MappingCommittedSnapshot(journal)
         let frame = RegulatorySourceImport.Frame(crs: "mine grid", axes: "WCS XYZ", xyUnits: "m", verticalDatum: "survey datum")
@@ -1932,6 +1932,40 @@ extension MappingExchangePreviewTests {
         XCTAssertTrue(original.allSatisfy { $0.latest?.cells[1].isEmpty == true })
         XCTAssertEqual(MappingCommittedSnapshot(saved).sourcePoints(on: firstPlan).map(\.id), [original[0].id])
         XCTAssertEqual(MappingCommittedSnapshot(saved).sourcePoints(on: secondPlan).map(\.id), [original[1].id])
+        XCTAssertEqual(original[0].latest?.geometryEvidence?.projectedZMeters, 400)
+        XCTAssertEqual(original[0].latest?.geometryEvidence?.xyDistanceMeters, 1)
+        XCTAssertEqual(original[2].latest?.matchingIssue, .ambiguousRanges)
+        XCTAssertEqual(MappingCommittedSnapshot(saved).journalPoints(on: firstPlan, excavationID: upper.id).map(\.id), [original[0].id])
+        XCTAssertTrue(MappingCommittedSnapshot(saved).journalPoints(on: firstPlan, excavationID: lower.id).isEmpty)
+        var reused = review
+        reused.geometryRules = [:]
+        reused.ranges = [:]
+        let replayWithSavedRules = try RegulatorySourceImport.prepare(input, review: reused, snapshot: .init(saved), plans: files)
+        XCTAssertEqual(replayWithSavedRules.count(.unchanged), 3)
+        var unrelated = reused
+        unrelated.dataset = "other dataset, same metadata"
+        let unconfirmed = try RegulatorySourceImport.prepare(input, review: unrelated, snapshot: .init(saved), plans: files)
+        XCTAssertEqual(unconfirmed.changes.map(\.matchingIssue), Array(repeating: .ambiguousRanges, count: 3))
+
+        var sameHorizon = snapshot.journal
+        sameHorizon.excavations.append(.init(id: id(6), projectID: project.id, name: "Other", horizonIDs: [first.id]))
+        let parallel = try stagePlan(horizon: first, from: 390, through: 430)
+        let another = MappingPlanReference(id: parallel.id, horizonID: first.id, attachmentID: parallel.attachmentID,
+            version: "parallel", file: parallel.file)
+        sameHorizon.plans.append(another)
+        var competing = review
+        competing.geometryRules[another.id] = .init(horizonID: first.id, excavationID: id(6), frame: frame,
+                                                     maximumXYMeters: 1.5, maximumZMeters: 0)
+        let overlap = try RegulatorySourceImport.prepare(input, review: competing, snapshot: .init(sameHorizon), plans: files)
+        XCTAssertEqual(overlap.changes[0].destination.horizonID, first.id)
+        XCTAssertNil(overlap.changes[0].destination.excavationID)
+
+        competing.geometryRules[secondPlan.id] = .init(horizonID: second.id, excavationID: lower.id, frame: frame,
+                                                      maximumXYMeters: 1.5, maximumZMeters: 100)
+        let ambiguous = try RegulatorySourceImport.prepare(input, review: competing, snapshot: .init(sameHorizon), plans: files)
+        XCTAssertEqual(ambiguous.changes[0].matchingIssue, .ambiguousGeometry)
+        XCTAssertNil(ambiguous.changes[0].destination.horizonID)
+
         let dataProjection = try EnterpriseGeotechnicalWorkbook.prepare(points: [], journal: saved, sourceRecords: original)
         XCTAssertEqual(dataProjection.table.rows.count, 3)
         XCTAssertEqual(dataProjection.table.rows[0][0].csv, MappingCSVExport.Cell.text("P1").csv)
@@ -1961,6 +1995,64 @@ extension MappingExchangePreviewTests {
         XCTAssertEqual(revised.regulatorySourceObservations?.last?.latest?.xyz[2], 351)
         XCTAssertEqual(revised.regulatorySourceObservations?.last?.latest?.destination.horizonID, second.id)
         XCTAssertEqual(try RegulatorySourceImport.prepare(input, review: review, snapshot: .init(revised), plans: files).count(.conflict), 1)
+    }
+
+    func testSourceRematchingConfirmedRangeBulkAssignmentAndNorthRevisions() throws {
+        var journal = try fixture()
+        let h = try XCTUnwrap(journal.horizons.first)
+        let datum = "Survey datum"
+        journal.horizons[0].elevationDatum = datum
+        let snapshot = MappingCommittedSnapshot(journal)
+        let rows = [sourceRow("A", row: 5, z: 401.125), sourceRow("B", row: 6, z: 401.25),
+                    sourceRow("C", row: 7, z: 402)]
+        var invalidValues = rows[0].values
+        invalidValues[0] = "invalid"
+        let invalid = RegulatoryDataWorkbook.Row(number: 8, values: invalidValues, issues: ["Invalid row"])
+        let input = RegulatorySourceImport.Input(rows: rows + [invalid], workbookSHA256: String(repeating: "a", count: 64))
+        var review = RegulatorySourceImport.Review(projectID: h.projectID, dataset: "Range", frameConfirmed: true, north: .gridNorth)
+        let imported = try RegulatorySourceImport.prepare(input, review: review, snapshot: snapshot)
+        XCTAssertEqual(imported.count(.new), 3)
+        XCTAssertEqual(imported.count(.invalid), 1)
+        XCTAssertFalse(imported.blocked)
+        let stored = try RegulatorySourceImport.applying(imported, to: snapshot)
+        let records = try XCTUnwrap(stored.regulatorySourceObservations)
+        XCTAssertEqual(records.map { $0.latest?.matchingIssue }, [.unknownDatum, .unknownDatum, .unknownDatum])
+        let assigned = try RegulatorySourceImport.assigning([records[1].id],
+            destination: .init(projectID: h.projectID, horizonID: h.id), journal: stored)
+        let assignedSnapshot = MappingCommittedSnapshot(assigned)
+        review.frame.verticalDatum = datum
+        review.ranges[h.id] = .init(minimum: 401, maximum: 403, datum: datum)
+        let configuration = try RegulatorySourceImport.prepare(.init(rows: [], workbookSHA256: ""),
+            review: review, snapshot: assignedSnapshot)
+        let configured = try RegulatorySourceImport.applying(configuration, to: assignedSnapshot)
+        let matched = try RegulatorySourceImport.rematching(projectID: h.projectID, dataset: review.dataset,
+                                                            snapshot: .init(configured), plans: nil)
+        let latest = try XCTUnwrap(matched.regulatorySourceObservations?.first?.latest)
+        XCTAssertEqual(latest.resolution, .elevationRange(try XCTUnwrap(review.ranges[h.id])))
+        XCTAssertTrue(matched.regulatorySourceObservations?[1].latest?.explicitlyAssigned == true)
+        XCTAssertEqual(matched.regulatorySourceObservations?[1], configured.regulatorySourceObservations?[1])
+        let excavation = try XCTUnwrap(journal.excavations.first { $0.horizonIDs.contains(h.id) })
+        let context = try RegulatorySourceImport.assigningExcavation(excavation.id, ids: Set(records.map(\.id)),
+                                                                   projectID: h.projectID, journal: matched)
+        XCTAssertEqual(context.regulatorySourceObservations?.map { $0.latest?.destination.excavationID }, [excavation.id, excavation.id, excavation.id])
+        XCTAssertEqual(context.regulatorySourceObservations?.first?.latest?.resolution, latest.resolution)
+        let target = try XCTUnwrap(context.regulatorySourceObservations?.first)
+        var geology = latest.cells
+        geology[5] = "QZ-2"
+        let edited = try RegulatorySourceImport.editing(target, fields: geology, journal: context, north: .magneticNorth)
+        try edited.validate()
+        let result = try XCTUnwrap(edited.regulatorySourceObservations?.first)
+        XCTAssertEqual(result.latest?.northReference, .magneticNorth)
+        XCTAssertEqual(result.versions.first?.northReference, .gridNorth)
+        XCTAssertEqual(result.latest?.xyz, result.versions.first?.xyz)
+        XCTAssertEqual(result.latest?.cells[5], "QZ-2")
+        XCTAssertEqual(result.latest?.resolution, latest.resolution)
+        let originalInputs = RegulatorySourceImport.Input(rows: rows, workbookSHA256: input.workbookSHA256)
+        review.north = .trueNorth
+        let editedSnapshot = MappingCommittedSnapshot(edited)
+        let reimported = try RegulatorySourceImport.prepare(originalInputs, review: review, snapshot: editedSnapshot)
+        let final = try RegulatorySourceImport.applying(reimported, to: editedSnapshot)
+        XCTAssertEqual(final.regulatorySourceObservations?.first?.latest?.northReference, .magneticNorth)
     }
 
     func testSourceBatchRequiresMetadataConfirmationAndRollsBackAsOneTransaction() async throws {
@@ -2108,9 +2200,38 @@ extension MappingExchangePreviewTests {
         XCTAssertThrowsError(try RegulatoryDataImport.prepare(bytes: zip(parts.sorted { $0.key < $1.key }, deflated: true), committed: committed))
     }
 
+    func testSourceLithologyTextAndNorthRoundTrip() throws {
+        #if SWIFT_PACKAGE
+        let bundle = Bundle.module
+        #else
+        let bundle = Bundle(for: Self.self)
+        #endif
+        let fixtures = try XCTUnwrap(bundle.url(forResource: "Fixtures", withExtension: nil))
+        let bytes = try Data(contentsOf: fixtures.appendingPathComponent("regulatory-production-demo.xlsx"))
+        let before = MappingCommittedSnapshot(try fixture())
+        let preview = try RegulatoryDataImport.prepare(bytes: bytes, committed: before)
+        let input = try XCTUnwrap(preview.productionInput)
+        let review = RegulatorySourceImport.Review(projectID: id(1), dataset: "Demo", frameConfirmed: true, north: .trueNorth)
+        let prepared = try RegulatorySourceImport.prepare(input, review: review, snapshot: before)
+        XCTAssertEqual(prepared.count(.new), 4)
+        let journal = try RegulatorySourceImport.applying(prepared, to: before)
+        let after = MappingCommittedSnapshot(journal)
+        let export = try regulatoryExport(journal)
+        let replay = try RegulatoryDataImport.prepare(bytes: export, committed: after)
+        let bound = try XCTUnwrap(replay.productionInput)
+        XCTAssertEqual(bound.rows.map { $0.values[5] }, ["12", "0012", "DIO", "QZ-2"])
+        XCTAssertTrue(bound.bindings.allSatisfy { $0.north == .trueNorth })
+        let plan = try RegulatorySourceImport.prepare(bound, review: .init(), snapshot: after)
+        XCTAssertEqual(plan.count(.unchanged), 4)
+    }
+
     func testActualProductionWorkbookImportsAndReplaysElevenSourceRows() throws {
-        let url = ProcessInfo.processInfo.environment["FIELD_FORGE_PRODUCTION_XLSX"].map { URL(fileURLWithPath: $0) }
-            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads/БД_ПГР.xlsx")
+        let configured = ProcessInfo.processInfo.environment["FIELD_FORGE_PRODUCTION_XLSX"].map { URL(fileURLWithPath: $0) }
+        #if os(macOS)
+        let url = configured ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads/БД_ПГР.xlsx")
+        #else
+        guard let url = configured else { throw XCTSkip("Production workbook is provided on macOS.") }
+        #endif
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw XCTSkip("Set FIELD_FORGE_PRODUCTION_XLSX to the original production workbook.")
         }
@@ -2129,6 +2250,17 @@ extension MappingExchangePreviewTests {
         let records = try XCTUnwrap(saved.regulatorySourceObservations)
         XCTAssertEqual(records.count, 11)
         XCTAssertEqual(Set(records.map(\.id)).count, 11)
+        let mixedJournal = MappingCommittedSnapshot(saved).journalObservations(projectID: id(1))
+        let visibleSource = MappingJournalQuery(dataset: "production-db-pgr").journalRecords(mixedJournal, projectID: id(1))
+        XCTAssertEqual(Set(visibleSource.map(\.id)), Set(records.map(\.id)))
+        XCTAssertGreaterThan(mixedJournal.count, visibleSource.count)
+        let inputByID = Dictionary(uniqueKeysWithValues: input.rows.map { ($0.values[0], Array($0.values[2...4])) })
+        for record in records {
+            let expected = try XCTUnwrap(inputByID[record.key.sourceID])
+            XCTAssertEqual(record.latest.map { Array($0.cells[2...4]) }, expected)
+            let xyz = JournalObservation.source(record).coordinates
+            XCTAssertEqual([xyz?.x, xyz?.y, xyz?.z], expected.map(RegulatoryDataWorkbook.sourceNumber))
+        }
         XCTAssertTrue(records.allSatisfy { $0.latest?.destination.horizonID == nil && $0.latest?.destination.excavationID == nil })
         let replay = try RegulatorySourceImport.prepare(input, review: review, snapshot: MappingCommittedSnapshot(saved))
         XCTAssertEqual(replay.count(.unchanged), 11)

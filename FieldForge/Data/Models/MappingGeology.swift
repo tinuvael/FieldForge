@@ -144,7 +144,10 @@ struct TectonicStructureDraft: Equatable, Identifiable, Sendable {
     var orientation = ManualOrientationInput()
     var thickness = "", picket = "", position = "", description = ""
     var picketConvention = PicketConvention.tenMeters
-    init(id: UUID = UUID()) { self.id = id }
+    init(id: UUID = UUID(), reference: GeographicReference = .unknown) {
+        self.id = id
+        orientation.reference = reference
+    }
     func record() throws -> TectonicStructure {
         _ = try orientation.validatedTectonic()
         return TectonicStructure(id: id, type: type, orientation: orientation,
@@ -157,14 +160,17 @@ extension MappingDraft {
     var nextJointSetIdentifier: JointSetIdentifier? {
         JointSetIdentifier.routine.first { candidate in !jointSets.contains { $0.identifier == candidate } }
     }
-    mutating func addJointSet() {
+    mutating func addJointSet(reference: GeographicReference = .unknown) {
         guard let identifier = nextJointSetIdentifier else { return }
-        jointSets.append(newJointSet(identifier: identifier))
+        jointSets.append(newJointSet(identifier: identifier, reference: reference))
         jointSets.sort { $0.identifier.rawValue < $1.identifier.rawValue }
     }
     var spacingRQD: SpacingRQD { SpacingRQD(q: bartonQ, rmr: rmr89) }
-    func newJointSet(identifier: JointSetIdentifier) -> JointSetDraft {
-        var set = JointSetDraft(identifier: identifier); set.resetSpacingEstimate(spacingRQD); return set
+    func newJointSet(identifier: JointSetIdentifier, reference: GeographicReference = .unknown) -> JointSetDraft {
+        var set = JointSetDraft(identifier: identifier)
+        set.representative.reference = reference
+        set.resetSpacingEstimate(spacingRQD)
+        return set
     }
     mutating func updateSpacingEstimates() {
         let rqd = spacingRQD

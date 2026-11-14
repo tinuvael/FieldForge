@@ -3,38 +3,36 @@ import UIKit
 
 struct MappingJournalView: View {
     @EnvironmentObject private var mapping: MappingModel
+    var importedProjectID: UUID? = nil
+    var importedDataset: String? = nil
     @State private var query = MappingJournalQuery()
     @State private var scope: JournalScope?
     @State private var datesEnabled = false
     @State private var fromDate = Date()
     @State private var throughDate = Date()
-    private var projectID: UUID? { mapping.workflow?.context.projectID }
-    private var observations: [MappingObservation] {
+    @State private var selecting = false
+    @State private var selection: Set<UUID> = []
+    @State private var destination: SourceAssignment?
+    @State private var isRematching = false
+    @State private var message: String?
+    private var projectID: UUID? { importedProjectID ?? mapping.workflow?.context.projectID }
+    private var observations: [JournalObservation] { mapping.workflow?.committed.journalObservations(projectID: projectID) ?? [] }
+    private var visible: [JournalObservation] {
         var effective = query
         effective.startDate = datesEnabled ? fromDate : nil
         effective.endDate = datesEnabled ? throughDate : nil
-        return effective.apply(mapping.workflow?.observations ?? [], projectID: projectID)
+        return effective.journalRecords(observations, projectID: projectID)
     }
-    private var sourceObservations: [RegulatorySourceObservation] {
-        let search = query.picket.trimmingCharacters(in: .whitespacesAndNewlines)
-        return (mapping.workflow?.journal.regulatorySourceObservations ?? []).filter { record in
-            guard record.key.projectID == projectID, let version = record.latest else { return false }
-            return (query.horizonID == nil || version.destination.horizonID == query.horizonID) &&
-                (query.excavationID == nil || version.destination.excavationID == query.excavationID) &&
-                (search.isEmpty || record.key.sourceID.localizedCaseInsensitiveContains(search) || version.cells[1].localizedCaseInsensitiveContains(search))
-        }.sorted { $0.key.sourceID.localizedStandardCompare($1.key.sourceID) == .orderedAscending }
-    }
-    private var horizons: [MappingHorizon] { mapping.workflow?.horizons ?? [] }
+    private var horizons: [MappingHorizon] { (mapping.workflow?.journal.horizons ?? []).filter { $0.projectID == projectID } }
     private var excavations: [MappingExcavation] {
         (mapping.workflow?.journal.excavations ?? []).filter {
             $0.projectID == projectID && (query.horizonID == nil || $0.horizonIDs.contains(query.horizonID!))
         }
     }
     var body: some View {
-        let observations = self.observations
-        let sources = sourceObservations
-        let totalProjectRecords = (mapping.workflow?.committed.observationCount(projectID: projectID) ?? 0)
-            + (mapping.workflow?.journal.regulatorySourceObservations?.filter { $0.key.projectID == projectID }.count ?? 0)
+        let visible = self.visible
+        let datasets = Set(observations.compactMap(\.dataset)).sorted()
+        let selectable = visible.filter { $0.dataset != nil }
         List {
             Section {
                 Text(projectID.flatMap { mapping.workflow?.committed.projects[$0]?.name } ?? "Выберите проект в картировании")
@@ -45,6 +43,16 @@ struct MappingJournalView: View {
                 Button { scope = .excavation } label: {
                     LabeledContent("Выработка", value: excavations.first { $0.id == query.excavationID }?.name ?? "Все выработки")
                 }.accessibilityIdentifier("journalExcavationFilter")
+                if !datasets.isEmpty {
+                    Picker("Назначение горизонта", selection: $query.horizonStatus) {
+                        Text("Любое").tag(JournalObservation.HorizonStatus?.none)
+                        ForEach(JournalObservation.HorizonStatus.allCases) { Text($0.title).tag(Optional($0)) }
+                    }
+                    Picker("Набор Excel", selection: $query.dataset) {
+                        Text("Все наблюдения").tag(String?.none)
+                        ForEach(datasets, id: \.self) { Text($0).tag(Optional($0)) }
+                    }
+                }
                 Toggle("Период наблюдений", isOn: $datesEnabled).accessibilityIdentifier("journalDateFilter")
                 if datesEnabled {
                     DatePicker("С", selection: $fromDate, displayedComponents: .date)
@@ -56,37 +64,41 @@ struct MappingJournalView: View {
                     query = MappingJournalQuery(); datesEnabled = false
                 }.accessibilityIdentifier("journalClearFilters")
             }
-            Section("Наблюдения: \(observations.count + sources.count) из \(totalProjectRecords)") {
-                if let projectID, (mapping.workflow?.journal.regulatorySourceObservations?.contains { $0.key.projectID == projectID } ?? false) {
-                    NavigationLink {
-                        RegulatorySourceJournalView(projectID: projectID)
-                    } label: {
-                        Label("Назначить контекст исходным строкам Excel", systemImage: "mappin.and.ellipse")
+            if let projectID, !datasets.isEmpty {
+                Section("Назначение наблюдений Excel") {
+                    if let dataset = query.dataset ?? (datasets.count == 1 ? datasets.first : nil) {
+                        NavigationLink("Координаты набора и правила DXF") {
+                            RegulatoryDatasetSetupView(projectID: projectID, dataset: dataset)
+                        }
+                    }
+                    Button("Повторить поиск горизонтов") { rematch(projectID: projectID) }
+                        .disabled(isRematching || mapping.isSaving)
+                    if isRematching { ProgressView() }
+                    if let message { Text(message).font(.caption) }
+                    if selecting {
+                        Button("Выбрать видимые · \(selectable.count)") { selection.formUnion(selectable.map(\.id)) }
+                            .disabled(selectable.isEmpty)
+                        Button("Назначить выбранным · \(selection.count)") {
+                            destination = .init(projectID: projectID, ids: selection)
+                        }.disabled(selection.isEmpty || mapping.isSaving)
+                        Button("Завершить выбор") { selecting = false; selection.removeAll() }
+                    } else {
+                        Button("Выбрать наблюдения") { selecting = true }.disabled(selectable.isEmpty)
                     }
                 }
-                if observations.isEmpty && sources.isEmpty { Text("Нет наблюдений по выбранным условиям").accessibilityIdentifier("journalEmpty") }
-                ForEach(observations) { record in
-                    NavigationLink { MappingObservationDetail(record: record) } label: {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(name(excavation: record.excavationID)).font(.headline)
-                            Text(record.displayPicket).font(.subheadline)
-                            if let revision = mapping.workflow?.committed.latestRevisions[record.id] {
-                                Text("Версия \(revision.version) · исправлено \(MappingCorrectionDateText.format(revision.correctedAt))").font(.caption)
-                            }
-                            Text("\(MappingDateText.compact(record)) · \(name(horizon: record.horizonID))").font(.caption).foregroundStyle(.secondary)
-                        }.padding(.vertical, 4)
-                    }.accessibilityIdentifier("journalRecord-\(record.id.uuidString)")
-                }
-                ForEach(sources) { record in
-                    NavigationLink { RegulatorySourceObservationDetail(record: record) } label: {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("Источник · \(record.key.sourceID)").font(.headline)
-                            Text(record.latest.map { $0.cells[1].isEmpty ? "Пикет не указан в источнике" : "Пикет \($0.cells[1])" } ?? "Пикет не указан в источнике")
-                            let destination = record.latest?.destination
-                            Text("\(destination?.horizonID.flatMap { mapping.workflow?.committed.horizons[$0]?.displayName } ?? "Горизонт не назначен") · \(destination?.excavationID.flatMap { mapping.workflow?.committed.excavations[$0]?.name } ?? "Выработка не назначена")")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }.padding(.vertical, 4)
-                    }.accessibilityIdentifier("journalSourceRecord-\(record.id.uuidString)")
+            }
+            Section("Наблюдения: \(visible.count) из \(observations.count)") {
+                if visible.isEmpty { Text("Нет наблюдений по выбранным условиям").accessibilityIdentifier("journalEmpty") }
+                ForEach(visible) { record in
+                    if selecting && record.dataset != nil {
+                        Toggle(isOn: Binding(get: { selection.contains(record.id) }, set: { checked in
+                            if checked { selection.insert(record.id) } else { selection.remove(record.id) }
+                        })) { observationLabel(record) }
+                    } else {
+                        NavigationLink { JournalObservationDetail(observation: record) } label: { observationLabel(record) }
+                            .accessibilityIdentifier(record.dataset == nil ? "journalRecord-\(record.id.uuidString)" :
+                                "journalSourceRecord-\(record.id.uuidString)")
+                    }
                 }
             }
         }.accessibilityIdentifier("journalObservations")
@@ -102,9 +114,11 @@ struct MappingJournalView: View {
                 }
             }
             .background(JournalSearchAccessibility(identifier: "journalPicketSearch"))
-            .searchable(text: $query.picket, placement: .navigationBarDrawer(displayMode: .always), prompt: "Пикет или метры")
+            .searchable(text: $query.picket, placement: .navigationBarDrawer(displayMode: .always), prompt: "Пикет, метры или ID Excel")
             .onChange(of: query.horizonID) { _, _ in query.excavationID = nil }
-            .onChange(of: projectID) { _, _ in query = MappingJournalQuery(); datesEnabled = false }
+            .onChange(of: projectID) { _, _ in query = MappingJournalQuery(); datesEnabled = false; selection.removeAll() }
+            .onAppear { if let importedDataset { query.dataset = importedDataset } }
+            .sheet(item: $destination, onDismiss: { selection.removeAll() }) { SourceAssignmentView(assignment: $0) }
             .sheet(item: $scope) { scope in
                 switch scope {
                 case .horizon:
@@ -116,8 +130,57 @@ struct MappingJournalView: View {
                 }
             }
     }
-    private func name(horizon: UUID) -> String { mapping.workflow?.committed.horizons[horizon]?.displayName ?? horizon.uuidString }
-    private func name(excavation: UUID) -> String { mapping.workflow?.committed.excavations[excavation]?.name ?? excavation.uuidString }
+    private func observationLabel(_ record: JournalObservation) -> some View {
+        let committed = mapping.workflow?.committed
+        let context = record.context
+        return VStack(alignment: .leading, spacing: 6) {
+            Text(context.excavationID.flatMap { committed?.excavations[$0]?.name } ?? "Выработка не назначена").font(.headline)
+            Text(record.displayPicket).font(.subheadline)
+            if let revision = committed?.latestRevisions[record.id] {
+                Text("Версия \(revision.version) · исправлено \(MappingCorrectionDateText.format(revision.correctedAt))").font(.caption)
+            }
+            Text(context.horizonID.flatMap { committed?.horizons[$0]?.displayName } ?? record.horizonStatus.title)
+                .font(.caption).foregroundStyle(.secondary)
+            switch record {
+            case .native(let point): Text(MappingDateText.compact(point)).font(.caption)
+            case .source(let point): Text("Excel · \(point.key.dataset) · \(point.key.sourceID)").font(.caption).foregroundStyle(.secondary)
+            }
+        }.padding(.vertical, 4)
+    }
+
+    private func rematch(projectID: UUID) {
+        let dataset = query.dataset
+        let plans = mapping.planStore
+        isRematching = true
+        Task {
+            defer { isRematching = false }
+            do {
+                let count = try await mapping.persist { workflow in
+                    let next = try RegulatorySourceImport.rematching(projectID: projectID, dataset: dataset,
+                                                                       snapshot: workflow.committed, plans: plans)
+                    let before = workflow.journal.regulatorySourceObservations?.filter {
+                        $0.key.projectID == projectID && $0.latest?.destination.horizonID != nil
+                    }.count ?? 0
+                    let after = next.regulatorySourceObservations?.filter {
+                        $0.key.projectID == projectID && $0.latest?.destination.horizonID != nil
+                    }.count ?? 0
+                    if next != workflow.journal { try workflow.commit(next) }
+                    return after - before
+                }
+                message = "Определено горизонтов: \(count)."
+            } catch { message = error.localizedDescription }
+        }
+    }
+}
+
+struct JournalObservationDetail: View {
+    let observation: JournalObservation
+    var body: some View {
+        switch observation {
+        case .native(let record): MappingObservationDetail(record: record)
+        case .source(let record): RegulatorySourceObservationDetail(record: record)
+        }
+    }
 }
 
 private enum JournalScope: String, Identifiable {
@@ -302,104 +365,78 @@ enum MappingCorrectionDateText {
     }
 }
 
-private struct RegulatorySourceJournalView: View {
-    @EnvironmentObject private var mapping: MappingModel
+private struct SourceAssignment: Identifiable {
+    let id = UUID()
     let projectID: UUID
-    @State private var dataset: String?
-    @State private var filterHorizon: UUID?
-    @State private var onlyUnresolved = false
-    @State private var selection: Set<UUID> = []
+    let ids: Set<UUID>
+    var current: MappingContext? = nil
+}
+
+private struct SourceAssignmentView: View {
+    @EnvironmentObject private var mapping: MappingModel
+    @Environment(\.dismiss) private var dismiss
+    let assignment: SourceAssignment
     @State private var horizon: UUID?
     @State private var excavation: UUID?
-    @State private var message: String?
-    @State private var confirm = false
+    @State private var excavationOnly = false
+    @State private var error: String?
 
-    private var records: [RegulatorySourceObservation] {
-        (mapping.workflow?.journal.regulatorySourceObservations ?? []).filter { $0.key.projectID == projectID }
+    private var selected: [RegulatorySourceObservation] {
+        assignment.ids.compactMap { mapping.workflow?.committed.sourceByID[$0] }
     }
-    private var horizons: [MappingHorizon] {
-        (mapping.workflow?.journal.horizons ?? []).filter { $0.projectID == projectID }
-    }
-    private var excavations: [MappingExcavation] {
-        guard let horizon else { return [] }
-        return (mapping.workflow?.journal.excavations ?? []).filter { $0.projectID == projectID && $0.horizonIDs.contains(horizon) }
-    }
+    private var selectedHorizons: Set<UUID> { Set(selected.compactMap { $0.latest?.destination.horizonID }) }
+    private var allHaveHorizons: Bool { !selected.isEmpty && selected.allSatisfy { $0.latest?.destination.horizonID != nil } }
 
     var body: some View {
-        let records = self.records
-        let visible = records.filter {
-            (dataset == nil || $0.key.dataset == dataset) &&
-            (filterHorizon == nil || $0.latest?.destination.horizonID == filterHorizon) &&
-            (!onlyUnresolved || $0.latest?.destination.horizonID == nil)
-        }
-        List {
-            Section("Фильтры") {
-                Picker("Набор", selection: $dataset) {
-                    Text("Все наборы").tag(String?.none)
-                    ForEach(Set(records.map { $0.key.dataset }).sorted(), id: \.self) { Text($0).tag(Optional($0)) }
+        NavigationStack {
+            Form {
+                Picker("Назначить", selection: $excavationOnly) {
+                    Text("Горизонт и выработку").tag(false)
+                    Text("Только выработку").tag(true)
+                }.onChange(of: excavationOnly) { _, _ in excavation = nil }
+                if !excavationOnly {
+                    Picker("Горизонт", selection: $horizon) {
+                        Text("Без горизонта").tag(UUID?.none)
+                        ForEach((mapping.workflow?.journal.horizons ?? []).filter { $0.projectID == assignment.projectID }) {
+                            Text($0.displayName).tag(Optional($0.id))
+                        }
+                    }.onChange(of: horizon) { _, _ in excavation = nil }
                 }
-                Picker("Горизонт", selection: $filterHorizon) {
-                    Text("Все горизонты").tag(UUID?.none)
-                    ForEach(horizons) { Text($0.displayName).tag(Optional($0.id)) }
-                }
-                Toggle("Только без горизонта", isOn: $onlyUnresolved)
-                Button("Отметить видимые · \(visible.count)") { selection.formUnion(visible.map(\.id)) }
-                    .disabled(visible.isEmpty)
-            }
-            Section("Назначение · \(selection.count) выбрано") {
-                Picker("Горизонт", selection: $horizon) {
-                    Text("Без горизонта").tag(UUID?.none)
-                    ForEach(horizons) { Text($0.displayName).tag(Optional($0.id)) }
-                }.onChange(of: horizon) { _, _ in excavation = nil }
+                let requiredHorizons = excavationOnly ? selectedHorizons : Set([horizon].compactMap { $0 })
                 Picker("Выработка", selection: $excavation) {
                     Text("Без выработки").tag(UUID?.none)
-                    ForEach(excavations) { Text($0.name).tag(Optional($0.id)) }
+                    ForEach((mapping.workflow?.journal.excavations ?? []).filter {
+                        $0.projectID == assignment.projectID && !requiredHorizons.isEmpty && requiredHorizons.isSubset(of: $0.horizonIDs)
+                    }) { Text($0.name).tag(Optional($0.id)) }
                 }
-                Button("Назначить выбранным") { confirm = true }.disabled(selection.isEmpty || mapping.isSaving)
-                if !selection.isEmpty { Button("Снять отметки") { selection.removeAll() } }
-                if let message { Text(message).foregroundStyle(.red) }
-            }
-            Section("Наблюдения · \(visible.count)") {
-                ForEach(visible) { record in
-                    NavigationLink {
-                        RegulatorySourceObservationDetail(record: record)
-                    } label: {
-                        VStack(alignment: .leading) {
-                            Text(record.key.sourceID).font(.headline)
-                            if record.latest?.hasLocalEdits == true {
-                                Label("Есть правки журнала", systemImage: "pencil")
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                            let destination = record.latest?.destination
-                            Text(destination?.horizonID.flatMap { mapping.workflow?.committed.horizons[$0]?.displayName } ?? "Горизонт не назначен")
-                            Text(destination?.excavationID.flatMap { mapping.workflow?.committed.excavations[$0]?.name } ?? "Выработка не назначена")
-                        }.font(.subheadline)
+                if excavationOnly && !allHaveHorizons { Text("Сначала назначьте горизонт всем выбранным точкам.") }
+                if let error { Text(error).foregroundStyle(.red) }
+            }.navigationTitle("Назначение · \(assignment.ids.count)")
+                .onAppear { horizon = assignment.current?.horizonID; excavation = assignment.current?.excavationID }
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("Отмена") { dismiss() } }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Сохранить") { save() }.disabled(mapping.isSaving || (excavationOnly && !allHaveHorizons))
                     }
-                    Toggle("Отметить \(record.key.sourceID)", isOn: Binding(get: { selection.contains(record.id) }, set: { selected in
-                        if selected { selection.insert(record.id) }
-                        else { selection.remove(record.id) }
-                    }))
                 }
-            }
-        }
-        .navigationTitle("Наблюдения из Excel")
-        .alert("Назначить контекст выбранным наблюдениям?", isPresented: $confirm) {
-            Button("Назначить") { assign() }
-            Button("Отмена", role: .cancel) {}
         }
     }
 
-    private func assign() {
-        let ids = selection
-        let destination = MappingContext(projectID: projectID, horizonID: horizon, excavationID: excavation)
+    private func save() {
+        let ids = assignment.ids
+        let context = MappingContext(projectID: assignment.projectID, horizonID: horizon, excavationID: excavation)
+        let onlyExcavation = excavationOnly
+        let projectID = assignment.projectID
         Task {
             do {
                 try await mapping.persist { workflow in
-                    try workflow.commit(RegulatorySourceImport.assigning(ids, destination: destination, journal: workflow.journal))
+                    let next = try onlyExcavation
+                        ? RegulatorySourceImport.assigningExcavation(context.excavationID, ids: ids, projectID: projectID, journal: workflow.journal)
+                        : RegulatorySourceImport.assigning(ids, destination: context, journal: workflow.journal)
+                    if next != workflow.journal { try workflow.commit(next) }
                 }
-                selection.removeAll()
-                message = nil
-            } catch { message = error.localizedDescription }
+                dismiss()
+            } catch { self.error = error.localizedDescription }
         }
     }
 }
@@ -407,10 +444,11 @@ private struct RegulatorySourceJournalView: View {
 struct RegulatorySourceObservationDetail: View {
     @EnvironmentObject private var mapping: MappingModel
     @State private var editing: RegulatorySourceObservation?
+    @State private var assignment: SourceAssignment?
     private let snapshot: RegulatorySourceObservation
     init(record: RegulatorySourceObservation) { snapshot = record }
     private var record: RegulatorySourceObservation {
-        mapping.workflow?.journal.regulatorySourceObservations?.first { $0.id == snapshot.id } ?? snapshot
+        mapping.workflow?.committed.sourceByID[snapshot.id] ?? snapshot
     }
 
     var body: some View {
@@ -421,11 +459,53 @@ struct RegulatorySourceObservationDetail: View {
                 LabeledContent("UUID", value: record.id.uuidString)
                 Button("Исправить геологические данные") { editing = record }.disabled(mapping.isSaving)
             }
+            if let version = record.latest {
+                let point = JournalObservation.source(record)
+                let committed = mapping.workflow?.committed
+                Section("Расположение") {
+                    LabeledContent("Горизонт", value: point.context.horizonID.flatMap { committed?.horizons[$0]?.displayName } ?? "Не назначен")
+                    LabeledContent("Выработка", value: point.context.excavationID.flatMap { committed?.excavations[$0]?.name } ?? "Не назначена")
+                    Text(point.horizonStatus.title)
+                    if let issue = version.matchingIssue { Text(issue.title).font(.caption) }
+                    if let reason = committed?.sourceDisplayIssue(record) { Label(reason, systemImage: "map").font(.caption) }
+                    Button("Назначить горизонт или выработку") {
+                        assignment = .init(projectID: record.key.projectID, ids: [record.id], current: point.context)
+                    }.disabled(mapping.isSaving)
+                    NavigationLink("Координаты набора и правила DXF") {
+                        RegulatoryDatasetSetupView(projectID: record.key.projectID, dataset: record.key.dataset)
+                    }
+                }
+                Section("Координаты") {
+                    ForEach(Array(zip(["X", "Y", "Z, м"], version.cells[2...4])), id: \.0) { label, value in
+                        LabeledContent(label, value: value.isEmpty ? "Неизвестно" : value).textSelection(.enabled)
+                    }
+                    if let coordinates = point.coordinates {
+                        LabeledContent("Единицы XY", value: coordinates.units.isEmpty ? "Неизвестны" : MappingCoordinateText.xyUnit(coordinates.units))
+                    }
+                }
+            }
             ForEach(record.versions.indices.reversed(), id: \.self) { index in
                 let version = record.versions[index]
                 DisclosureGroup("Версия \(index + 1) · строка \(version.sourceRow)") {
                     LabeledContent("Сохранено", value: version.savedAt.formatted())
                     LabeledContent("Источник версии", value: versionOrigin(version))
+                    LabeledContent("Север", value: version.northReference.title)
+                    if let issue = version.matchingIssue { Text(issue.title) }
+                    switch version.resolution {
+                    case .geometry(let id, let hash, let rule):
+                        LabeledContent("Ревизия DXF", value: mapping.workflow?.committed.plan(id: id)?.version ?? id.uuidString)
+                        LabeledContent("SHA-256 DXF", value: hash)
+                        LabeledContent("Допуски XY / Z, м", value: "\(rule.maximumXYMeters) / \(rule.maximumZMeters)")
+                        if let evidence = version.geometryEvidence {
+                            LabeledContent("Сегмент", value: evidence.segment.handle ?? "#\(evidence.segment.entityOrdinal)")
+                            LabeledContent("Z сегмента, м", value: ElevationInput.text(evidence.projectedZMeters))
+                            LabeledContent("Расхождения XY / Z, м", value: "\(evidence.xyDistanceMeters) / \(evidence.zDifferenceMeters)")
+                        }
+                    case .elevationRange(let range):
+                        LabeledContent("Подтверждённый диапазон Z, м", value: "\(range.minimum)…\(range.maximum)")
+                    case .retained: Text("Сохранён прежний горизонт; исходное подтверждение см. в истории.")
+                    case nil: EmptyView()
+                    }
                     LabeledContent("SHA-256 книги", value: version.workbookSHA256)
                     LabeledContent("Датум Z", value: version.frame.verticalDatum.isEmpty ? "Неизвестен" : version.frame.verticalDatum)
                     LabeledContent("Система координат XY", value: version.frame.crs.isEmpty ? "Неизвестна" : version.frame.crs)
@@ -465,6 +545,7 @@ struct RegulatorySourceObservationDetail: View {
                 }
             }
         }.navigationTitle("Исходное наблюдение")
+            .sheet(item: $assignment) { SourceAssignmentView(assignment: $0) }
             .sheet(item: $editing) { record in
                 NavigationStack { RegulatorySourceCorrectionEditor(record: record) }
             }
@@ -497,12 +578,14 @@ private struct RegulatorySourceCorrectionEditor: View {
     @Environment(\.dismiss) private var dismiss
     let record: RegulatorySourceObservation
     @State private var cells: [String]
+    @State private var north: GeographicReference
     @State private var activeColumn: Int?
     @State private var error: String?
 
     init(record: RegulatorySourceObservation) {
         self.record = record
         _cells = State(initialValue: record.latest?.cells ?? [])
+        _north = State(initialValue: record.latest?.northReference ?? .unknown)
     }
 
     var body: some View {
@@ -512,6 +595,9 @@ private struct RegulatorySourceCorrectionEditor: View {
                     guard !cells[5].isEmpty else { return nil }
                     return RockLithology(code: cells[5], name: nil)
                 }, set: { cells[5] = $0?.code ?? "" }), projectID: record.key.projectID)
+                Picker("Север для азимутов этой строки", selection: $north) {
+                    ForEach(GeographicReference.manualChoices, id: \.self) { Text($0.title).tag($0) }
+                }
                 Section {
                     ForEach(RegulatorySourceImport.editableFields.filter { $0 != 5 }, id: \.self) { column in
                         field(column)
@@ -519,16 +605,18 @@ private struct RegulatorySourceCorrectionEditor: View {
                 } header: {
                     Text("Измерения и категории Data")
                 } footer: {
-                    Text("Пустое поле сохраняется без значения. Углы сохраняются как данные источника с неизвестным типом севера.")
+                    Text("Пустое поле сохраняется без значения. Смена вида севера сохраняет исходные числовые значения азимутов.")
                 }
             }
             if let error { Text(error).foregroundStyle(.red) }
         }
+        .scrollDismissesKeyboard(.interactively)
         .navigationTitle("Исправление наблюдения")
         .toolbar {
             ToolbarItem(placement: .cancellationAction) { Button("Отмена") { dismiss() } }
             ToolbarItem(placement: .confirmationAction) {
-                Button("Сохранить") { save() }.disabled(mapping.isSaving || cells == record.latest?.cells)
+                Button("Сохранить") { save() }
+                    .disabled(mapping.isSaving || (cells == record.latest?.cells && north == record.latest?.northReference))
             }
         }
     }
@@ -579,10 +667,11 @@ private struct RegulatorySourceCorrectionEditor: View {
             if column != 5 { edited[column] = edited[column].replacingOccurrences(of: ",", with: ".") }
         }
         let fields = edited
+        let reference = north == record.latest?.northReference ? nil : north
         Task {
             do {
                 try await mapping.persist { workflow in
-                    try workflow.commit(RegulatorySourceImport.editing(record, fields: fields, journal: workflow.journal))
+                    try workflow.commit(RegulatorySourceImport.editing(record, fields: fields, journal: workflow.journal, north: reference))
                 }
                 dismiss()
             } catch { self.error = error.localizedDescription }

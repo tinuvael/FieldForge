@@ -12,7 +12,7 @@ struct MappingMeasurementSheet: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var captureActive = false
     @Environment(\.dismiss) private var dismiss
-    @State private var input = ManualOrientationInput()
+    @State private var input = ManualOrientationInput(reference: .defaultForNewMeasurement())
     @State private var notes = ""
     @State private var error: String?
     @State private var added = false

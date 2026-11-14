@@ -4,6 +4,7 @@ import UIKit
 struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
     @State private var export: ExportFile?
+    @AppStorage(GeographicReference.defaultMeasurementKey) private var defaultNorth = GeographicReference.unknown
     var body: some View {
         Form {
             Section("О прототипе") {
@@ -20,6 +21,10 @@ struct SettingsView: View {
                 }
             }
             Section("Ручной ввод") {
+                Picker("Север новых замеров", selection: $defaultNorth) {
+                    ForEach(GeographicReference.manualChoices, id: \.self) { Text($0.title).tag($0) }
+                }.accessibilityIdentifier("defaultMeasurementNorth")
+                Text("Датчик iPhone сохраняет фактическую опору своего измерения.")
                 Text("Магнитный, истинный и сеточный азимуты не пересчитываются.")
                 Text("При 0° оставьте азимут пустым. При 90° можно явно задать условную сторону падения. Ручные записи и показания датчиков хранятся в общем журнале.")
             }
