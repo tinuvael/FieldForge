@@ -2,6 +2,50 @@ import XCTest
 import UIKit
 
 final class P2MappingUITests: XCTestCase {
+    @MainActor func testRegulatoryExcelImportSummaryAndUnifiedJournal() throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchArguments = ["--ui-testing"]
+        app.launchEnvironment["FIELD_FORGE_TEST_RUN_ID"] = UUID().uuidString
+        let fixture = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "regulatory-production-demo", withExtension: "xlsx", subdirectory: "Fixtures"))
+        app.launchEnvironment["FIELD_FORGE_UI_EXCEL"] = try Data(contentsOf: fixture).base64EncodedString()
+        app.launch()
+        create("projectPicker", value: "Demo", app: app)
+        select("projectPicker", value: "Demo", app: app)
+        app.buttons["mappingJournal"].tap()
+        app.buttons["mappingExchangeImportAction"].tap()
+        let fixtureButton = app.buttons["uiExcelFixture"]
+        XCTAssertTrue(fixtureButton.waitForExistence(timeout: 10))
+        fixtureButton.tap()
+
+        let dataset = app.textFields["regulatoryDatasetName"]
+        XCTAssertTrue(dataset.waitForExistence(timeout: 10))
+        dataset.tap()
+        let done = app.keyboards.buttons["Done"]
+        if done.exists { done.tap() }
+        else { app.buttons["Готово"].tap() }
+        let importButton = app.buttons["importSourceObservations"]
+        XCTAssertTrue(importButton.waitForExistence(timeout: 10))
+        let summary = app.descendants(matching: .any)["sourceUnresolvedCount"].firstMatch
+        reveal(summary, app: app)
+        screenshot("Excel import summary", app: app)
+        reveal(importButton, app: app, down: true)
+        importButton.tap()
+        app.alerts.buttons["Импортировать"].tap()
+
+        let journal = app.buttons["openImportedJournal"]
+        XCTAssertTrue(journal.waitForExistence(timeout: 15))
+        journal.tap()
+        let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "journalSourceRecord-"))
+        let first = rows.firstMatch
+        reveal(first, app: app)
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS %@", "4 из 4")).firstMatch.exists)
+        screenshot("Unified project journal", app: app)
+        first.tap()
+        XCTAssertTrue(app.staticTexts["Расположение"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Вертикальный датум набора неизвестен."].exists)
+    }
+
     @MainActor func testAutomaticDXFElevationAndManualReview() throws {
         continueAfterFailure = false
         let app = XCUIApplication(); app.launchArguments = ["--ui-testing"]

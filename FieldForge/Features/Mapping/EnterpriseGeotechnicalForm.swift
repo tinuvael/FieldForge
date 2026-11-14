@@ -59,7 +59,7 @@ private struct LithologyDictionaryEditor: View {
                 Text("Коды добавляются по принятому справочнику предприятия. Сохранённые коды и названия наблюдений остаются неизменными.").font(.caption)
             }
             Section("Добавить код") {
-                TextField("Числовой код ROCK", text: $code).keyboardType(.decimalPad).focused($focused).accessibilityIdentifier("rockCode")
+                TextField("Код ROCK", text: $code).textInputAutocapitalization(.never).autocorrectionDisabled().focused($focused).accessibilityIdentifier("rockCode")
                 TextField("Название · необязательно", text: $name).focused($focused).accessibilityIdentifier("rockName")
                 Button("Добавить") {
                     Task { do {

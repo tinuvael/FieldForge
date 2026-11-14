@@ -27,6 +27,7 @@ struct RegulatoryDataManifest: Codable, Sendable {
         let explicitlyAssigned: Bool
         var revision: Int? = nil
         var fingerprint: String? = nil
+        var north: GeographicReference? = nil
     }
 
     let workbookID: UUID
@@ -63,7 +64,7 @@ struct RegulatoryDataManifest: Codable, Sendable {
             SourceBinding(sourceObservationID: row.id, projectID: row.key.projectID, dataset: row.key.dataset,
                 sourceID: row.key.sourceID, row: row.firstRow, frame: row.frame,
                 destination: row.destination, explicitlyAssigned: row.explicitlyAssigned,
-                revision: row.revision, fingerprint: row.fingerprint)
+                revision: row.revision, fingerprint: row.fingerprint, north: row.north)
         }
         self.bindings = bindings
     }
@@ -87,6 +88,7 @@ struct RegulatoryDataManifest: Codable, Sendable {
                   !source.dataset.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   source.dataset.utf8.count <= 256, !source.sourceID.isEmpty, source.sourceID.utf8.count <= 256,
                   source.frame.valid, source.destination.projectID == source.projectID,
+                  source.north.map(GeographicReference.manualChoices.contains) ?? true,
                   (source.revision == nil) == (source.fingerprint == nil),
                   source.revision.map({ $0 >= 0 }) ?? true,
                   source.fingerprint.map({ $0.range(of: #"^[a-f0-9]{64}$"#, options: .regularExpression) != nil }) ?? true else { throw error }

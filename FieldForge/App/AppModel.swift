@@ -12,8 +12,9 @@ enum MeasurementMode: String, CaseIterable {
     @Published var errorMessage: String?
     @Published var notes = ""
     @Published private(set) var mode = MeasurementMode.automatic
-    @Published var manualInput = ManualOrientationInput()
+    @Published var manualInput = ManualOrientationInput(reference: .defaultForNewMeasurement())
     @Published var manualNotes = ""
+    private var hasOpenedManualEntry = false
     @Published private(set) var savedManual: Measurement?
     let acquisition: MeasurementAcquisition
     var session: MeasurementSession { acquisition.session }
@@ -121,6 +122,11 @@ enum MeasurementMode: String, CaseIterable {
         } catch { errorMessage = "Не удалось сохранить: \(error.localizedDescription)" }
     }
     func setMode(_ value: MeasurementMode) {
+        if value == .manual, mode != .manual, manualInput.dipAngleText.isEmpty,
+           manualInput.dipDirectionText.isEmpty, manualNotes.isEmpty, savedManual == nil {
+            if !hasOpenedManualEntry { manualInput.reference = .defaultForNewMeasurement() }
+        }
+        if value == .manual { hasOpenedManualEntry = true }
         mode = value
         acquisition.setAutomatic(value == .automatic)
     }
@@ -136,7 +142,7 @@ enum MeasurementMode: String, CaseIterable {
         } catch { errorMessage = "Не удалось сохранить: \(error.localizedDescription)" }
     }
     func newManualObservation() {
-        manualInput = ManualOrientationInput(); manualNotes = ""; savedManual = nil
+        manualInput = ManualOrientationInput(reference: .defaultForNewMeasurement()); manualNotes = ""; savedManual = nil
     }
     func delete(at offsets: IndexSet) {
         guard storageWritable, !backupInProgress, let store else { return }

@@ -73,6 +73,11 @@ extension MappingJournal {
         }) {
             result.append("Привязка исходных наблюдений Excel к геометрии")
         }
+        if projects.contains(where: { project in
+            project.regulatoryDatasets?.values.contains { $0.plans[id] != nil } == true
+        }) {
+            result.append("Подтверждённая связь системы координат набора Excel и DXF")
+        }
         // Qualified matching metadata can establish compatibility without an explicit edge.
         if let plan = plans.first(where: { $0.id == id && !$0.isDeleted }), plans.contains(where: {
             $0.id != id && !$0.isDeleted && PlanCoordinateCompatibility.compatible(plan, $0, plans: plans)

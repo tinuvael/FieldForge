@@ -4,7 +4,7 @@ struct WedgesView: View {
     @EnvironmentObject private var mapping: MappingModel
     @State private var axisText = ""
     @State private var axisFocused = false
-    @State private var axisNorth = GeographicReference.unknown
+    @State private var axisNorth = GeographicReference.defaultForNewMeasurement()
     @State private var axisCapture: WedgeAxisCapture?
     @State private var axisEdited = true
     @State private var width = WedgeDimensionInput()

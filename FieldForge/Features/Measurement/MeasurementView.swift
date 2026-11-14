@@ -63,7 +63,7 @@ struct MeasurementView: View {
             }
             .padding().background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
             HStack(spacing: 20) {
-                CompassView(direction: model.displayed?.orientation.dipDirection)
+                CompassView(direction: model.displayed?.orientation.dipDirection, reference: model.displayed?.reference ?? .unavailable)
                 InclinationView(dip: model.displayed?.orientation.dipAngle)
             }.frame(height: 180)
             if let measurement = model.displayed {
@@ -120,12 +120,23 @@ struct MeasurementView: View {
 
 struct CompassView: View {
     let direction: Double?
+    let reference: GeographicReference
+
+    private var northMark: String {
+        switch reference {
+        case .magneticNorth: "См"
+        case .trueNorth: "Си"
+        case .gridNorth: "Сс"
+        case .simulatedNorth: "С · DEMO"
+        case .unknown, .unavailable: "—"
+        }
+    }
     var body: some View {
         GeometryReader { geometry in
             let size = min(geometry.size.width, geometry.size.height)
             ZStack {
                 Circle().stroke(.secondary.opacity(0.3), lineWidth: 2)
-                Text("С").offset(y: -size * 0.39)
+                Text(northMark).offset(y: -size * 0.39)
                 Text("Ю").offset(y: size * 0.39)
                 Text("В").offset(x: size * 0.39)
                 Text("З").offset(x: -size * 0.39)
@@ -136,7 +147,7 @@ struct CompassView: View {
             }.font(.caption.weight(.semibold)).frame(width: size, height: size)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }.accessibilityElement(children: .ignore)
-            .accessibilityLabel("Компас: \(AngleText.format(direction, azimuth: true))")
+            .accessibilityLabel("Компас · \(reference.title) · \(AngleText.format(direction, azimuth: true))")
     }
 }
 

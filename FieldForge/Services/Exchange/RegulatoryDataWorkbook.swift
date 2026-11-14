@@ -96,25 +96,26 @@ enum RegulatoryDataWorkbook {
                     case .text("-"): break
                     case .text(let value) where isText || editable.contains(column) && value == ExchangeObservationProposal.clear:
                         values[column] = value
+                    case .number(let raw) where column == 5:
+                        values[column] = raw
+                        numericRock = !productionLayout && !sourceBoundRow
                     case .text(let raw) where (productionLayout || sourceBoundRow) && (2...4).contains(column),
                          .number(let raw) where (productionLayout || sourceBoundRow) && (2...4).contains(column),
-                         .number(let raw) where (productionLayout || sourceBoundRow) && (!isText || column == 5):
+                         .number(let raw) where (productionLayout || sourceBoundRow) && !isText:
                         // Retain Excel's exact decimal spelling as source evidence.
                         // Spatial comparisons use the finite numeric interpretation.
                         if RegulatoryDataWorkbook.sourceNumber(raw) != nil {
                             values[column] = raw
-                            numericRock = numericRock || column == 5
                         } else {
                             issues.append("\(location): требуется конечное десятичное число.")
                         }
-                    case .number(let raw) where !isText || column == 5:
+                    case .number(let raw) where !isText:
                         do {
                             guard let value = try ExchangeObservationProposal.number(raw, field: location, required: true),
                                   value == 0 || abs(value) >= Double.leastNormalMagnitude else {
                                 throw ExchangeImportError("Значение вне числового диапазона Excel.")
                             }
                             values[column] = decimal(value)
-                            if column == 5 { numericRock = true }
                         } catch {
                             issues.append("\(location): невозможно прочитать число без потери точности.")
                         }

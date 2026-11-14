@@ -67,7 +67,7 @@ struct MappingCorrectionEditor: View {
                 RockLithologyField(rock: $draft.fields.rock, projectID: draft.baseline.projectID)
                 MappingGeologyForm(sets: $draft.fields.jointSets, structures: $draft.fields.tectonicStructures,
                     measurements: draft.initial.measurements, historicalSets: (draft.baseline.geology?.jointSets ?? []).filter { !$0.identifier.isRoutine },
-                    addSet: { draft.fields.addJointSet() }, spacingRQD: draft.fields.spacingRQD)
+                    addSet: { draft.fields.addJointSet(reference: .defaultForNewMeasurement()) }, spacingRQD: draft.fields.spacingRQD)
                 MappingRatingsForm(q: $draft.fields.bartonQ, rmr: $draft.fields.rmr89, gsi: $draft.fields.gsi,
                                    regulatory: $draft.fields.regulatory, focus: $focused, savedRMR: draft.baseline.ratings?.rmr89)
                 Section("Примечания") {

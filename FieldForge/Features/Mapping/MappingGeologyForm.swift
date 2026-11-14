@@ -95,7 +95,7 @@ struct MappingTectonicsForm: View {
                         }.buttonStyle(.borderless).accessibilityLabel("Удалить структуру из черновика")
                     }
                 }
-                Button("Добавить структуру") { structures.append(TectonicStructureDraft()) }
+                Button("Добавить структуру") { structures.append(TectonicStructureDraft(reference: .defaultForNewMeasurement())) }
                     .accessibilityIdentifier("addTectonicStructure")
             }
         }

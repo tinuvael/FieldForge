@@ -30,6 +30,20 @@ struct MappingExchangeImportView: View {
                 }.disabled(applying)
                 Button("Выбрать книгу Excel…", systemImage: "doc.badge.plus") { picker = true }
                     .accessibilityIdentifier("exchangeSelectWorkbook").disabled(applying)
+                #if DEBUG && targetEnvironment(simulator)
+                if ProcessInfo.processInfo.arguments.contains("--ui-testing"),
+                   let encoded = ProcessInfo.processInfo.environment["FIELD_FORGE_UI_EXCEL"],
+                   let bytes = Data(base64Encoded: encoded) {
+                    Button("Тестовая книга Excel") {
+                        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Тестовый набор.xlsx")
+                        do {
+                            try bytes.write(to: url, options: .atomic)
+                            selectedURL = url
+                            prepare(url)
+                        } catch { applyError = error.localizedDescription }
+                    }.accessibilityIdentifier("uiExcelFixture")
+                }
+                #endif
                 if let selectedURL { LabeledContent("Файл", value: selectedURL.lastPathComponent) }
                 if state.busy {
                     ProgressView("Проверка книги…")
@@ -45,7 +59,8 @@ struct MappingExchangeImportView: View {
                 }
             }
             if kind == .regulatoryData, selectedURL != nil,
-               state.preview?.productionInput == nil || state.preview?.workbookBlocked == false, let workflow = mapping.workflow {
+               let preview = state.preview, preview.productionInput == nil || (!preview.workbookBlocked && !preview.records.isEmpty),
+               let workflow = mapping.workflow {
                 assignmentSection(workflow.journal)
             }
             if let report {
@@ -54,7 +69,7 @@ struct MappingExchangeImportView: View {
                     Button("Проверить эту книгу снова") { prepare(selectedURL) }.disabled(applying)
                 }
             } else if let preview = state.preview, let selectedURL, let input = preview.productionInput {
-                if !preview.workbookBlocked {
+                if !preview.workbookBlocked && !preview.records.isEmpty {
                     previewSections(preview, stale: state.stale, mixed: true)
                 }
                 RegulatorySourceImportSection(input: input, notices: preview.workbookBlockReasons, url: selectedURL,
@@ -65,6 +80,7 @@ struct MappingExchangeImportView: View {
                 previewSections(preview, stale: state.stale)
             }
         }
+        .scrollDismissesKeyboard(.interactively)
         .navigationTitle("Импорт Excel")
         .navigationBarBackButtonHidden(applying)
         .fileImporter(isPresented: $picker, allowedContentTypes: [UTType(filenameExtension: "xlsx") ?? .data]) { result in
@@ -436,173 +452,178 @@ private struct RegulatorySourceImportSection: View {
     @State private var plan: RegulatorySourceImport.Plan?
     @State private var task: Task<Void, Never>?
     @State private var message: String?
-    @State private var rangeHorizon: UUID?
-    @State private var minimum = ""
-    @State private var maximum = ""
-    @State private var geometryPlan: UUID?
-    @State private var geometryExcavation: UUID?
-    @State private var maximumXY = ""
-    @State private var maximumZ = ""
-    @State private var groupHorizon: UUID?
-    @State private var unresolvedGroup = false
-    @State private var bulkHorizon: UUID?
-    @State private var bulkExcavation: UUID?
-    @State private var selectedSources: Set<String> = []
+    @State private var saved = false
+    @State private var didInitialize = false
+    @State private var editingSettings = false
+    @FocusState private var datasetFocused: Bool
     @State private var confirm = false
 
     init(input: RegulatorySourceImport.Input, notices: [String], url: URL, native: MappingExchangePreview?,
          nativePreviewCurrent: Bool) {
         self.input = input; self.notices = notices; self.url = url; self.native = native
         self.nativePreviewCurrent = nativePreviewCurrent
-        _review = State(initialValue: RegulatorySourceImport.Review(projectID: input.suggestedProjectID,
-            dataset: input.suggestedDataset ?? "", frame: input.suggestedFrame ?? .init(),
-            frameConfirmed: input.suggestedFrame != nil))
     }
 
     private var snapshot: MappingCommittedSnapshot? { mapping.workflow?.committed }
-    private var horizons: [MappingHorizon] {
-        snapshot?.journal.horizons.filter { $0.projectID == review.projectID } ?? []
-    }
+    private var dataset: String { review.dataset.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     var body: some View {
-        if input.bindings.isEmpty { sourceSetupSections }
-        importSection
+        Group {
+            Section("Импорт наблюдений") {
+                if saved {
+                    Label("Наблюдения сохранены", systemImage: "checkmark.circle")
+                    NavigationLink("Открыть журнал") {
+                        MappingJournalView(importedProjectID: review.projectID, importedDataset: input.bindings.isEmpty ? dataset : input.suggestedDataset)
+                    }.accessibilityIdentifier("openImportedJournal")
+                } else {
+                    if input.bindings.isEmpty { sourceSetup }
+                    if let message { Text(message).foregroundStyle(.orange) }
+                    if task != nil {
+                        ProgressView("Обработка набора…")
+                        Button("Отменить", role: .cancel) { task?.cancel() }.disabled(mapping.isSaving)
+                    }
+                    if let plan, !plan.blocked, (plan.canApply || native?.records.contains(where: \.canApply) == true) {
+                        Button("Импортировать наблюдения") { datasetFocused = false; confirm = true }
+                            .buttonStyle(.borderedProminent).disabled(!canSave(plan)).accessibilityIdentifier("importSourceObservations")
+                    } else if let plan, !plan.blocked, plan.count(.unchanged) > 0 {
+                        NavigationLink("Открыть журнал") {
+                            MappingJournalView(importedProjectID: review.projectID, importedDataset: input.bindings.isEmpty ? dataset : input.suggestedDataset)
+                        }
+                    }
+                    if let plan { summary(plan) }
+                    if !notices.isEmpty {
+                        DisclosureGroup("Сведения о формате") {
+                            ForEach(notices, id: \.self) { Text($0).font(.caption) }
+                        }
+                    }
+                    if plan == nil, task == nil {
+                        Button("Проверить импорт") { compare() }.disabled(review.projectID == nil && input.bindings.isEmpty)
+                    }
+                }
+            }
+            if !saved, let plan {
+                if plan.blocked || plan.count(.invalid) > 0 {
+                    Section("Строки, требующие внимания") {
+                        if plan.blocked && plan.count(.conflict) == 0 {
+                            Text("Повторяются исходные ID. Исправьте идентификаторы в книге.")
+                        }
+                        let invalid = plan.changes.filter { $0.kind == .invalid }
+                        if !invalid.isEmpty {
+                            DisclosureGroup("Ошибки строк · \(invalid.count)") {
+                                ForEach(invalid) { change in
+                                    LabeledContent("Data!\(change.row) · \(change.sourceID)", value: change.reason)
+                                }
+                            }
+                        }
+                        conflictControls(plan)
+                    }
+                }
+                if !nativeReady { Text("Проверьте обычные наблюдения из этой книги.").foregroundStyle(.orange) }
+            }
+        }
+        .alert("Импортировать наблюдения одним пакетом?", isPresented: $confirm) {
+            Button("Импортировать") { apply() }
+            Button("Отмена", role: .cancel) {}
+        } message: {
+            if let plan, plan.count(.invalid) > 0 { Text("Строки с ошибками будут пропущены: \(plan.count(.invalid)).") }
+        }
+        .sheet(isPresented: $editingSettings, onDismiss: compare) {
+            NavigationStack {
+                Form { RegulatoryDatasetSettingsFields(review: $review) }
+                    .navigationTitle("Параметры набора")
+                    .scrollDismissesKeyboard(.interactively)
+                    .toolbar { Button("Готово") { editingSettings = false; compare() } }
+            }
+        }
+        .onAppear {
+            guard !didInitialize else { return }
+            didInitialize = true
+            review.projectID = input.suggestedProjectID ?? mapping.workflow?.context.projectID
+            let exactDatasets = Set((snapshot?.journal.regulatorySourceObservations ?? []).filter {
+                $0.key.projectID == review.projectID && $0.versions.contains { $0.workbookSHA256 == input.workbookSHA256 }
+            }.map(\.key.dataset))
+            review.dataset = input.suggestedDataset ?? (exactDatasets.count == 1 ? exactDatasets.first : nil) ??
+                url.deletingPathExtension().lastPathComponent
+            loadDataset()
+            compare()
+        }
+        .onDisappear { task?.cancel() }
     }
 
-    @ViewBuilder private var sourceSetupSections: some View {
-        Section("Набор наблюдений") {
-            LabeledContent("Исходные наблюдения", value: String(input.rows.count))
+    private var sourceSetup: some View {
+        Group {
             Picker("Проект", selection: $review.projectID) {
                 Text("Выберите проект").tag(UUID?.none)
                 ForEach(snapshot?.journal.projects ?? []) { Text($0.name).tag(Optional($0.id)) }
-            }.onChange(of: review.projectID) { _, _ in
-                review.ranges = [:]
-                review.geometryRules = [:]
-                review.assignments = [:]
-                selectedSources = []
-                rangeHorizon = nil
-                geometryPlan = nil
-                plan = nil
-            }
-            TextField("Постоянное имя набора данных", text: $review.dataset)
-                .textInputAutocapitalization(.never)
-                .onChange(of: review.dataset) { _, _ in
-                    review.assignments = [:]
-                    review.resolutions = [:]
-                    review.frameConfirmed = false
-                    selectedSources = []
-                    plan = nil
-                    let dataset = review.dataset.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let savedFrames = (snapshot?.journal.regulatorySourceObservations ?? []).compactMap { record in
-                        record.key.projectID == review.projectID && record.key.dataset == dataset ? record.latest?.frame : nil
+            }.onChange(of: review.projectID) { _, _ in loadDataset(); compare() }
+            TextField("Постоянное имя набора", text: $review.dataset)
+                .textInputAutocapitalization(.never).submitLabel(.done).focused($datasetFocused)
+                .accessibilityIdentifier("regulatoryDatasetName")
+                .onSubmit { datasetFocused = false }
+                .onChange(of: review.dataset) { _, _ in plan = nil }
+                .onChange(of: datasetFocused) { _, focused in if !focused { loadDataset(); compare() } }
+                .toolbar {
+                    if datasetFocused {
+                        ToolbarItemGroup(placement: .keyboard) {
+                            Spacer()
+                            Button("Готово") { datasetFocused = false }
+                        }
                     }
-                    if let frame = savedFrames.first, savedFrames.allSatisfy({ $0 == frame }) { review.frame = frame }
                 }
             let datasets = Set((snapshot?.journal.regulatorySourceObservations ?? [])
-                .filter { $0.key.projectID == review.projectID }.map { $0.key.dataset })
+                .filter { $0.key.projectID == review.projectID }.map(\.key.dataset))
             if !datasets.isEmpty {
-                Menu("Сохранённые наборы") {
+                Menu("Выбрать существующий набор") {
                     ForEach(datasets.sorted(), id: \.self) { name in
-                        Button(name) { review.dataset = name }
+                        Button(name) { review.dataset = name; loadDataset(); compare() }
                     }
                 }
             }
-            Text("Для следующей версии книги выберите тот же набор данных.")
-                .font(.caption)
-        }
-        .disabled(task != nil)
-
-        Section("Координаты набора") {
-            TextField("Система координат XY", text: $review.frame.crs)
-            TextField("Оси XY", text: $review.frame.axes)
-            Picker("Единицы XY", selection: $review.frame.xyUnits) {
-                Text("Неизвестны").tag("")
-                Text("Метры").tag("m")
-                Text("Миллиметры").tag("mm")
-                Text("Единицы чертежа").tag("drawing")
+            Picker("Север для азимутов Excel", selection: Binding(get: { review.north ?? .unknown }, set: {
+                review.north = $0
+                compare()
+            })) {
+                ForEach(GeographicReference.manualChoices, id: \.self) { Text($0.title).tag($0) }
             }
-            TextField("Вертикальный датум", text: $review.frame.verticalDatum)
-            Toggle("Подтвердить метаданные набора", isOn: $review.frameConfirmed)
-            Text("Z — абсолютная отметка в метрах. Оставьте неизвестные метаданные пустыми.")
-                .font(.caption)
-        }
-        .disabled(task != nil)
-        .onChange(of: review.frame) { _, _ in
-            review.frameConfirmed = false
-            review.ranges = [:]
-            review.geometryRules = [:]
-            plan = nil
-        }
-        .onChange(of: review.frameConfirmed) { _, _ in plan = nil }
-
-        if review.frameConfirmed && !review.frame.verticalDatum.isEmpty {
-            Section {
-                DisclosureGroup("Подтверждённые диапазоны горизонтов") {
-                    Picker("Горизонт", selection: $rangeHorizon) {
-                        Text("Выберите горизонт").tag(UUID?.none)
-                        ForEach(horizons.filter { $0.elevationDatum == review.frame.verticalDatum }) {
-                            Text($0.displayName).tag(Optional($0.id))
-                        }
-                    }
-                    TextField("Нижняя отметка Z, м", text: $minimum)
-                    TextField("Верхняя отметка Z, м", text: $maximum)
-                    Button("Добавить диапазон к проверке") { addRange() }.disabled(rangeHorizon == nil)
-                    ForEach(horizons) { horizon in
-                        if let range = review.ranges[horizon.id] ?? horizon.regulatoryElevationRange {
-                            LabeledContent(horizon.displayName, value: "\(ElevationInput.text(range.minimum))…\(ElevationInput.text(range.maximum)) м")
-                        }
-                    }
-                }
-            }.disabled(task != nil)
-        }
-
-        if review.frameConfirmed && !review.frame.verticalDatum.isEmpty {
-            geometrySection
-        }
-
+            Button("Координаты и правила DXF") { datasetFocused = false; editingSettings = true }
+        }.disabled(task != nil)
     }
 
-    private var importSection: some View {
-        Section("Проверка импорта") {
-            ForEach(notices, id: \.self) { Text($0).font(.caption) }
-            if let message { Text(message) }
-            if task != nil {
-                ProgressView("Обработка набора…")
-                Button("Отменить", role: .cancel) { task?.cancel() }.disabled(mapping.isSaving)
-            }
-            Button("Сопоставить набор") { compare() }.disabled(task != nil || (input.bindings.isEmpty && !review.frameConfirmed))
-            if let plan {
-                LabeledContent("Назначен горизонт", value: String(plan.changes.filter { $0.destination.horizonID != nil }.count))
-                LabeledContent("Назначена выработка", value: String(plan.changes.filter { $0.destination.excavationID != nil }.count))
-                LabeledContent("Предложено новых горизонтов", value: "0")
-                LabeledContent("Горизонт не определён", value: String(plan.changes.filter { $0.destination.horizonID == nil }.count))
-                LabeledContent("Сопоставлено с журналом", value: String(plan.count(.unchanged) + plan.count(.correction) + plan.count(.conflict)))
-                ForEach([MappingExchangePreview.Classification.new, .correction, .unchanged, .conflict, .invalid], id: \.self) {
-                    LabeledContent($0.title, value: String(plan.count($0)))
-                }
-                if input.bindings.isEmpty { bulkControls(plan) }
-                else {
-                    ForEach(plan.changes.filter { $0.kind == .invalid }, id: \.id) { change in
-                        LabeledContent(change.sourceID, value: change.reason)
-                    }
-                }
-                conflictControls(plan)
-                if !nativeReady { Text("Сначала разрешите замечания к обычным наблюдениям.").foregroundStyle(.orange) }
-                Button("Сохранить набор") { confirm = true }
-                    .disabled(!canSave(plan))
-            }
+    private func loadDataset() {
+        let existing = snapshot?.journal.regulatorySourceObservations?.filter {
+            $0.key.projectID == review.projectID && $0.key.dataset == dataset
+        } ?? []
+        let frames = Set(existing.compactMap { $0.latest?.frame })
+        let saved = review.projectID.flatMap { snapshot?.projects[$0]?.regulatoryDatasets?[dataset] }
+        review.frame = saved?.frame ?? input.suggestedFrame ?? (frames.count == 1 ? frames.first : nil) ?? .init()
+        review.frameConfirmed = true
+        review.north = saved?.north
+        review.displayPlans = []
+        review.geometryRules = [:]
+        review.ranges = [:]
+        review.resolutions = [:]
+    }
+
+    @ViewBuilder private func summary(_ plan: RegulatorySourceImport.Plan) -> some View {
+        let valid = plan.changes.filter { $0.kind != .invalid }
+        let ready = valid.filter { $0.kind != .conflict }
+        let ambiguous = ready.filter { $0.matchingIssue?.isAmbiguous == true }.count
+        LabeledContent("Строки без ошибок", value: String(valid.count))
+        ForEach([MappingExchangePreview.Classification.new, .correction, .unchanged, .conflict, .invalid], id: \.self) {
+            LabeledContent($0.title, value: String(plan.count($0)))
         }
-        .alert("Сохранить наблюдения одним пакетом?", isPresented: $confirm) {
-            Button("Сохранить") { apply() }
-            Button("Отмена", role: .cancel) {}
+        LabeledContent("Горизонт определён автоматически", value: String(ready.filter(\.automatic).count))
+        LabeledContent("Горизонт не определён", value: String(ready.filter { $0.destination.horizonID == nil }.count - ambiguous))
+            .accessibilityIdentifier("sourceUnresolvedCount")
+        if ambiguous > 0 { LabeledContent("Несколько горизонтов", value: String(ambiguous)) }
+        if plan.generationID != snapshot?.generationID {
+            Button("Обновить проверку") { compare() }
         }
-        .onAppear { if review.projectID == nil { review.projectID = mapping.workflow?.context.projectID } }
-        .onDisappear { task?.cancel() }
     }
 
     private func canSave(_ plan: RegulatorySourceImport.Plan) -> Bool {
         !plan.blocked && (plan.canApply || native?.records.contains(where: \.canApply) == true)
-            && nativeReady && snapshot?.generationID == plan.generationID && task == nil && !mapping.isSaving
+            && nativeReady && snapshot?.generationID == plan.generationID && task == nil && !mapping.isSaving && !datasetFocused
     }
 
     @ViewBuilder private func conflictControls(_ plan: RegulatorySourceImport.Plan) -> some View {
@@ -629,103 +650,9 @@ private struct RegulatorySourceImportSection: View {
         }
     }
 
-    private func bulkControls(_ plan: RegulatorySourceImport.Plan) -> some View {
-        let group = plan.changes.filter { change in
-            unresolvedGroup ? change.destination.horizonID == nil
-                : groupHorizon == nil || groupHorizon == change.destination.horizonID
-        }
-        return DisclosureGroup("Строки набора и групповое назначение") {
-            Picker("Группа по горизонту", selection: $groupHorizon) {
-                Text("Весь набор").tag(UUID?.none)
-                ForEach(horizons) { Text($0.displayName).tag(Optional($0.id)) }
-            }.disabled(unresolvedGroup)
-            Toggle("Только без горизонта", isOn: $unresolvedGroup)
-            Button("Отметить группу · \(group.count)") { selectedSources.formUnion(group.map(\.sourceID)) }
-                .disabled(group.isEmpty)
-            if !selectedSources.isEmpty { Button("Снять отметки") { selectedSources.removeAll() } }
-            Picker("Назначить горизонт", selection: $bulkHorizon) {
-                Text("Без горизонта").tag(UUID?.none)
-                ForEach(horizons) { Text($0.displayName).tag(Optional($0.id)) }
-            }.onChange(of: bulkHorizon) { _, _ in bulkExcavation = nil }
-            Picker("Назначить выработку", selection: $bulkExcavation) {
-                Text("Без выработки").tag(UUID?.none)
-                ForEach((snapshot?.journal.excavations ?? []).filter {
-                    $0.projectID == review.projectID && $0.horizonIDs.contains { $0 == bulkHorizon }
-                }) { Text($0.name).tag(Optional($0.id)) }
-            }
-            Button("Назначить · \(selectedSources.count) выбрано") {
-                let context = MappingContext(projectID: review.projectID, horizonID: bulkHorizon, excavationID: bulkExcavation)
-                for source in selectedSources { review.assignments[source] = context }
-                selectedSources.removeAll()
-                compare()
-            }.disabled(selectedSources.isEmpty || task != nil)
-            ForEach(group) { change in
-                Toggle(isOn: Binding(get: { selectedSources.contains(change.sourceID) }, set: { selected in
-                    if selected { selectedSources.insert(change.sourceID) }
-                    else { selectedSources.remove(change.sourceID) }
-                })) {
-                    VStack(alignment: .leading) {
-                        Text("\(change.sourceID) · Data!\(change.row)")
-                        Text(change.reason).font(.caption)
-                    }
-                }
-            }
-        }
-    }
-
-    private var geometrySection: some View {
-        let available = (snapshot?.journal.plans ?? []).filter { plan in
-            guard let file = plan.file else { return false }
-            return !plan.isDeleted && !plan.isArchived && horizons.contains { $0.id == plan.horizonID && $0.elevationDatum == review.frame.verticalDatum } &&
-                file.crs == review.frame.crs && file.axes == review.frame.axes && file.units.coordinateUnits == review.frame.xyUnits
-        }
-        let horizon = available.first { $0.id == geometryPlan }?.horizonID
-        return Section {
-            DisclosureGroup("Подтверждённая геометрия DXF") {
-                Picker("Ревизия плана", selection: $geometryPlan) {
-                    Text("Выберите DXF").tag(UUID?.none)
-                    ForEach(available) { plan in Text(plan.version).tag(Optional(plan.id)) }
-                }.onChange(of: geometryPlan) { _, _ in geometryExcavation = nil }
-                Picker("Выработка по этому DXF", selection: $geometryExcavation) {
-                    Text("Без подтверждённой выработки").tag(UUID?.none)
-                    ForEach((snapshot?.journal.excavations ?? []).filter {
-                        $0.projectID == review.projectID && $0.horizonIDs.contains { $0 == horizon }
-                    }) { Text($0.name).tag(Optional($0.id)) }
-                }
-                TextField("Максимальное расстояние XY до сегмента, м", text: $maximumXY)
-                TextField("Максимальное расхождение Z с сегментом, м", text: $maximumZ)
-                Button("Подтвердить датум и принадлежность DXF") {
-                    guard let horizon, let geometryPlan else { return }
-                    do {
-                        let rule = try RegulatorySourceImport.GeometryRule(horizonID: horizon,
-                            excavationID: geometryExcavation, frame: review.frame,
-                            maximumXYMeters: ElevationInput.meters(maximumXY), maximumZMeters: ElevationInput.meters(maximumZ))
-                        guard rule.valid else { throw MappingError.invalid("Проверьте метаданные и пределы сопоставления.") }
-                        review.geometryRules[geometryPlan] = rule
-                        plan = nil
-                        message = nil
-                    } catch { message = error.localizedDescription }
-                }.disabled(horizon == nil)
-                Text("Укажите пределы для этого проекта и подтвердите, что отметки DXF используют датум набора.")
-                    .font(.caption)
-            }
-        }.disabled(task != nil)
-    }
-
-    private func addRange() {
-        guard let id = rangeHorizon else { return }
-        do {
-            let range = try RegulatorySourceImport.ElevationRange(minimum: ElevationInput.meters(minimum),
-                maximum: ElevationInput.meters(maximum), datum: review.frame.verticalDatum)
-            guard range.valid else { throw MappingError.invalid("Проверьте нижнюю и верхнюю отметки.") }
-            review.ranges[id] = range
-            plan = nil
-            message = nil
-        } catch { message = error.localizedDescription }
-    }
-
     private func compare() {
-        guard task == nil, let snapshot else { return }
+        guard (input.bindings.isEmpty == false || review.projectID != nil), task == nil, let snapshot else { return }
+        datasetFocused = false
         plan = nil
         message = nil
         let review = self.review
@@ -770,8 +697,206 @@ private struct RegulatorySourceImportSection: View {
                     }
                 }
                 self.plan = nil
-                message = "Набор сохранён. Наблюдения доступны в журнале проекта."
+                saved = true
             } catch { message = error.localizedDescription }
         }
+    }
+}
+
+struct RegulatoryDatasetSetupView: View {
+    @EnvironmentObject private var mapping: MappingModel
+    @Environment(\.dismiss) private var dismiss
+    let projectID: UUID
+    let dataset: String
+    @State private var review = RegulatorySourceImport.Review()
+    @State private var error: String?
+
+    var body: some View {
+        Form {
+            RegulatoryDatasetSettingsFields(review: $review)
+            if let error { Text(error).foregroundStyle(.red) }
+        }.navigationTitle(dataset)
+            .scrollDismissesKeyboard(.interactively)
+            .toolbar {
+                Button("Сохранить") { save() }.disabled(mapping.isSaving || review.projectID == nil)
+            }
+            .task {
+                guard review.projectID == nil else { return }
+                let current = mapping.workflow?.committed
+                let saved = current?.projects[projectID]?.regulatoryDatasets?[dataset]
+                let frames = Set((current?.journal.regulatorySourceObservations ?? []).filter {
+                    $0.key.projectID == projectID && $0.key.dataset == dataset
+                }.compactMap { $0.latest?.frame })
+                review = .init(projectID: projectID, dataset: dataset, frame: saved?.frame ?? (frames.count == 1 ? frames.first : nil) ?? .init(),
+                               frameConfirmed: true, north: saved?.north)
+            }
+    }
+
+    private func save() {
+        let review = self.review
+        let plans = mapping.planStore
+        Task {
+            do {
+                try await mapping.persist { workflow in
+                    let snapshot = workflow.committed
+                    let preview = try RegulatorySourceImport.prepare(.init(rows: [], workbookSHA256: ""), review: review, snapshot: snapshot, plans: plans)
+                    if preview.canApply { try workflow.commit(RegulatorySourceImport.applying(preview, to: snapshot)) }
+                }
+                dismiss()
+            } catch { self.error = error.localizedDescription }
+        }
+    }
+}
+
+private struct RegulatoryDatasetSettingsFields: View {
+    @EnvironmentObject private var mapping: MappingModel
+    @Binding var review: RegulatorySourceImport.Review
+    @State private var rangeHorizon: UUID?
+    @State private var minimum = ""
+    @State private var maximum = ""
+    @State private var geometryPlan: UUID?
+    @State private var geometryExcavation: UUID?
+    @State private var maximumXY = ""
+    @State private var maximumZ = ""
+    @State private var message: String?
+    @State private var useGeometry = false
+    @FocusState private var focused: Bool
+
+    private var snapshot: MappingCommittedSnapshot? { mapping.workflow?.committed }
+    private var horizons: [MappingHorizon] { snapshot?.journal.horizons.filter { $0.projectID == review.projectID } ?? [] }
+    private var associations: [UUID: RegulatorySourceImport.PlanAssociation] {
+        guard let id = review.projectID else { return [:] }
+        return snapshot?.projects[id]?.regulatoryDatasets?[review.dataset.trimmingCharacters(in: .whitespacesAndNewlines)]?.plans ?? [:]
+    }
+
+    var body: some View {
+        let available = (snapshot?.journal.plans ?? []).filter { plan in
+            !plan.isDeleted && !plan.isArchived && horizons.contains { $0.id == plan.horizonID } &&
+                plan.file.map { PlanElevationSnap.metersPerUnit($0) != nil } == true
+        }
+        let plan = available.first { $0.id == geometryPlan }
+        Section("Система координат набора") {
+            TextField("Система координат XY", text: $review.frame.crs).focused($focused)
+            TextField("Оси XY", text: $review.frame.axes).focused($focused)
+            Picker("Единицы XY", selection: $review.frame.xyUnits) {
+                Text("Неизвестны").tag("")
+                Text("Метры").tag("m")
+                Text("Миллиметры").tag("mm")
+                Text("Единицы чертежа").tag("drawing")
+            }
+            TextField("Вертикальный датум", text: $review.frame.verticalDatum).focused($focused)
+            Text("Z в Excel задана в метрах. Укажите только известные метаданные.").font(.caption)
+        }
+        Section("Связь набора с DXF") {
+            Picker("Ревизия плана", selection: $geometryPlan) {
+                Text("Выберите DXF").tag(UUID?.none)
+                ForEach(available) { plan in
+                    Text("\(horizons.first { $0.id == plan.horizonID }?.displayName ?? "DXF") · \(plan.version)").tag(Optional(plan.id))
+                }
+            }.onChange(of: geometryPlan) { _, id in
+                geometryExcavation = nil
+                let rule = id.flatMap { review.geometryRules[$0] ?? associations[$0]?.geometry }
+                useGeometry = rule != nil
+                maximumXY = rule.map { ElevationInput.text($0.maximumXYMeters) } ?? ""
+                maximumZ = rule.map { ElevationInput.text($0.maximumZMeters) } ?? ""
+                geometryExcavation = rule?.excavationID
+            }
+            if let plan, let file = plan.file {
+                LabeledContent("СК и оси плана", value: "\(file.crs) · \(file.axes)")
+                LabeledContent("Единицы плана", value: file.units.label)
+                Toggle("Искать горизонт по 3D-геометрии", isOn: $useGeometry)
+                if useGeometry {
+                    Picker("Подтверждённая выработка", selection: $geometryExcavation) {
+                        Text("Не назначать").tag(UUID?.none)
+                        ForEach((snapshot?.journal.excavations ?? []).filter {
+                            $0.projectID == review.projectID && $0.horizonIDs.contains(plan.horizonID)
+                        }) { Text($0.name).tag(Optional($0.id)) }
+                    }
+                    TextField("Допуск XY до сегмента, м", text: $maximumXY).keyboardType(.decimalPad).focused($focused)
+                    TextField("Допуск Z, м", text: $maximumZ).keyboardType(.decimalPad).focused($focused)
+                }
+                Button(useGeometry ? "Подтвердить совпадение СК и датума Z" : "Подтвердить совпадение СК и осей XY") {
+                    confirm(plan: plan, file: file)
+                }
+            }
+            ForEach(available.filter { review.displayPlans.contains($0.id) || associations[$0.id]?.supportsXY($0, frame: review.frame) == true }) {
+                LabeledContent($0.file?.originalFilename ?? $0.version, value: "СК подтверждена")
+            }
+        }
+        if PlanCoordinateCompatibility.known(review.frame.verticalDatum) != nil {
+            Section("Подтверждённые диапазоны горизонтов") {
+                Picker("Горизонт", selection: $rangeHorizon) {
+                    Text("Выберите горизонт").tag(UUID?.none)
+                    ForEach(horizons.filter { $0.elevationDatum == review.frame.verticalDatum }) { Text($0.displayName).tag(Optional($0.id)) }
+                }.onChange(of: rangeHorizon) { _, id in
+                    let range = id.flatMap { review.ranges[$0] ?? snapshot?.horizons[$0]?.regulatoryElevationRange }
+                    minimum = range.map { ElevationInput.text($0.minimum) } ?? ""
+                    maximum = range.map { ElevationInput.text($0.maximum) } ?? ""
+                }
+                TextField("Нижняя отметка Z, м", text: $minimum).keyboardType(.numbersAndPunctuation).focused($focused)
+                TextField("Верхняя отметка Z, м", text: $maximum).keyboardType(.numbersAndPunctuation).focused($focused)
+                Button("Подтвердить диапазон") { addRange() }.disabled(rangeHorizon == nil)
+                ForEach(horizons) { horizon in
+                    if let range = review.ranges[horizon.id] ?? horizon.regulatoryElevationRange {
+                        LabeledContent(horizon.displayName, value: "\(ElevationInput.text(range.minimum))…\(ElevationInput.text(range.maximum)) м")
+                    }
+                }
+            }
+        }
+        if let message { Text(message).foregroundStyle(.orange) }
+        Section {}.onChange(of: review.frame) { old, new in
+            // A confirmation writes the plan's XY metadata together with its link.
+            review.geometryRules = review.geometryRules.filter { $0.value.frame == new }
+            review.displayPlans = review.displayPlans.filter { id in
+                guard let file = snapshot?.plan(id: id)?.file else { return false }
+                return file.crs == new.crs && file.axes == new.axes && file.units.coordinateUnits == new.xyUnits
+            }
+            if old.verticalDatum != new.verticalDatum { review.ranges = review.ranges.filter { $0.value.datum == new.verticalDatum } }
+        }
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("Готово") { focused = false }
+            }
+        }
+    }
+
+    private func confirm(plan: MappingPlanReference, file: ManagedPlanFile) {
+        focused = false
+        do {
+            guard PlanCoordinateCompatibility.known(file.crs) != nil, PlanCoordinateCompatibility.known(file.axes) != nil else {
+                throw MappingError.invalid("Уточните СК и оси в метаданных ревизии DXF.")
+            }
+            var frame = review.frame
+            guard [(frame.crs, file.crs), (frame.axes, file.axes)].allSatisfy({ declared, actual in
+                PlanCoordinateCompatibility.known(declared).map { $0 == PlanCoordinateCompatibility.known(actual) } ?? true
+            }), frame.xyUnits.isEmpty || frame.xyUnits == file.units.coordinateUnits else {
+                throw MappingError.invalid("СК, оси или единицы набора и плана различаются.")
+            }
+            frame.crs = file.crs; frame.axes = file.axes; frame.xyUnits = file.units.coordinateUnits
+            if useGeometry {
+                let rule = try RegulatorySourceImport.GeometryRule(horizonID: plan.horizonID, excavationID: geometryExcavation, frame: frame,
+                    maximumXYMeters: ElevationInput.meters(maximumXY), maximumZMeters: ElevationInput.meters(maximumZ))
+                guard rule.valid, snapshot?.horizons[plan.horizonID]?.elevationDatum == frame.verticalDatum else {
+                    throw MappingError.invalid("Укажите неотрицательные допуски и подтвердите общий вертикальный датум.")
+                }
+                review.geometryRules[plan.id] = rule
+            } else { review.geometryRules[plan.id] = nil }
+            review.frame = frame
+            review.displayPlans.insert(plan.id)
+            message = nil
+        } catch { message = error.localizedDescription }
+    }
+
+    private func addRange() {
+        focused = false
+        guard let id = rangeHorizon else { return }
+        do {
+            let range = try RegulatorySourceImport.ElevationRange(minimum: ElevationInput.meters(minimum),
+                maximum: ElevationInput.meters(maximum), datum: review.frame.verticalDatum)
+            guard range.valid else { throw MappingError.invalid("Проверьте нижнюю и верхнюю отметки.") }
+            review.ranges[id] = range
+            message = nil
+        } catch { message = error.localizedDescription }
     }
 }

@@ -101,15 +101,17 @@ struct JointSpacingMean: Equatable, Sendable {
     }
 }
 
-/// Numeric identifier kept as exact text (including leading zeroes), never a fabricated dictionary.
+/// Identifier kept as exact text (including leading zeroes), never a fabricated dictionary.
 struct RockLithology: Codable, Equatable, Identifiable, Sendable {
     let code: String
     let name: String?
     var id: String { code }
     func validate() throws {
-        guard code.range(of: "^[0-9]+(?:[.][0-9]+)?$", options: .regularExpression) != nil,
+        guard !code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              code != ExchangeObservationProposal.clear, code != "-",
+              code.utf16.count <= 32_767,
               name.map({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) ?? true else {
-            throw MappingError.invalid("ROCK: укажите числовой код и, при необходимости, название породы.")
+            throw MappingError.invalid("ROCK: укажите текстовый код и, при необходимости, название породы.")
         }
     }
 }

@@ -74,6 +74,23 @@ final class ManualMeasurementTests: XCTestCase {
             XCTAssertEqual(record.orientation.dipDirection, 123.45678901234567)
         }
     }
+    func testNewMeasurementDefaultDoesNotReinterpretSavedOrientation() throws {
+        let domain = "FieldForge-North-\(UUID())"
+        let preferences = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { preferences.removePersistentDomain(forName: domain) }
+        XCTAssertEqual(GeographicReference.defaultForNewMeasurement(in: preferences), .unknown)
+        preferences.set(GeographicReference.gridNorth.rawValue, forKey: GeographicReference.defaultMeasurementKey)
+        let grid = ManualOrientationInput(dipAngleText: "50", dipDirectionText: "125.75",
+            reference: .defaultForNewMeasurement(in: preferences))
+        let saved = try grid.observation(notes: "")
+        preferences.set(GeographicReference.trueNorth.rawValue, forKey: GeographicReference.defaultMeasurementKey)
+        XCTAssertEqual(GeographicReference.defaultForNewMeasurement(in: preferences), .trueNorth)
+        XCTAssertEqual(saved.reference, .gridNorth)
+        XCTAssertEqual(saved.orientation.dipDirection, 125.75)
+        preferences.set(GeographicReference.simulatedNorth.rawValue, forKey: GeographicReference.defaultMeasurementKey)
+        XCTAssertEqual(GeographicReference.defaultForNewMeasurement(in: preferences), .unknown)
+    }
+
     func testAllManualNorthReferencesPreservedWithoutConversion() throws {
         for north in GeographicReference.manualChoices {
             let record = try input("35", "123.45678901234567", north: north).observation()

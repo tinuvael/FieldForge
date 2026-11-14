@@ -20,6 +20,7 @@ struct EnterpriseGeotechnicalWorkbook: Sendable {
         let frame: RegulatorySourceImport.Frame
         let destination: MappingContext
         let explicitlyAssigned: Bool
+        let north: GeographicReference?
         let revision: Int
         let fingerprint: String
     }
@@ -120,7 +121,7 @@ struct EnterpriseGeotechnicalWorkbook: Sendable {
                 return isNumericColumn && RegulatoryDataWorkbook.sourceNumber(value) != nil ? .rawNumber(value) : .text(value)
             })
             sourceRows.append(.init(id: record.id, key: record.key, firstRow: firstSourceDataIndex + offset + 5,
-                frame: version.frame, destination: version.destination, explicitlyAssigned: version.explicitlyAssigned,
+                frame: version.frame, destination: version.destination, explicitlyAssigned: version.explicitlyAssigned, north: version.north,
                 revision: record.versions.count - 1, fingerprint: try MappingImportLedger.fingerprint(version)))
         }
         return Self(observationIDs: points.map(\.id), table: report, rqdConflicts: rqdConflicts,

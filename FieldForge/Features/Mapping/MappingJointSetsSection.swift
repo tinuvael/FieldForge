@@ -30,7 +30,7 @@ struct MappingJointSetsSection: View {
             }
             Button("Добавить систему", systemImage: "plus") {
                 guard let identifier = nextIdentifier else { return }
-                if let workflow = mapping.workflow { edit(.joint(workflow.editorRequest(workflow.draft.newJointSet(identifier: identifier)))) }
+                if let workflow = mapping.workflow { edit(.joint(workflow.editorRequest(workflow.draft.newJointSet(identifier: identifier, reference: .defaultForNewMeasurement())))) }
             }.disabled(nextIdentifier == nil).accessibilityIdentifier("addJointSet")
             Text("Тектоника").font(.subheadline).foregroundStyle(.secondary)
             ForEach(mapping.workflow?.draft.tectonicStructures ?? []) { structure in
@@ -45,7 +45,7 @@ struct MappingJointSetsSection: View {
                 }.buttonStyle(.borderless)
             }
             Button("Добавить структуру", systemImage: "plus") {
-                if let workflow = mapping.workflow { edit(.tectonic(workflow.editorRequest(TectonicStructureDraft()))) }
+                if let workflow = mapping.workflow { edit(.tectonic(workflow.editorRequest(TectonicStructureDraft(reference: .defaultForNewMeasurement())))) }
             }
                 .accessibilityIdentifier("addTectonicStructure")
         }

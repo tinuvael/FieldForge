@@ -272,7 +272,8 @@ import XCTest
     }
     func testROCKExactCodeAndLegacyOptionalDecoding() throws {
         try RockLithology(code: "0001.20", name: nil).validate()
-        for code in ["", "nan", "-1", "A1", "1,2", "1 2"] { XCTAssertThrowsError(try RockLithology(code: code, name: nil).validate()) }
+        for code in ["", " ", "-", "#CLEAR"] { XCTAssertThrowsError(try RockLithology(code: code, name: nil).validate()) }
+        for code in ["DIO", "QZ-2", "0012", "12"] { try RockLithology(code: code, name: nil).validate() }
         let project = try JSONDecoder().decode(MappingProject.self, from: Data("{\"id\":\"11111111-1111-1111-1111-111111111111\",\"name\":\"Проект\"}".utf8))
         XCTAssertNil(project.lithologies)
     }
